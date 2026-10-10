@@ -1,0 +1,28 @@
+{
+  "name": "tinypng-cross-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.3.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.5.0",
+    "vue": "^3.5.22"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0",
+    "@tauri-apps/cli": "^2.5.0",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "typescript": "^5.7.3",
+    "vite": "^6.2.0",
+    "vitest": "^3.2.4",
+    "vue-tsc": "^2.2.8"
+  }
+}
