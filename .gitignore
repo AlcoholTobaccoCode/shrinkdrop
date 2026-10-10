@@ -1,0 +1,11 @@
+node_modules
+dist
+dist-ssr
+.tauri
+*.local
+.DS_Store
+playwright-report
+test-results
+coverage
+src-tauri/target
+src-tauri/gen
