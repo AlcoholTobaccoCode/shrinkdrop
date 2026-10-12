@@ -81,6 +81,7 @@ class FakeServer {
       if (event.outputs) j.outputs = event.outputs;
       if (event.status === 'completed' || event.status === 'saving') j.result = { mime: 'image/webp', size: 2, width: 1, height: 1, savedRatio: 0.5 };
     }
+    if (event.type === 'job' && event.status === 'completed' && !event.result) event = { ...event, result: { mime: 'image/webp', size: 2, width: 1, height: 1, savedRatio: 0.5 } };
     const c = this.streams.at(-1)!;
     c.enqueue(new TextEncoder().encode('event: ' + event.type + '\ndata: ' + JSON.stringify(event) + '\n\n'));
   }
@@ -164,6 +165,7 @@ describe('CloudExecutor（D4）', () => {
     server.push({ type: 'batch', batchId: 'b1', status: 'partial' });
     await until(() => exec.batchStatus === 'partial');
     await until(() => a!.compressedSize === 2);
+    expect(server.requests.some(r => r.path.startsWith('/jobs/j1') && r.method === 'GET')).toBe(false);
     expect(displayStatus(a!)).toBe('completed');
     expect(displayStatus(b!)).toBe('output-failed');
     expect(c!.status).toBe('canceled');

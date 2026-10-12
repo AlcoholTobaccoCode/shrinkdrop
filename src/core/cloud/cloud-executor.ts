@@ -196,6 +196,19 @@ export class CloudExecutor implements Executor {
     return { blob, filename: resultName(item, blob.type) };
   }
 
+  async resultBlob(itemId: string): Promise<Blob | undefined> {
+    const item = this.find(itemId);
+    if (!item?.jobId || !item.output) return undefined;
+    return this.options.api.result(item.jobId);
+  }
+
+  async sourceBlob(itemId: string): Promise<Blob | undefined> {
+    const item = this.find(itemId);
+    if (item?.source.kind !== 'file') return undefined;
+    const bytes = await this.options.adapter.read(item.source.file);
+    return new Blob([bytes.slice().buffer as ArrayBuffer], { type: item.source.file.mime });
+  }
+
   /** zip 全部下载（Server 打包） */
   async downloadArchive(): Promise<{ blob: Blob; filename: string }> {
     if (!this.batchId) throw new Error('还没有可下载的结果');
@@ -338,21 +351,11 @@ export class CloudExecutor implements Executor {
     if (event.error) item.error = toError(event.error);
     else if (event.status !== 'failed') item.error = undefined;
     if (event.status === 'completed') item.progress = 1;
+    // completed（或已有结果）事件带 result（API v0.2 / 6b88d01）
+    if (event.result) applyResult(item, event.result);
     // 进入 saving 说明 Provider 已出结果（output-failed 需要 hasResult）
-    if ((event.status === 'saving' || event.status === 'completed') && !item.output) item.output = placeholderResult();
+    else if ((event.status === 'saving' || event.status === 'completed') && !item.output) item.output = placeholderResult();
     this.emit();
-    // 终态后补拉单个任务，拿结果尺寸/体积和尝试次数
-    if (event.status === 'completed' || event.status === 'failed') void this.refreshJob(item);
-  }
-
-  private async refreshJob(item: CloudItem): Promise<void> {
-    if (!item.jobId) return;
-    try {
-      applyJob(item, await this.options.api.getJob(item.jobId), false);
-      this.emit();
-    } catch {
-      // 忽略，重连全量校正会兜底
-    }
   }
 
   private hasActive(): boolean {
@@ -376,13 +379,15 @@ function applyJob(item: CloudItem, job: Job, full: boolean): void {
   item.attempts = job.attempts;
   if (job.progress !== undefined) item.progress = job.progress;
   if (job.input) item.originalSize = job.input.size;
-  if (job.result) {
-    item.compressedSize = job.result.size;
-    // 云端没有本地字节，用占位表示“已有结果”，供 deriveDisplayStatus 的 hasResult
-    item.output = { bytes: new Uint8Array(0), mime: job.result.mime, size: job.result.size, width: job.result.width, height: job.result.height, ratio: 1 - job.result.savedRatio };
-  }
+  if (job.result) applyResult(item, job.result);
   item.outputs = job.outputs.map(o => ({ ...o }));
   item.error = job.error ? toError(job.error) : full ? undefined : item.error;
+}
+
+/** 云端没有本地字节，用元信息表示“已有结果”，供 deriveDisplayStatus 的 hasResult 和画布标签 */
+function applyResult(item: CloudItem, result: NonNullable<Job['result']>): void {
+  item.compressedSize = result.size;
+  item.output = { bytes: new Uint8Array(0), mime: result.mime, size: result.size, width: result.width, height: result.height, ratio: 1 - result.savedRatio };
 }
 
 function placeholderResult(): NonNullable<WorkbenchItem['output']> {

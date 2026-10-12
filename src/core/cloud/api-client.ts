@@ -1,4 +1,4 @@
-import { isApiError, type ApiError, type Batch, type CreateBatchRequest, type ImageProviderManifest, type Job, type ProviderId, type ProviderUsageResponse } from '@tinypng/shared';
+import { isApiError, type AddItemsResponse, type ApiError, type Batch, type CreateBatchRequest, type ImageProviderManifest, type Job, type ProviderId, type ProviderUsageResponse } from '@tinypng/shared';
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -28,8 +28,7 @@ export interface ApiClientOptions {
   upload?: Uploader;
 }
 
-/** POST /items 返回体：v0.2 未写明，按 { jobs: Job[] }（与上传顺序一致）实现，待无敌王八确认 */
-export interface AddItemsResponse { jobs: Job[] }
+export type { AddItemsResponse };
 
 export class ApiClient {
   readonly baseUrl: string;
