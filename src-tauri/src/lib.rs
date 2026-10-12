@@ -1,5 +1,6 @@
 mod commands;
 mod file_ops;
+mod token;
 
 pub fn run() {
     tauri::Builder::default()
@@ -17,7 +18,10 @@ pub fn run() {
             commands::write_temp,
             commands::copy_temp_files,
             commands::replace_original,
-            commands::cleanup_temp_files
+            commands::cleanup_temp_files,
+            token::token_get,
+            token::token_set,
+            token::token_clear
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

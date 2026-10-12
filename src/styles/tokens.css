@@ -1,29 +1,88 @@
+/* Editorial Canvas 设计 token（docs/design/design-system.md §2–§5）。不引入 Tailwind。 */
 :root {
   color-scheme: light dark;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #1f2937;
-  background: #f8fafc;
+  --font-ui: "Inter", "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --paper: #F4F0E8;
+  --surface: #FBF9F4;
+  --surface-sunken: #ECE6DA;
+  --line: #D9D1C3;
+  --line-strong: #C8C0B2;
+  --ink: #1E293B;
+  --ink-muted: #55606E;
+  --ink-faint: #8A8F96;
+  --accent: #1E293B;
+  --accent-ink: #FFFFFF;
+  --local: #1F6B57;
+  --local-soft: #D9F2E9;
+  --cloud: #B4532A;
+  --cloud-soft: #F8E4D8;
+  --info: #2F5D8A;
+  --success: #2E7D4F;
+  --warning: #9A6A00;
+  --warning-soft: #FBF0D4;
+  --danger: #B42318;
+  --danger-soft: #FBE3E0;
+  --focus: #2F5D8A;
+  --checker-a: #E6E1D7;
+  --checker-b: #F4F0E8;
+
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 24px; --s-6: 32px; --s-7: 48px;
+  --r-sm: 6px; --r-md: 10px; --r-lg: 16px; --r-pill: 999px;
+  --shadow-pop: 0 8px 24px rgb(30 41 59 / .12), 0 1px 2px rgb(30 41 59 / .08);
+
+  --topbar-h: 56px; --sidebar-w: 264px; --sidebar-collapsed-w: 72px; --inspector-w: 340px; --queue-h: 200px;
+  --dur-fast: 150ms; --dur-panel: 200ms; --ease-out: cubic-bezier(.2, .8, .2, 1);
+
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--ink);
+  background: var(--paper);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
 
-* {
-  box-sizing: border-box;
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #14161A; --surface: #1C1F24; --surface-sunken: #101215; --line: #2E333A; --line-strong: #434A53;
+    --ink: #E8EAED; --ink-muted: #9AA3AE; --ink-faint: #6B727C; --accent: #E8EAED; --accent-ink: #14161A;
+    --local: #5FD3B4; --local-soft: #12302A; --cloud: #F0A07A; --cloud-soft: #3A2218; --info: #8AB8E6;
+    --success: #6FD39A; --warning: #F2C35B; --warning-soft: #33290F; --danger: #FF8A80; --danger-soft: #3A1715;
+    --focus: #8AB8E6; --checker-a: #24282E; --checker-b: #1C1F24; --shadow-pop: 0 8px 24px rgb(0 0 0 / .5);
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #14161A; --surface: #1C1F24; --surface-sunken: #101215; --line: #2E333A; --line-strong: #434A53;
+  --ink: #E8EAED; --ink-muted: #9AA3AE; --ink-faint: #6B727C; --accent: #E8EAED; --accent-ink: #14161A;
+  --local: #5FD3B4; --local-soft: #12302A; --cloud: #F0A07A; --cloud-soft: #3A2218; --info: #8AB8E6;
+  --success: #6FD39A; --warning: #F2C35B; --warning-soft: #33290F; --danger: #FF8A80; --danger-soft: #3A1715;
+  --focus: #8AB8E6; --checker-a: #24282E; --checker-b: #1C1F24; --shadow-pop: 0 8px 24px rgb(0 0 0 / .5);
 }
 
-body,
-html,
-#app {
+* { box-sizing: border-box; }
+
+body, html, #app {
   min-width: 320px;
-  min-height: 100vh;
+  min-height: 100dvh;
   margin: 0;
 }
 
-body {
-  background: #f8fafc;
+body { background: var(--paper); }
+
+button, input, select { font: inherit; }
+
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.num { font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--font-mono); }
+.checker {
+  background-color: var(--checker-b);
+  background-image: conic-gradient(var(--checker-a) 25%, transparent 0 50%, var(--checker-a) 0 75%, transparent 0);
+  background-size: 16px 16px;
 }
 
-button,
-input {
-  font: inherit;
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-fast: 100ms; --dur-panel: 0ms; }
 }

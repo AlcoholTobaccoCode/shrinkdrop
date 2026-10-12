@@ -153,7 +153,18 @@ export class CompressionSession {
     return task;
   }
 
-  /** 草稿直接移除不算取消；进行中的中止 */
+  /** 移除草稿或终态条目；进行中的不能移除 */
+  remove(taskId: string): boolean {
+    const index = this.tasks.findIndex(item => item.id === taskId);
+    const task = this.tasks[index];
+    if (!task || isActive(task.status)) return false;
+    this.tasks.splice(index, 1);
+    this.batch.itemIds = this.batch.itemIds.filter(id => id !== taskId);
+    this.emitUpdate();
+    return true;
+  }
+
+  /** 草稿直接变 canceled；进行中的中止 */
   cancel(taskId: string): void {
     const task = this.tasks.find(item => item.id === taskId);
     if (task?.status === 'draft') {
