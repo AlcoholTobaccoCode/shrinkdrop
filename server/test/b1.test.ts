@@ -3,7 +3,8 @@ import { parseConfig, ConfigError } from '../src/config';
 import { buildApp } from '../src/app';
 import { AppError } from '../src/errors';
 
-const H = 'a'.repeat(64);
+import { sha256Hex } from '../src/auth';
+const H = sha256Hex('t');
 const base = { auth: { tokens: [{ id: 'qs', sha256: H }] } };
 
 describe('B1 配置', () => {
@@ -53,7 +54,7 @@ describe('B1 HTTP', () => {
     expect(r.json().code).toBe('INTERNAL_ERROR');
   });
   it('404 也是统一错误体', async () => {
-    const r = await app.inject('/api/v1/nope');
+    const r = await app.inject({ url: '/api/v1/nope', headers: { authorization: 'Bearer t' } });
     expect(r.statusCode).toBe(404);
     expect(Object.keys(r.json()).sort()).toEqual(['code', 'message', 'requestId', 'retryable']);
   });

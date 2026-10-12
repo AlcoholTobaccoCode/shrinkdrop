@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { ApiError } from '@tinypng/shared';
 import type { ServerConfig } from './config';
 import { AppError } from './errors';
+import { registerAuth } from './auth';
 
 const REDACT = /(authorization|api_key|apikey|secret|token)/i;
 
@@ -18,6 +19,8 @@ export function buildApp(config: ServerConfig, opts: { logger?: boolean } = {}):
 
   app.decorate('config', config);
   app.addHook('onRequest', async (req, reply) => { reply.header('X-Request-Id', req.id); });
+  registerAuth(app, config);
+  app.get('/api/v1/whoami', async (req) => ({ tokenId: req.tokenId }));
 
   app.setErrorHandler((rawErr, req, reply) => {
     const err = rawErr as Error & { validation?: unknown; code?: string };
