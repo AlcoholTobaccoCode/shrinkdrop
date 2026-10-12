@@ -1,0 +1,16 @@
+{
+  "host": "127.0.0.1",
+  "port": 8787,
+  "concurrency": 5,
+  "maxFileBytes": 20971520,
+  "tmpTtlHours": 24,
+  "providerTimeoutMs": 60000,
+  "maxRetries": 2,
+  "anonymousTinify": { "enabled": true },
+  "auth": {
+    "disabled": false,
+    "tokens": [
+      { "id": "qingshan", "label": "QingShan", "sha256": "用 `echo -n 你的令牌 | shasum -a 256` 生成，填 64 位十六进制" }
+    ]
+  }
+}
