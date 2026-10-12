@@ -9,7 +9,7 @@ import type {
   ProcessingPolicy,
   ProviderId
 } from '@tinypng/shared';
-import { TERMINAL_JOB_STATUSES, deriveDisplayStatus } from '@tinypng/shared';
+import { TERMINAL_JOB_STATUSES, deriveBatchStatus as deriveSharedBatchStatus, deriveDisplayStatus } from '@tinypng/shared';
 import type { SourceFile, TempFile } from '../files/contracts';
 
 /** 操作链 = 一个批次的处理方案 */
@@ -91,28 +91,11 @@ export function isActive(status: JobStatus): boolean {
   return status === 'queued' || status === 'uploading' || status === 'processing' || status === 'saving';
 }
 
-/**
- * 展示状态：复用共享包推导（有成功有失败 → partial），并补充
- * output-failed：Provider 已出结果但所有输出都失败（不消耗额度，只需重试输出）。
- * failed 只表示 Provider 失败。共享包加上 output-failed 后这里的补丁自然失效。
- */
-export type DisplayStatus = JobDisplayStatus | 'output-failed';
+/** 展示状态：共享包推导（partial / output-failed / failed），hasResult 取本地是否已有结果 */
+export type DisplayStatus = JobDisplayStatus;
 
 export function displayStatus(item: Pick<WorkbenchItem, 'status' | 'outputs' | 'output'>): DisplayStatus {
-  // 共享包签名要求 JobOutput（error 是 ApiError），这里只需要 status，做最小投影
-  const shared = deriveDisplayStatus({
-    status: item.status,
-    outputs: item.outputs.map(({ outputId, destination, status }) => ({ outputId, destination, status }))
-  }) as DisplayStatus;
-  if (
-    shared === 'failed' &&
-    item.output !== undefined &&
-    item.outputs.length > 0 &&
-    item.outputs.every(output => output.status === 'failed')
-  ) {
-    return 'output-failed';
-  }
-  return shared;
+  return deriveDisplayStatus({ status: item.status, outputs: item.outputs, hasResult: item.output !== undefined });
 }
 
 /**
@@ -127,13 +110,6 @@ export function sourceFile(item: Pick<WorkbenchItem, 'source'>): SourceFile | un
   return item.source.kind === 'file' ? item.source.file : undefined;
 }
 
-export function deriveBatchStatus(items: readonly Pick<WorkbenchItem, 'status' | 'outputs' | 'output'>[]): BatchStatus {
-  if (items.length === 0 || items.every(item => item.status === 'draft')) return 'draft';
-  if (items.some(item => isActive(item.status) || item.status === 'draft')) return 'running';
-  const shown = items.map(displayStatus);
-  if (shown.every(s => s === 'completed')) return 'completed';
-  if (shown.every(s => s === 'canceled')) return 'canceled';
-  if (shown.every(s => s === 'failed' || s === 'canceled')) return 'failed';
-  if (!shown.some(s => s === 'completed' || s === 'partial')) return 'failed';
-  return 'partial';
+export function batchStatus(items: readonly Pick<WorkbenchItem, 'status' | 'outputs' | 'output'>[]): BatchStatus {
+  return deriveSharedBatchStatus(items.map(item => ({ status: item.status, outputs: item.outputs, hasResult: item.output !== undefined })));
 }

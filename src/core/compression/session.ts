@@ -1,4 +1,4 @@
-import { LIMITS } from '@tinypng/shared';
+import { LIMITS, PHASE1_DESTINATION_TYPES } from '@tinypng/shared';
 import type { OutputDestination, ProcessingPolicy } from '@tinypng/shared';
 import type { FileAdapter, SourceFile, TempFile } from '../files/contracts';
 import { toPipelineProvider, type CompressionProvider, type PipelineProvider } from './provider';
@@ -13,7 +13,7 @@ import { TaskQueue } from '../queues/task-queue';
 import { validateInputSize } from './options';
 import {
   defaultPipeline,
-  deriveBatchStatus,
+  batchStatus,
   isActive,
   type OutputState,
   type Pipeline,
@@ -41,7 +41,7 @@ export interface CompressionSessionOptions {
 }
 
 const defaultWriter: OutputWriter = async (_item, destination) => {
-  if (destination.type !== 'download') {
+  if (!PHASE1_DESTINATION_TYPES.includes(destination.type)) {
     throw new CompressionProviderError('OPERATION_UNSUPPORTED', '第一阶段只支持下载输出');
   }
 };
@@ -281,7 +281,7 @@ export class CompressionSession {
   }
 
   private emitUpdate(): void {
-    this.batch.status = deriveBatchStatus(this.tasks);
+    this.batch.status = batchStatus(this.tasks);
     this.onUpdate?.(this.tasks);
   }
 }
