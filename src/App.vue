@@ -5,6 +5,7 @@ import CompressionList from './components/CompressionList.vue';
 import CompressionSummary from './components/CompressionSummary.vue';
 import { calculateCompressionStats } from './core/compression/stats';
 import type { CompressionTask } from './core/compression/types';
+import { sourceFile } from './core/workbench/model';
 import type { FileAdapter, SourceFile } from './core/files/contracts';
 import { BrowserImageProvider, WebFileAdapter } from './platform/web';
 import { createPlatformAdapters, isTauriRuntime } from './platform';
@@ -39,7 +40,7 @@ async function chooseDirectory(): Promise<void> {
 }
 
 async function select(read: (current: FileAdapter) => Promise<SourceFile[]>): Promise<void> {
-  if (!adapter.value || busy.value) return;
+  if (!adapter.value) return;
   notice.value = '';
   try {
     const files = await read(adapter.value);
@@ -51,7 +52,7 @@ async function select(read: (current: FileAdapter) => Promise<SourceFile[]>): Pr
 
 async function handleDrop(files: File[]): Promise<void> {
   const webAdapter = adapter.value instanceof WebFileAdapter ? adapter.value : undefined;
-  if (!webAdapter || busy.value) {
+  if (!webAdapter) {
     notice.value = '桌面端请使用系统文件选择器导入图片';
     return;
   }
@@ -65,14 +66,9 @@ async function startSession(files: readonly SourceFile[]): Promise<void> {
     return;
   }
 
-  if (session.value && !busy.value) {
+  // 只加草稿，不自动开始；处理中也允许继续添加
+  if (session.value) {
     session.value.addFiles(files);
-    busy.value = true;
-    try {
-      await session.value.run();
-    } finally {
-      busy.value = false;
-    }
     return;
   }
 
@@ -80,18 +76,31 @@ async function startSession(files: readonly SourceFile[]): Promise<void> {
     adapter: adapter.value,
     provider: new BrowserImageProvider(),
     onUpdate: nextTasks => {
-      tasks.value = nextTasks.map(task => ({ ...task, error: task.error ? { ...task.error } : undefined }));
+      tasks.value = nextTasks.map(task => ({
+        ...task,
+        outputs: task.outputs.map(output => ({ ...output })),
+        error: task.error ? { ...task.error } : undefined
+      }));
     }
   });
-  nextSession.addFiles(files);
   session.value = nextSession;
+  nextSession.addFiles(files);
   tasks.value = nextSession.tasks.slice();
+}
+
+/** 用户点“开始处理 (n)” */
+async function start(): Promise<void> {
+  if (!session.value || session.value.draftCount === 0) return;
   busy.value = true;
   try {
-    await nextSession.run();
+    await session.value.run();
   } finally {
     busy.value = false;
   }
+}
+
+async function retryOutputs(taskId: string): Promise<void> {
+  await session.value?.retry(taskId, 'outputs');
 }
 
 function taskById(taskId: string): CompressionTask | undefined {
@@ -129,10 +138,11 @@ function download(taskId: string): void {
 
 async function replace(taskId: string): Promise<void> {
   const task = taskById(taskId);
-  if (!task?.tempFile || !adapter.value) return;
+  const file = task ? sourceFile(task) : undefined;
+  if (!task?.tempFile || !file || !adapter.value) return;
   if (!window.confirm('覆盖原图后无法撤销，确定继续吗？')) return;
   try {
-    await adapter.value.replaceOriginal(task.tempFile, task.source);
+    await adapter.value.replaceOriginal(task.tempFile, file);
     notice.value = '原图覆盖成功';
   } catch (error) {
     notice.value = error instanceof Error ? error.message : '覆盖原图失败';
@@ -180,18 +190,19 @@ function clear(): void {
           <h2>压缩队列</h2>
           <p>{{ stats.total }} 张图片 · {{ Math.round(stats.progress * 100) }}% 完成</p>
         </div>
-        <button type="button" class="secondary" :disabled="busy" @click="chooseFiles">继续添加</button>
+        <button type="button" class="secondary" @click="chooseFiles">继续添加</button>
       </div>
       <CompressionList
         :tasks="tasks"
         :can-download="canDownload"
         @cancel="cancel"
         @retry="retry"
+        @retry-outputs="retryOutputs"
         @download="download"
         @replace="replace"
         @copy="copy"
       />
-      <CompressionSummary :stats="stats" @clear="clear" @cancel-all="cancelAll" />
+      <CompressionSummary :stats="stats" @clear="clear" @cancel-all="cancelAll" @start="start" />
     </section>
   </main>
 </template>

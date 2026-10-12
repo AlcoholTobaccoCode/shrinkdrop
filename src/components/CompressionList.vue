@@ -6,6 +6,7 @@ defineProps<{ tasks: readonly CompressionTask[]; canDownload?: boolean }>();
 const emit = defineEmits<{
   cancel: [taskId: string];
   retry: [taskId: string];
+  retryOutputs: [taskId: string];
   download: [taskId: string];
   replace: [taskId: string];
   copy: [taskId: string];
@@ -21,6 +22,7 @@ const emit = defineEmits<{
       :can-download="canDownload"
       @cancel="emit('cancel', $event)"
       @retry="emit('retry', $event)"
+      @retry-outputs="emit('retryOutputs', $event)"
       @download="emit('download', $event)"
       @replace="emit('replace', $event)"
       @copy="emit('copy', $event)"

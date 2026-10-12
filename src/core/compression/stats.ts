@@ -1,8 +1,13 @@
 import type { CompressionTask } from './types';
+import { displayStatus, isActive } from '../workbench/model';
 
 export interface CompressionStats {
   total: number;
   pending: number;
+  /** 草稿数，“开始处理 (n)” 用 */
+  draft: number;
+  partial: number;
+  outputFailed: number;
   active: number;
   completed: number;
   failed: number;
@@ -16,13 +21,15 @@ export interface CompressionStats {
 
 export function calculateCompressionStats(tasks: readonly CompressionTask[]): CompressionStats {
   const total = tasks.length;
-  const completed = tasks.filter(task => task.status === 'completed').length;
-  const failed = tasks.filter(task => task.status === 'failed').length;
+  const shown = tasks.map(displayStatus);
+  const completed = shown.filter(status => status === 'completed').length;
+  const partial = shown.filter(status => status === 'partial').length;
+  const failed = shown.filter(status => status === 'failed').length;
+  const outputFailed = shown.filter(status => status === 'output-failed').length;
+  const draft = tasks.filter(task => task.status === 'draft').length;
   const canceled = tasks.filter(task => task.status === 'canceled').length;
-  const pending = tasks.filter(task => task.status === 'pending').length;
-  const active = tasks.filter(task =>
-    task.status === 'reading' || task.status === 'compressing' || task.status === 'writing'
-  ).length;
+  const pending = tasks.filter(task => task.status === 'queued').length;
+  const active = tasks.filter(task => isActive(task.status) && task.status !== 'queued').length;
   const originalBytes = tasks.reduce((sum, task) => sum + task.originalSize, 0);
   const completedOriginalBytes = tasks.reduce(
     (sum, task) => sum + (task.status === 'completed' ? task.originalSize : 0),
@@ -39,6 +46,9 @@ export function calculateCompressionStats(tasks: readonly CompressionTask[]): Co
   return {
     total,
     pending,
+    draft,
+    partial,
+    outputFailed,
     active,
     completed,
     failed,

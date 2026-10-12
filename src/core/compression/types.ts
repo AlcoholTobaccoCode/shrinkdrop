@@ -1,23 +1,7 @@
-import type { SourceFile, TempFile } from '../files/contracts';
+import type { WorkbenchErrorCode, WorkbenchItem, ProcessedResult } from '../workbench/model';
 
-export type CompressionStatus =
-  | 'pending'
-  | 'reading'
-  | 'compressing'
-  | 'writing'
-  | 'completed'
-  | 'failed'
-  | 'canceled';
-
-export type CompressionErrorCode =
-  | 'CANCELED'
-  | 'UNSUPPORTED_FORMAT'
-  | 'FILE_TOO_LARGE'
-  | 'PIXELS_TOO_LARGE'
-  | 'READ_FAILED'
-  | 'WRITE_FAILED'
-  | 'PROVIDER_FAILED'
-  | 'UNKNOWN';
+export type { JobStatus as CompressionStatus } from '@tinypng/shared';
+export type CompressionErrorCode = WorkbenchErrorCode;
 
 export interface CompressionOptions {
   quality: number;
@@ -25,39 +9,21 @@ export interface CompressionOptions {
   maxPixels: number;
   preserveMetadata: boolean;
   inputMime?: string;
+  /** convert 操作指定的输出格式 */
+  outputMime?: string;
 }
 
 export const defaultCompressionOptions: CompressionOptions = {
   quality: 0.82,
-  maxFileBytes: 50 * 1024 * 1024,
+  maxFileBytes: 20 * 1024 * 1024,
   maxPixels: 40_000_000,
   preserveMetadata: false
 };
 
-export interface CompressionOutput {
-  bytes: Uint8Array;
-  mime: string;
-  size: number;
-  width: number;
-  height: number;
-  ratio: number;
-}
+export type CompressionOutput = ProcessedResult;
 
-export interface CompressionTask {
-  id: string;
-  source: SourceFile;
-  status: CompressionStatus;
-  progress: number;
-  originalSize: number;
-  compressedSize?: number;
-  output?: CompressionOutput;
-  tempFile?: TempFile;
-  error?: {
-    code: CompressionErrorCode;
-    message: string;
-    cause?: unknown;
-  };
-}
+/** 兼容旧名：任务即工作台条目 */
+export type CompressionTask = WorkbenchItem;
 
 export class CompressionCanceledError extends Error {
   readonly code = 'CANCELED' as const;
@@ -70,6 +36,7 @@ export class CompressionCanceledError extends Error {
 
 export class CompressionProviderError extends Error {
   readonly code: CompressionErrorCode;
+  override readonly cause?: unknown;
 
   constructor(code: Exclude<CompressionErrorCode, 'CANCELED'>, message: string, cause?: unknown) {
     super(message);
@@ -77,6 +44,4 @@ export class CompressionProviderError extends Error {
     this.code = code;
     this.cause = cause;
   }
-
-  readonly cause?: unknown;
 }

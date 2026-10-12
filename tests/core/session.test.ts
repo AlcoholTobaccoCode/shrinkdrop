@@ -49,6 +49,8 @@ describe('CompressionSession', () => {
     expect(session.tasks[0]?.status).toBe('completed');
     expect(session.tasks[0]?.compressedSize).toBe(2);
     expect(session.tasks[0]?.tempFile?.id).toBe('temp-1');
+    expect(session.tasks[0]?.outputs.map(o => o.status)).toEqual(['completed']);
+    expect(session.batch.status).toBe('completed');
   });
 
   it('Provider 失败后任务进入 failed', async () => {

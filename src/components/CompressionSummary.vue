@@ -2,7 +2,7 @@
 import type { CompressionStats } from '../core/compression/stats';
 
 defineProps<{ stats: CompressionStats }>();
-const emit = defineEmits<{ clear: []; cancelAll: [] }>();
+const emit = defineEmits<{ clear: []; cancelAll: []; start: [] }>();
 
 function formatBytes(value: number): string {
   if (!value) return '0 B';
@@ -16,10 +16,12 @@ function formatBytes(value: number): string {
   <footer class="summary">
     <div>
       <strong>{{ stats.completed }}</strong><span>完成</span>
-      <strong>{{ stats.failed }}</strong><span>失败</span>
+      <strong>{{ stats.partial }}</strong><span>部分成功</span>
+      <strong>{{ stats.failed + stats.outputFailed }}</strong><span>失败</span>
       <strong>{{ formatBytes(stats.savedBytes) }}</strong><span>节省</span>
     </div>
     <div class="summary__actions">
+      <button type="button" class="primary" :disabled="stats.draft === 0" @click="emit('start')">开始处理 ({{ stats.draft }})</button>
       <button v-if="stats.active || stats.pending" type="button" class="secondary" @click="emit('cancelAll')">取消全部</button>
       <button type="button" class="secondary" @click="emit('clear')">清空列表</button>
     </div>

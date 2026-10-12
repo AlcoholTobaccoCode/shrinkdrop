@@ -29,20 +29,21 @@ export class BrowserImageProvider implements CompressionProvider {
     const context = canvas.getContext('2d');
     if (!context) {
       closeImage(image);
-      throw new CompressionProviderError('PROVIDER_FAILED', '当前环境无法创建图片画布');
+      throw new CompressionProviderError('PROVIDER_ERROR', '当前环境无法创建图片画布');
     }
 
     context.drawImage(image, 0, 0);
     closeImage(image);
     throwIfAborted(signal);
 
-    const blob = await canvasToBlob(canvas, mime, options.quality, signal);
+    const outputMime = options.outputMime ?? mime;
+    const blob = await canvasToBlob(canvas, outputMime, options.quality, signal);
     const bytes = new Uint8Array(await blob.arrayBuffer());
     throwIfAborted(signal);
 
     return {
       bytes,
-      mime,
+      mime: outputMime,
       size: bytes.byteLength,
       width,
       height,
@@ -85,7 +86,7 @@ function canvasToBlob(canvas: HTMLCanvasElement, mime: string, quality: number, 
   return new Promise((resolve, reject) => {
     canvas.toBlob(blob => {
       if (!blob) {
-        reject(new CompressionProviderError('PROVIDER_FAILED', '图片编码失败'));
+        reject(new CompressionProviderError('PROVIDER_ERROR', '图片编码失败'));
         return;
       }
       try {

@@ -1,14 +1,24 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import type { CompressionTask } from '../core/compression/types';
+import { canRetryOutputs, displayStatus, isActive, sourceFile } from '../core/workbench/model';
 
-defineProps<{ task: CompressionTask; canDownload?: boolean }>();
+const props = defineProps<{ task: CompressionTask; canDownload?: boolean }>();
 const emit = defineEmits<{
   cancel: [taskId: string];
   retry: [taskId: string];
+  retryOutputs: [taskId: string];
   download: [taskId: string];
   replace: [taskId: string];
   copy: [taskId: string];
 }>();
+
+const shown = computed(() => displayStatus(props.task));
+const file = computed(() => sourceFile(props.task));
+const name = computed(() => file.value?.name ?? (props.task.source.kind === 'url' ? props.task.source.url : ''));
+/** Provider 已出结果（含部分成功、保存失败） */
+const hasResult = computed(() => props.task.output !== undefined);
+const retryOutputsVisible = computed(() => canRetryOutputs(props.task));
 
 function formatBytes(value: number | undefined): string {
   if (!value) return '0 B';
@@ -17,14 +27,21 @@ function formatBytes(value: number | undefined): string {
   return (value / 1024 ** index).toFixed(index === 0 ? 0 : 1) + ' ' + units[index];
 }
 
-function statusText(task: CompressionTask): string {
-  if (task.status === 'completed') return '已完成';
-  if (task.status === 'failed') return task.error?.message ?? '压缩失败';
-  if (task.status === 'canceled') return '已取消';
-  if (task.status === 'reading') return '读取中';
-  if (task.status === 'compressing') return '压缩中';
-  if (task.status === 'writing') return '保存中';
-  return '等待中';
+function statusText(): string {
+  const task = props.task;
+  switch (shown.value) {
+    case 'completed': return '已完成';
+    case 'partial': return '部分输出失败';
+    case 'output-failed': return '已处理，保存失败（未消耗额度）';
+    case 'failed': return task.error?.message ?? '处理失败';
+    case 'canceled': return '已取消';
+    case 'draft': return '待开始';
+    case 'queued': return '排队中';
+    case 'uploading': return '读取中';
+    case 'processing': return '处理中';
+    case 'saving': return '保存中';
+    default: return '';
+  }
 }
 </script>
 
@@ -33,24 +50,25 @@ function statusText(task: CompressionTask): string {
     <div class="item__main">
       <div class="item__icon" aria-hidden="true">IMG</div>
       <div class="item__copy">
-        <strong :title="task.source.relativePath">{{ task.source.name }}</strong>
-        <span>{{ formatBytes(task.originalSize) }} · {{ statusText(task) }}</span>
+        <strong :title="file?.relativePath ?? name">{{ name }}</strong>
+        <span>{{ formatBytes(task.originalSize) }} · {{ statusText() }}</span>
       </div>
       <div class="item__result">
-        <strong v-if="task.status === 'completed'">{{ formatBytes(task.compressedSize) }}</strong>
-        <span v-if="task.status === 'completed'">
+        <strong v-if="hasResult">{{ formatBytes(task.compressedSize) }}</strong>
+        <span v-if="hasResult">
           节省 {{ Math.max(0, 100 - ((task.compressedSize ?? task.originalSize) / task.originalSize) * 100).toFixed(1) }}%
         </span>
       </div>
       <div class="item__actions">
-        <button v-if="task.status === 'pending' || task.status === 'reading' || task.status === 'compressing' || task.status === 'writing'" type="button" aria-label="取消压缩" @click="emit('cancel', task.id)">取消</button>
-        <button v-if="task.status === 'failed' || task.status === 'canceled'" type="button" aria-label="重试压缩" @click="emit('retry', task.id)">重试</button>
-        <button v-if="task.status === 'completed' && canDownload" type="button" aria-label="下载压缩图片" @click="emit('download', task.id)">下载</button>
-        <button v-if="task.status === 'completed'" type="button" aria-label="覆盖原图" @click="emit('replace', task.id)">覆盖</button>
-        <button v-if="task.status === 'completed'" type="button" aria-label="复制图片" @click="emit('copy', task.id)">复制</button>
+        <button v-if="task.status === 'draft' || isActive(task.status)" type="button" aria-label="取消压缩" @click="emit('cancel', task.id)">取消</button>
+        <button v-if="shown === 'failed' || shown === 'canceled'" type="button" aria-label="重试压缩" @click="emit('retry', task.id)">重试</button>
+        <button v-if="retryOutputsVisible" type="button" aria-label="只重试输出" @click="emit('retryOutputs', task.id)">重试输出</button>
+        <button v-if="hasResult && shown !== 'output-failed' && canDownload" type="button" aria-label="下载压缩图片" @click="emit('download', task.id)">下载</button>
+        <button v-if="hasResult && shown !== 'output-failed' && file" type="button" aria-label="覆盖原图" @click="emit('replace', task.id)">覆盖</button>
+        <button v-if="hasResult && shown !== 'output-failed'" type="button" aria-label="复制图片" @click="emit('copy', task.id)">复制</button>
       </div>
     </div>
-    <div v-if="task.status !== 'completed' && task.status !== 'failed' && task.status !== 'canceled'" class="item__progress" role="progressbar" :aria-valuenow="Math.round(task.progress * 100)" aria-valuemin="0" aria-valuemax="100">
+    <div v-if="isActive(task.status)" class="item__progress" role="progressbar" :aria-valuenow="Math.round(task.progress * 100)" aria-valuemin="0" aria-valuemax="100">
       <span :style="{ width: task.progress * 100 + '%' }"></span>
     </div>
   </article>
