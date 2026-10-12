@@ -11,6 +11,9 @@ importers:
       '@tauri-apps/api':
         specifier: ^2.5.0
         version: 2.12.2
+      '@tinypng/shared':
+        specifier: workspace:*
+        version: link:packages/shared
       vue:
         specifier: ^3.5.22
         version: 3.5.43(typescript@5.9.3)
@@ -36,6 +39,8 @@ importers:
       vue-tsc:
         specifier: ^2.2.8
         version: 2.2.12(typescript@5.9.3)
+
+  packages/shared: {}
 
 packages:
 
