@@ -1,7 +1,7 @@
 # Editorial Canvas 设计规范 v0.1
 
 负责人：ui · 日期：2026-10-12 · 依据：`specs/2026-10-12-image-workbench-design.md`、`specs/server-api-draft.md`、群里确认的 11 条决定、brainstorm 里选定的「A · Editorial Canvas」方向（米白纸张底 + 墨色文字）。
-现有代码是 Vue 3 + 原生 CSS（`src/styles/tokens.css` 只定义了 Inter 和 `#f8fafc`）。本规范以 CSS 自定义属性给出，替换/扩展 `tokens.css`；如果瞌睡虫决定上 Tailwind，按 tailwind-design-system 的做法把这些变量映射进 `@theme`，不另造一套值。
+现有代码是 Vue 3 + 原生 CSS（`src/styles/tokens.css` 只定义了 Inter 和 `#f8fafc`）。本规范以 CSS 自定义属性给出，替换/扩展 `tokens.css`；**团队已定**：扩展 `src/styles/tokens.css`，不引入 Tailwind；单选组（模式/Provider）、Dialog（抽屉、确认框）、对比滑块用 **Reka UI** 原语，样式全部取本规范 token。
 
 ## 0. 第一阶段范围（按 `plans/2026-10-12-phase1-tasks.md` C1–C3 与规格「审阅决定」）
 - **做**：本地私有 / 云端（匿名 Tinify、官方 Tinify）；操作链 = 压缩、转换（PNG/JPG/WebP）、缩放；URL 输入（仅云端）；输出 = **单张下载 + zip 全部下载**（云端 `/batches/:id/archive`，本地 `fflate`；Tauri 保存走 FileAdapter 到所选目录）；进度 = SSE 增量事件 `{jobId,status,progress,outputs?}`，断线后重拉批次并显示「连接中断，正在恢复…」。
@@ -76,7 +76,7 @@
 
 尺寸：sm 28 / md 36 / lg 40（开始处理用 lg，带数量「开始处理 (12)」）。命中区 ≥ 32×32（桌面）/ 44（触屏）。禁用：opacity .45 + `aria-disabled`，并在按钮旁写原因（例如「先添加图片」）。
 
-**开始处理按钮状态**：无草稿→禁用+提示「先添加图片」；有草稿→可用，显示数量；存在操作链冲突→禁用，提示「当前线路不支持部分操作」并滚动定位到冲突提示；运行中→变为 Secondary「暂停添加 · 运行中 3/12」旁边放 Danger-ghost「取消全部」。
+**开始处理按钮状态**（计数 n 只算 `draft`；处理中仍可添加图片，新图为草稿，按钮可再次点击启动这些草稿）：无草稿→禁用+提示「先添加图片」；有草稿→可用，显示数量；存在操作链冲突→禁用，提示「当前线路不支持部分操作」并滚动定位到冲突提示；运行中且无新草稿→禁用，显示「处理中 3 / 12」，旁边 Danger-ghost「取消全部」；运行中又加了草稿→恢复可用「开始处理 (2)」。
 
 ### 6.2 输入
 高 36，`--surface-sunken` 底，`--line-strong` 描边，`--r-sm`；label 在上方（13/500），帮助文字在下方（12 muted），错误文字在下方 `--danger` 且 `aria-describedby` 关联。数字输入（宽高、质量）右侧带单位后缀。URL 输入（仅云端）输入后在下方显示「将由 Server 获取：`example.com`」。
@@ -85,14 +85,16 @@
 `--surface` 底、1px `--line` 描边、`--r-lg`；头部 44 高，左标题 16/600，右侧图标操作。Inspector 内操作链每一步是可折叠的「节点卡」：左侧序号圆点 + 名称 + 开关，展开后是参数；不支持的节点显示锁图标和原因。
 
 ### 6.4 队列项状态（底部队列 + 左栏素材缩略图角标共用）
+展示状态共 8 种，由 `packages/shared` 的 `deriveDisplayStatus()` 推导（需补 `output-failed` 分支，见 README）。第一阶段只有「下载」一个目的地，所以「Provider 成功但保存失败」实际都落在 `output-failed`，`partial` 留给后续多目的地。
 | 状态 | API 状态 | 圆点/图标 | 文案 | 可用操作 |
 |---|---|---|---|---|
 | 草稿 | `draft` | 空心圆 `--ink-muted` | 草稿 · 待开始 | 移除 |
 | 排队 | `queued` | 时钟 `--ink-muted` | 排队中 · 第 n 位 | 取消 |
 | 运行 | `uploading/processing/saving` | 实心圆 `--info` 呼吸 + 进度条 | 上传中 / 处理中 / 保存中 · 尝试 1/3 | 取消 |
 | 成功 | `completed` | 对勾 `--success` | 1.2 MB → 312 KB · 节省 74% | 查看结果 |
-| 部分成功 | `completed` 但有 output failed | 对勾+感叹 `--warning` | 已处理 · 1 个目的地失败 | 重试输出 |
-| 失败 | `failed` | 叉 `--danger` | 错误信息（人话）+ requestId 可复制 | 重试 |
+| 部分成功 | 派生 `partial`：部分 output completed、部分 failed | 对勾+感叹 `--warning` | 已处理 · n 个目的地失败 | 重试输出（不消耗额度）、下载已成功的 |
+| 已处理，保存失败 | 派生 `output-failed`：有 `result` 且**全部** output failed | 感叹 `--warning` | 已处理，保存失败 · 错误人话 | **仅「重试输出」**，旁注「不消耗额度」 |
+| 失败 | `failed`（仅 Provider 失败，无 result） | 叉 `--danger` | 错误信息（人话）+ requestId 可复制 | 重试 |
 | 已取消 | `canceled` | 斜杠圆 `--ink-faint`，整行 .7 透明 | 已取消 | 重试 |
 
 状态永远是「图标 + 文字」，不只靠颜色。队列头部汇总：`草稿 4 · 排队 3 · 运行 5/5 · 成功 10 · 失败 1`，以及原始总体积 / 结果总体积 / 节省比例 / 请求次数。
@@ -126,7 +128,7 @@ Inspector 底部「输出到」多选：下载到本地 / 覆盖原图（仅 Tau
 队列头部右侧 Secondary 按钮「全部下载 (zip)」：有 ≥1 个成功结果才可用；只打包成功项，按钮下注明「含 10 张，1 张失败未包含」。打包中显示进度并可取消。
 
 ### 6.8c 连接状态（SSE）
-顶栏运行数旁小圆点：已连接（无文字）/「连接中断，正在恢复…」（`--warning`，aria-live polite）/ 恢复后静默刷新。心跳 15 秒，超过 30 秒无事件即显示中断。
+顶栏运行数旁小圆点：已连接（无文字）/「连接中断，正在恢复…」（`--warning`，aria-live polite）/ 恢复后静默刷新。心跳 15 秒，超过 30 秒无任何事件即显示中断，自动重连，重连后 `GET /batches/:id` 全量重拉校正。
 
 ### 6.9 线路冲突提示（匿名 + 非压缩操作）
 在 Inspector Provider 卡片下方出现 inline 警告条（`role="alert"`，`--warning-soft` 底）：

@@ -23,11 +23,14 @@
 - 第一阶段不做的功能（裁切/兴趣区/元数据/覆盖原图/S3/GCS）灰显并写「后续支持」，不隐藏，让用户知道后面会有。
 - 输出第一阶段只有「下载」（单张 + zip），但仍按目的地行展示状态和「重试输出」。
 
-## 给瞌睡虫的待确认问题
-1. 现有代码是 Vue + 原生 CSS：直接扩展 `src/styles/tokens.css` 用 CSS 变量，还是引入 Tailwind？（我倾向前者，第一阶段改动小）
-2. 组件原语：Vue 侧用 Reka UI（Radix Vue）做 RadioGroup / Dialog / Slider 吗？需要它们的键盘与焦点行为。
-3. 部分成功（`completed` 但有 output `failed`）是前端派生状态，确认 store 里这样算没问题？
-4. 运行中是否允许继续添加图片（作为新草稿，下次再点开始）？线框里暂按“允许添加，不自动开始”。
-5. 本地模式 Tauri 下“下载”= 选目录保存，Web 下 = 浏览器下载；目录选择是每批问一次还是记住上次？
-6. SSE 断线判定阈值：我写的是 30 秒无事件显示「连接中断」，和你的重连逻辑对得上吗？
-7. 模式切换时已有草稿（尤其 URL 草稿）怎么处理：我建议本地模式移除 URL 草稿并 toast 告知数量。
+## 已定（团队决定）
+- 扩展 `tokens.css`，不用 Tailwind；Reka UI 做 RadioGroup / Dialog / 对比滑块。
+- 处理中可继续添加图片，新图为草稿；「开始处理 (n)」只计草稿。
+- SSE：心跳 15 秒，30 秒无事件显示「连接中断」，自动重连后重拉批次。
+- 展示状态 8 种：draft / queued / 运行（uploading·processing·saving）/ completed / partial / **output-failed**（有结果但全部输出失败，「已处理，保存失败」，只给「重试输出 · 不消耗额度」）/ failed（仅 Provider 失败）/ canceled。
+- 交互细则见 `interaction-specs.md`。
+
+## 待确认
+1. `deriveDisplayStatus()`（c14882e）目前没有 `output-failed` 分支：单目的地保存失败会返回 `completed` 或 `failed`（取决于 Server 怎么写 job.status），需要无敌王八补：`result && outputs.length>0 && outputs 全部 failed → 'output-failed'`，`JobDisplayStatus` 加上这个值。
+2. Tauri 保存目录：每批问一次还是记住上次？（建议记住，队列头可改）
+3. 切到本地模式时移除 URL 草稿并 toast 告知数量，确认？
