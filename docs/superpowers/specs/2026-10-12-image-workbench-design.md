@@ -271,3 +271,7 @@ Web 端在没有 Server 临时凭据或 presigned URL 时隐藏真实云存储�
 - 第一阶段提供 zip 批量下载（`GET /api/v1/batches/:batchId/archive`；本地模式在前端用 `fflate` 打包）。
 - 进度推送用 SSE；客户端用 fetch 读流以携带 Bearer token。Server 每 15 秒发心跳，事件格式为增量 `{ jobId, status, progress, outputs? }`，断线后客户端重拉 `GET /batches/:batchId`。
 - 第一阶段不做管理员 token 和管理视图。
+- 处理中允许继续加图片，新加的默认是草稿，“开始处理 (n)”只统计草稿数。
+- 超过 30 秒收不到任何 SSE 事件时显示“连接中断”并自动重连，重连成功后重拉批次状态。
+- 批次和队列项新增“部分成功”状态（有输出成功、有输出失败）。
+- 展示状态由 `deriveDisplayStatus()` 推出，Server 状态机不变：有的输出成功、有的失败时为 `partial`；有 `result` 但 `outputs` 全部失败时为 `output-failed`，界面显示“已处理，保存失败”，只提供“重试输出”并注明不消耗额度；`failed` 只用于 Provider 处理失败。
