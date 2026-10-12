@@ -61,6 +61,8 @@ export interface CreateBatchRequest {
   destinations: OutputDestination[];
 }
 export interface AddUrlItemsRequest { urls: string[] }
+/** POST /batches/:id/items 的响应，顺序与上传/urls 顺序一致；multipart 字段名为 files */
+export interface AddItemsResponse { jobs: Job[] }
 export interface RetryJobRequest { scope: 'all' | 'outputs' }
 
 /** 界面展示状态：在 JobStatus 基础上推导，Server 状态机不变

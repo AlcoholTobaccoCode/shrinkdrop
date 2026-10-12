@@ -114,6 +114,11 @@ interface Job {
 `TinifyAccounts.json` 兼容现在的数组格式，新增的字段都是可选的：`[{ "username": "...", "api_key": "...", "monthlyLimit": 500 }]`
 `storage.json` 用霸王龙给的格式。
 
+### 4.3.3 加图片的约定
+- `POST /batches/:id/items` 返回 `{ jobs: Job[] }`，顺序和上传顺序一致。multipart 的字段名是 `files`，一次可以传一个或多个文件。
+- 同一个 token 最多同时有 8 个上传请求，超出返回 429 `RATE_LIMITED`。客户端每次传一个文件、最多同时传 5 个没有问题。
+- `job` 事件在 `completed` 时带上 `result`，客户端不用再去请求 `GET /jobs/:id`。
+
 ## 6. 已确认（v0.2）
 1. zip 打包第一阶段就做，见 4.3.2。
 2. SSE 用 fetch 读取，增量事件加 15 秒心跳，见 4.3.1。
