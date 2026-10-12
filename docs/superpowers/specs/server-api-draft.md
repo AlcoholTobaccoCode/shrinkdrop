@@ -1,4 +1,4 @@
-# Server API 草案 v0.1（第一阶段）
+# Server API v0.2（第一阶段定稿）
 
 负责人：无敌王八 · 日期：2026-10-12 · 依据：`2026-10-12-image-workbench-design.md` 加群里确认的 11 条决定
 
@@ -39,7 +39,8 @@
 | POST | /api/v1/jobs/:jobId/cancel | 取消任务 |
 | POST | /api/v1/batches/:batchId/cancel | 取消整个批次 |
 | GET | /api/v1/jobs/:jobId/result | 下载结果文件 |
-| POST | /api/v1/jobs/:jobId/outputs/:outputId/presign | 获取对象存储的临时链接 |
+| GET | /api/v1/batches/:batchId/archive | 把已完成的结果打包成 zip 下载 |
+| POST | /api/v1/jobs/:jobId/outputs/:outputId/presign | 获取对象存储的临时链接（第一阶段不开放） |
 
 ### 4.1 手动启动流程（第 8 条）
 1. `POST /batches`，请求体是 `{ providerId, operations: Operation[], destinations: OutputDestination[] }`，返回 `{ batchId, status: "draft" }`。
@@ -68,7 +69,18 @@ interface Job {
 }
 ```
 - `retry` 请求体是 `{ scope: 'all' | 'outputs' }`。Provider 已经成功、只是输出失败时用 `outputs`，不会重复消耗额度。
-- 用户只能看到和操作自己 token 创建的批次。
+- 用户只能看到和操作自己 token 创建的批次，访问别人的批次返回 404。第一阶段没有管理员 token。
+- 第一阶段 `destinations` 只接受 `download`，传 `overwrite` 或 `object-storage` 返回 422 `VALIDATION_FAILED`。
+- 界面上的“部分成功”和“已处理，保存失败”由 `@tinypng/shared` 里的 `deriveDisplayStatus()` 推导，Server 不新增状态。
+
+### 4.3.1 SSE 进度推送
+- `GET /batches/:id/events` 要带 Bearer 令牌，客户端用 fetch 读取流，不用 EventSource。
+- 每条事件的 `event` 和 `data.type` 相同，取值是 `job`、`batch` 或 `heartbeat`，具体结构见 `BatchEvent`。`job` 事件是增量的：`{ jobId, status, progress?, outputs?, error? }`。
+- 每 15 秒发一次 `heartbeat`。客户端 30 秒收不到任何事件就判定连接中断并重连，重连后先 `GET /batches/:id` 拉一次全量状态。
+- 处理中可以继续往批次里加图片，新加的图片是 draft；再次调用 `/start` 只启动这些 draft。
+
+### 4.3.2 zip 下载
+- `GET /batches/:id/archive` 只打包结果已经生成的任务，文件名保持上传时的原名，重名时自动加序号；没有可打包的结果时返回 409 `INVALID_STATE`。
 
 ### 4.4 额度与账号池（第 10 条，多人共用）
 `GET /providers/official-tinify/usage` 的响应：
@@ -102,7 +114,7 @@ interface Job {
 `TinifyAccounts.json` 兼容现在的数组格式，新增的字段都是可选的：`[{ "username": "...", "api_key": "...", "monthlyLimit": 500 }]`
 `storage.json` 用霸王龙给的格式。
 
-## 6. 待确认
-1. 结果下载要不要支持批量打包成 zip（`GET /batches/:id/archive`）？我建议第一阶段就做。
-2. SSE 能满足 Tauri 和 Web 两端吗？@瞌睡虫 确认一下。
-3. 临时文件和任务记录按 token 隔离，管理员 token 能看所有人的，是否需要？
+## 6. 已确认（v0.2）
+1. zip 打包第一阶段就做，见 4.3.2。
+2. SSE 用 fetch 读取，增量事件加 15 秒心跳，见 4.3.1。
+3. 第一阶段不做管理员 token。
