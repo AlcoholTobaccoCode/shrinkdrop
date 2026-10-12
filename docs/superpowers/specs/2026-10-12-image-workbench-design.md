@@ -1,7 +1,7 @@
 # Image Workbench 双端工作台设计
 
 **日期：** 2026-10-12
-**状态：** 待用户审阅
+**状态：** 已审阅（2026-10-12，QingShan 确认 11 条决定）
 **范围：** Tauri/Web 客户端 + 自用 Server + Tinify/其他图片 Provider + 本地与云端输出
 
 ## 目标
@@ -244,3 +244,30 @@ Web 端在没有 Server 临时凭据或 presigned URL 时隐藏真实云存储�
 - 不在本地私有模式偷偷下载 URL 或调用云端。
 - 不把所有厂商能力硬编码在一个巨型组件里。
 - 不把匿名网页接口宣称成稳定官方 API。
+
+## 审阅决定（2026-10-12，QingShan 确认）
+
+本节优先级高于上文，冲突时以本节为准。
+
+1. 官方 Tinify 是云端模式下的一个可选 Provider（`official-tinify`），不单独设处理模式。`processingPolicy` 仍只有 `private-local` 和 `cloud`。
+2. 第一阶段范围是交付顺序的前 3 步：Server 编排加账号池加任务 API；客户端工作台加模式切换加本地 Provider；匿名和官方 Tinify 加用量展示。验收标准：Web 和 Tauri 两端都能批量添加图片、手动开始、压缩并下载结果（含 zip 全部下载）。
+3. Server 用 Node 20 + TypeScript（Fastify），共享类型放 `packages/shared`，第一阶段部署在 QingShan 的电脑上。
+4. 任务记录存在 SQLite（`better-sqlite3`）。
+5. 本地私有模式第一版只支持 compress、convert（png/jpeg/webp）和 resize，其余操作在 manifest 中标记不支持。
+6. 匿名 Tinify 只支持 compress。操作链含其他操作时返回 `OPERATION_UNSUPPORTED` 并提示改用官方线路，不自动切换。
+7. 每个输出目的地分别记录状态和错误；Provider 成功、输出失败时可以只重试输出。
+8. 限制：单文件不超过 20MB，全局同时处理 5 个（所有用户共享），临时文件 TTL 24 小时，单次 Provider 超时 60 秒，可重试错误最多重试 2 次。**图片加入后不自动处理，必须由用户点击“开始处理”启动**（批次先为 draft）。
+9. URL 输入禁止访问 loopback、私有网段、link-local、CGNAT 和组播地址（IPv4/IPv6），锁定解析 IP 防 DNS rebinding，每次重定向重新检查，最多 3 跳。
+10. 每个官方账号月度额度默认 500，可在 `TinifyAccounts.json` 中用 `monthlyLimit` 覆盖。官方没有余量查询接口，已用次数只来自 `Compression-Count` 响应头或不消耗额度的 validate 请求，拿不到时显示“用量未知”。剩余额度 = `monthlyLimit - usedThisMonth`。
+11. S3、GCS 和兼容 S3 的存储配置放在 Server 本地 `server/config/storage.json`，加入 `.gitignore`；客户端只看到 profile `id` 和 `type`。配置方法写进 Server README。
+
+### 多人共用补充
+
+- **访问令牌**：所有 `/api/v1/*`（`/health` 除外）必须带 Bearer token。token 在 `server/config/server.json` 中按人配置 `id` 和 `label`，只存 SHA-256 哈希。只有监听 loopback 时才允许关闭认证。每个人只能看到和操作自己 token 创建的批次。
+- **账号池轮换和并发锁**：选账号时挑 `remaining - inFlight` 最大的账号；每个账号维护进程内预留计数（请求前加 1，拿到真实 `Compression-Count` 后校正），避免多人并发把同一个 key 用超。额度为 0、返回 401 或 429 的账号进入冷却期并跳过。启动时、每 30 分钟和每次请求后刷新用量。
+
+### 跟进确认（群内对齐）
+
+- 第一阶段提供 zip 批量下载（`GET /api/v1/batches/:batchId/archive`；本地模式在前端用 `fflate` 打包）。
+- 进度推送用 SSE；客户端用 fetch 读流以携带 Bearer token。Server 每 15 秒发心跳，事件格式为增量 `{ jobId, status, progress, outputs? }`，断线后客户端重拉 `GET /batches/:batchId`。
+- 第一阶段不做管理员 token 和管理视图。
