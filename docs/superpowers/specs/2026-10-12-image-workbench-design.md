@@ -275,3 +275,5 @@ Web 端在没有 Server 临时凭据或 presigned URL 时隐藏真实云存储�
 - 超过 30 秒收不到任何 SSE 事件时显示“连接中断”并自动重连，重连成功后重拉批次状态。
 - 批次和队列项新增“部分成功”状态（有输出成功、有输出失败）。
 - 展示状态由 `deriveDisplayStatus()` 推出，Server 状态机不变：有的输出成功、有的失败时为 `partial`；有 `result` 但 `outputs` 全部失败时为 `output-failed`，界面显示“已处理，保存失败”，只提供“重试输出”并注明不消耗额度；`failed` 只用于 Provider 处理失败。
+- 缩放规则两端一致：`inside` 不放大；`contain` 固定尺寸加留白（PNG/WebP 透明，JPG 白色），Server 先用 Tinify `fit` 再用 sharp 补边；`cover` 固定尺寸从中心裁切，Server 先用 sharp 中心裁切再交给 Tinify 压缩。
+- 本地模式素材含 PNG 且勾选压缩时，在压缩选项下方提示“本地模式对 PNG 压缩效果有限，建议用云端”（不弹窗、不挡“开始处理”）；选中 PNG 时质量滑块灰显，注明“只对 JPG 和 WebP 有效”。
