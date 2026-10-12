@@ -12,7 +12,10 @@ export type Operation =
 
 export type OperationType = Operation['type'];
 
-/** 第一阶段只开放 download；overwrite、object-storage 后续支持 */
+/**
+ * 第一阶段 Server 只接受 type: 'download'；
+ * 'overwrite' 和 'object-storage' 会返回 422 VALIDATION_FAILED，后续阶段开放。
+ */
 export interface OutputDestination {
   type: 'download' | 'overwrite' | 'object-storage';
   profileId?: string;
@@ -20,3 +23,6 @@ export interface OutputDestination {
 }
 
 export type ProcessingPolicy = 'private-local' | 'cloud';
+
+/** 第一阶段允许的输出目的地类型 */
+export const PHASE1_DESTINATION_TYPES: ReadonlyArray<OutputDestination['type']> = ['download'];

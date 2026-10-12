@@ -63,13 +63,42 @@ export interface CreateBatchRequest {
 export interface AddUrlItemsRequest { urls: string[] }
 export interface RetryJobRequest { scope: 'all' | 'outputs' }
 
-/** 界面展示状态：在 JobStatus 基础上推导“部分成功”，Server 状态机不变 */
-export type JobDisplayStatus = JobStatus | 'partial';
+/** 界面展示状态：在 JobStatus 基础上推导，Server 状态机不变
+ * - partial：有结果，输出部分成功部分失败
+ * - output-failed：有结果，但输出全部失败（可“重试输出”，不消耗额度）
+ * - failed：Provider 本身处理失败
+ */
+export type JobDisplayStatus = JobStatus | 'partial' | 'output-failed';
 
-export function deriveDisplayStatus(job: Pick<Job, 'status' | 'outputs'>): JobDisplayStatus {
+export interface DisplayStatusInput {
+  status: JobStatus;
+  outputs: ReadonlyArray<{ status: OutputStatus }>;
+  /** 是否已有 Provider 结果；不传时按 status === 'completed' 判断 */
+  hasResult?: boolean;
+}
+
+export function deriveDisplayStatus(job: DisplayStatusInput): JobDisplayStatus {
   if (job.status !== 'completed' && job.status !== 'failed') return job.status;
+  const hasResult = job.hasResult ?? job.status === 'completed';
+  if (!hasResult) return job.status;
+  const total = job.outputs.length;
   const done = job.outputs.filter((o) => o.status === 'completed').length;
   const failed = job.outputs.filter((o) => o.status === 'failed').length;
+  if (total > 0 && failed === total) return 'output-failed';
   if (done > 0 && failed > 0) return 'partial';
-  return job.status;
+  return failed > 0 ? 'output-failed' : 'completed';
+}
+
+/** 批次展示状态：由各任务的展示状态汇总 */
+export function deriveBatchStatus(jobs: ReadonlyArray<DisplayStatusInput>): BatchStatus {
+  if (jobs.length === 0) return 'draft';
+  const s = jobs.map(deriveDisplayStatus);
+  if (s.some((x) => x === 'queued' || x === 'uploading' || x === 'processing' || x === 'saving')) return 'running';
+  if (s.every((x) => x === 'draft')) return 'draft';
+  if (s.some((x) => x === 'draft')) return 'running';
+  if (s.every((x) => x === 'canceled')) return 'canceled';
+  const ok = s.filter((x) => x === 'completed').length;
+  if (ok === s.length) return 'completed';
+  if (ok === 0 && s.every((x) => x === 'failed' || x === 'canceled')) return 'failed';
+  return 'partial';
 }
