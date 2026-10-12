@@ -1,3 +1,5 @@
+use tauri::Manager;
+
 mod commands;
 mod file_ops;
 mod token;
