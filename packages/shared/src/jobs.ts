@@ -62,3 +62,14 @@ export interface CreateBatchRequest {
 }
 export interface AddUrlItemsRequest { urls: string[] }
 export interface RetryJobRequest { scope: 'all' | 'outputs' }
+
+/** 界面展示状态：在 JobStatus 基础上推导“部分成功”，Server 状态机不变 */
+export type JobDisplayStatus = JobStatus | 'partial';
+
+export function deriveDisplayStatus(job: Pick<Job, 'status' | 'outputs'>): JobDisplayStatus {
+  if (job.status !== 'completed' && job.status !== 'failed') return job.status;
+  const done = job.outputs.filter((o) => o.status === 'completed').length;
+  const failed = job.outputs.filter((o) => o.status === 'failed').length;
+  if (done > 0 && failed > 0) return 'partial';
+  return job.status;
+}
