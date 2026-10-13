@@ -34,4 +34,4 @@ Files: package.json/pnpm-lock.yaml/pnpm-workspace.yaml、server/**、packages/**
 - [x] 对照design做规格审查，随后质量审查，修复发现的问题。
 - [x] 新App真实两图手动压缩、取消/重试、选择保存目录和单图保存可用，记录PNG/JPG/WebP结果与大小。
 - [x] 更新README与验收记录，勾选已验证事项；停止开发与测试端口。
-- [ ] 提交轻量分支，保留本地，不推送。
+- [x] 提交轻量分支，保留本地，不推送。
