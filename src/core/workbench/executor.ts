@@ -11,11 +11,17 @@ export interface Executor {
   addUrls?(urls: readonly string[]): void;
   setPipeline(pipeline: Pipeline): void;
   start(): Promise<void>;
-  cancel(itemId: string): void;
-  cancelAll(): void;
+  cancel(itemId: string): void | Promise<void>;
+  cancelAll(): void | Promise<void>;
   retry(itemId: string, scope: 'all' | 'outputs'): Promise<void>;
   remove(itemId: string): boolean;
   /** 订阅条目变化，返回取消订阅 */
   subscribe(listener: (items: readonly WorkbenchItem[]) => void): () => void;
   dispose(): Promise<void>;
+  /** 结果字节（预览/单张下载）；没有结果返回 undefined */
+  resultBlob?(itemId: string): Promise<Blob | undefined>;
+  /** 仅打包成功结果；AbortSignal 取消下载，不取消处理任务。 */
+  downloadArchive?(signal?: AbortSignal): Promise<{ blob: Blob; filename: string }>;
+  /** 原图字节（预览） */
+  sourceBlob?(itemId: string): Promise<Blob | undefined>;
 }

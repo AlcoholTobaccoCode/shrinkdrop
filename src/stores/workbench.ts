@@ -5,6 +5,8 @@ import type { SourceFile } from '../core/files/contracts';
 import type { Executor } from '../core/workbench/executor';
 import { batchStatus, defaultPipeline, type Pipeline, type WorkbenchItem } from '../core/workbench/model';
 import { queueItemView } from '../core/workbench/queue-view';
+import { pipelineValidation } from '../core/workbench/hints';
+import { hasDownloadResult } from '../core/files/downloads';
 
 export interface RejectedFile {
   name: string;
@@ -28,7 +30,13 @@ export const useWorkbenchStore = defineStore('workbench', {
     rejected: [] as RejectedFile[],
     executor: undefined as Executor | undefined,
     unsubscribe: undefined as (() => void) | undefined,
-    starting: false
+    starting: false,
+    /** 桌面系统保存失败只影响客户端输出，重试时沿用 Provider 结果。 */
+    downloadFailures: {} as Record<string, string>,
+    /** 云端 SSE 连接状态 */
+    connection: 'idle' as import('../core/cloud/sse').ConnectionState,
+    /** 本地模式被拦下的网络请求数（顶栏常驻，非 0 即 bug） */
+    networkBlocked: 0
   }),
   getters: {
     draftCount: state => state.items.filter(item => item.status === 'draft').length,
@@ -36,12 +44,22 @@ export const useWorkbenchStore = defineStore('workbench', {
     selectedItem: state => state.items.find(item => item.id === state.selectedItemId),
     /** 本地模式不显示 URL 输入（D3 验收） */
     canAddUrls: state => state.mode === 'cloud',
+    runningCount: state => state.items.filter(item => ['uploading', 'processing', 'saving'].includes(item.status)).length,
+    hasRunning: state => state.items.some(item => ['queued', 'uploading', 'processing', 'saving'].includes(item.status)),
+    inputMimes: state => state.items.flatMap(item => (item.source.kind === 'file' ? [item.source.file.mime] : [])),
+    pipelineError: state => pipelineValidation(state.pipeline),
+    pipelineLocked: state => state.items.some(item => ['queued', 'uploading', 'processing', 'saving'].includes(item.status)) || (state.mode === 'cloud' && state.items.some(item => item.batchId !== '')),
+    downloadCount: state => state.items.filter(hasDownloadResult).length,
     canStart(): boolean {
-      return this.draftCount > 0 && !this.starting;
+      return this.draftCount > 0 && !this.starting && !this.pipelineError;
     },
     queue: state => {
       let position = 0;
-      return state.items.map(item => ({ item, view: queueItemView(item, item.status === 'queued' ? ++position : undefined) }));
+      return state.items.map(original => {
+        const failure = state.downloadFailures[original.id];
+        const item = failure ? { ...original, status: 'failed' as const, outputs: original.outputs.map(output => ({ ...output, status: 'failed' as const, error: { code: 'OUTPUT_FAILED' as const, message: failure } })) } : original;
+        return { item, view: queueItemView(item, item.status === 'queued' ? ++position : undefined) };
+      });
     }
   },
   actions: {
@@ -52,7 +70,11 @@ export const useWorkbenchStore = defineStore('workbench', {
       this.unsubscribe = markRaw(executor.subscribe(items => {
         this.items = items.map(item => ({ ...item, outputs: item.outputs.map(o => ({ ...o })) }));
         if (!this.selectedItemId && this.items[0]) this.selectedItemId = this.items[0].id;
+        const guard = (executor as { guard?: { blocked: number } }).guard;
+        if (guard) this.networkBlocked = guard.blocked;
       }));
+      const withConnection = executor as Executor & { onConnection?: (l: (s: import('../core/cloud/sse').ConnectionState) => void) => () => void };
+      withConnection.onConnection?.(state => { this.connection = state; });
       this.executor = executor;
       return executor;
     },
@@ -78,8 +100,9 @@ export const useWorkbenchStore = defineStore('workbench', {
       this.rejected.splice(index, 1);
     },
     setPipeline(pipeline: Pipeline): void {
-      this.pipeline = pipeline;
+      if (this.hasRunning) throw new Error('处理中不能修改操作方案');
       this.executor?.setPipeline(pipeline);
+      this.pipeline = pipeline;
     },
     /** 用户点“开始处理 (n)” */
     async start(): Promise<void> {
@@ -89,8 +112,8 @@ export const useWorkbenchStore = defineStore('workbench', {
       this.starting = false;
       await run;
     },
-    cancel(id: string): void { this.executor?.cancel(id); },
-    cancelAll(): void { this.executor?.cancelAll(); },
+    async cancel(id: string): Promise<void> { await this.executor?.cancel(id); },
+    async cancelAll(): Promise<void> { await this.executor?.cancelAll(); },
     retry(id: string, scope: 'all' | 'outputs' = 'all'): Promise<void> {
       return this.executor?.retry(id, scope) ?? Promise.resolve();
     },
@@ -119,6 +142,9 @@ export const useWorkbenchStore = defineStore('workbench', {
       this.executor = undefined;
       this.items = [];
       this.selectedItemId = undefined;
+      this.connection = 'idle';
+      this.networkBlocked = 0;
+      this.downloadFailures = {};
       this.mode = mode;
       this.pipeline = { ...this.pipeline, providerId };
       if (fileDrafts.length) this.addFiles(fileDrafts);
@@ -127,6 +153,18 @@ export const useWorkbenchStore = defineStore('workbench', {
       else removed = urlDrafts.length;
       return { removedUrlDrafts: removed };
     },
+    resultBlob(id: string): Promise<Blob | undefined> {
+      return this.executor?.resultBlob?.(id) ?? Promise.resolve(undefined);
+    },
+    sourceBlob(id: string): Promise<Blob | undefined> {
+      return this.executor?.sourceBlob?.(id) ?? Promise.resolve(undefined);
+    },
+    downloadArchive(signal?: AbortSignal): Promise<{ blob: Blob; filename: string }> {
+      if (!this.executor?.downloadArchive) return Promise.reject(new Error('当前执行器不支持 zip 下载'));
+      return this.executor.downloadArchive(signal);
+    },
+    recordDownloadFailure(id: string, message: string): void { this.downloadFailures[id] = message; },
+    clearDownloadFailure(id: string): void { delete this.downloadFailures[id]; },
     async clear(): Promise<void> {
       this.unsubscribe?.();
       await this.executor?.dispose();
@@ -134,6 +172,8 @@ export const useWorkbenchStore = defineStore('workbench', {
       this.items = [];
       this.selectedItemId = undefined;
       this.rejected = [];
+      this.connection = 'idle';
+      this.downloadFailures = {};
     }
   }
 });

@@ -1,5 +1,6 @@
 import { LIMITS } from '@tinypng/shared';
 import type { FileAdapter, SourceFile } from '../files/contracts';
+import { archiveResults } from '../files/downloads';
 import { CompressionSession, type OutputWriter } from '../compression/session';
 import type { CompressionProvider, PipelineProvider } from '../compression/provider';
 import type { Executor } from '../workbench/executor';
@@ -22,10 +23,12 @@ export class LocalExecutor implements Executor {
   readonly mode = 'private-local' as const;
   readonly guard: NetworkGuard;
   private readonly session: CompressionSession;
+  private readonly adapter: FileAdapter;
   private readonly listeners = new Set<(items: readonly WorkbenchItem[]) => void>();
 
   constructor(options: LocalExecutorOptions) {
     this.guard = options.guard ?? new NetworkGuard();
+    this.adapter = options.adapter;
     this.session = new CompressionSession({
       adapter: options.adapter,
       provider: options.provider ?? new CanvasPipelineProvider(),
@@ -81,6 +84,23 @@ export class LocalExecutor implements Executor {
     this.listeners.add(listener);
     listener(this.session.tasks);
     return () => this.listeners.delete(listener);
+  }
+
+  async resultBlob(itemId: string): Promise<Blob | undefined> {
+    const item = this.session.tasks.find(i => i.id === itemId);
+    if (!item?.output) return undefined;
+    return new Blob([item.output.bytes.slice().buffer as ArrayBuffer], { type: item.output.mime });
+  }
+
+  async sourceBlob(itemId: string): Promise<Blob | undefined> {
+    const item = this.session.tasks.find(i => i.id === itemId);
+    if (item?.source.kind !== 'file') return undefined;
+    const bytes = await this.adapter.read(item.source.file);
+    return new Blob([bytes.slice().buffer as ArrayBuffer], { type: item.source.file.mime });
+  }
+
+  async downloadArchive(signal?: AbortSignal): Promise<{ blob: Blob; filename: string }> {
+    return { blob: await archiveResults(this.session.tasks, signal), filename: 'images-' + this.sessionId.slice(0, 8) + '.zip' };
   }
 
   async dispose(): Promise<void> {

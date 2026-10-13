@@ -21,6 +21,7 @@ pub fn run() {
             commands::copy_temp_files,
             commands::replace_original,
             commands::cleanup_temp_files,
+            commands::save_temp_file,
             token::token_get,
             token::token_set,
             token::token_clear

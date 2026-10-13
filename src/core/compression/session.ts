@@ -132,11 +132,16 @@ export class CompressionSession {
     const task = this.tasks.find(item => item.id === taskId);
     if (!task) return task;
     if (scope === 'outputs') {
-      if (!task.output || !task.tempFile || !task.outputs.some(o => o.status === 'failed')) return task;
+      if (!task.output || !task.outputs.some(o => o.status === 'failed')) return task;
       task.status = 'saving';
       task.error = undefined;
       this.emitUpdate();
-      await this.deliver(task, task.tempFile, o => o.status === 'failed');
+      try {
+        const temp = task.tempFile ?? await this.prepareOutput(task);
+        await this.deliver(task, temp, o => o.status === 'failed');
+      } catch (error) {
+        this.applyFailure(task, error);
+      }
       this.emitUpdate();
       return task;
     }
@@ -229,14 +234,30 @@ export class CompressionSession {
     this.throwIfCanceled(signal);
 
     this.setStatus(task, 'saving', 0.9);
-    const extension = extensionFromMime(output.mime, file.name);
-    const tempFile = await this.adapter.writeTemp(task.id, output.bytes, extension, output.mime);
+    // Provider 一成功就保留结果，磁盘写入失败后只重试保存，不能再次压缩。
+    task.output = output;
+    task.compressedSize = output.size;
+    const tempFile = await this.prepareOutput(task);
     this.throwIfCanceled(signal);
 
-    task.output = output;
-    task.tempFile = tempFile;
-    task.compressedSize = output.size;
     await this.deliver(task, tempFile, () => true);
+  }
+
+  private async prepareOutput(task: CompressionTask): Promise<TempFile> {
+    const result = task.output!;
+    const filename = task.source.kind === 'file' ? task.source.file.name : 'image';
+    try {
+      const temp = await this.adapter.writeTemp(task.id, result.bytes, extensionFromMime(result.mime, filename), result.mime);
+      task.tempFile = temp;
+      return temp;
+    } catch (error) {
+      for (const output of task.outputs) {
+        if (output.status === 'completed') continue;
+        output.status = 'failed';
+        output.error = { code: 'OUTPUT_FAILED', message: error instanceof Error ? error.message : '保存结果失败' };
+      }
+      throw new CompressionProviderError('OUTPUT_FAILED', '处理成功，但保存输出失败', error);
+    }
   }
 
   /** 逐个目的地交付；全部失败 → failed，否则 completed（派生状态可能是 partial） */

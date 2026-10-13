@@ -123,6 +123,463 @@ describe('SseParser', () => {
 });
 
 describe('CloudExecutor（D4）', () => {
+  it('dispose 取消重连校正 GET，忽略取消的迟到响应不能改写任务状态', async () => {
+    const server = new FakeServer();
+    const originalFetch = server.fetch;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let recoverySignal: AbortSignal | null | undefined;
+    let entered = false;
+    const api = new ApiClient({ baseUrl: 'http://srv', getToken: async () => 't0k', upload: server.upload, fetch: async (url, init) => {
+      if (url.endsWith('/batches/b1')) { entered = true; recoverySignal = init?.signal; await gate; }
+      return originalFetch(url, init);
+    } });
+    const exec = new CloudExecutor({ api, adapter, pipeline: { providerId: 'official-tinify', operations: [{ type: 'compress' }], destinations: [{ type: 'download' }] }, sse: { idleTimeoutMs: 500, backoffMs: () => 1 } });
+    exec.addFiles([file('a')]);
+    await exec.start();
+    await until(() => server.streams.length === 1);
+    server.streams[0]!.close();
+    await until(() => entered);
+    const before = exec.snapshot[0]!.status;
+    server.silently('j1', 'completed');
+    const dispose = exec.dispose();
+    try {
+      expect(await Promise.race([dispose.then(() => true), tick(50).then(() => false)])).toBe(true);
+      expect(recoverySignal?.aborted).toBe(true);
+    } finally {
+      release();
+      await dispose;
+    }
+    await tick();
+    expect(exec.snapshot[0]?.status).toBe(before);
+  });
+
+  it.each(['processing', 'completed'] as const)('retry已被接受但响应丢失时GET恢复%s，不能回滚成canceled或二次收费', async status => {
+    const server = new FakeServer();
+    const originalFetch = server.fetch;
+    let retries = 0;
+    const api = new ApiClient({ baseUrl: 'http://srv', getToken: async () => 't0k', upload: server.upload, fetch: async (url, init) => {
+      const response = await originalFetch(url, init);
+      if (url.endsWith('/retry')) { retries++; server.silently('j1', status); throw new Error('retry response lost'); }
+      return response;
+    } });
+    const exec = new CloudExecutor({ api, adapter, pipeline: { providerId: 'official-tinify', operations: [{ type: 'compress' }], destinations: [{ type: 'download' }] } });
+    exec.addFiles([file('a')]);
+    await exec.start();
+    server.silently('j1', 'canceled');
+    await exec.refetch();
+    await exec.retry(exec.snapshot[0]!.id, 'all');
+    expect(exec.snapshot[0]?.status).toBe(status);
+    expect(retries).toBe(1);
+    await exec.dispose();
+  });
+
+  it('retry响应和GET都断网时记住未确认动作，恢复后只GET，不盲重发Provider retry', async () => {
+    const server = new FakeServer();
+    const originalFetch = server.fetch;
+    let offline = false;
+    let retries = 0;
+    const api = new ApiClient({ baseUrl: 'http://srv', getToken: async () => 't0k', upload: server.upload, fetch: async (url, init) => {
+      if (url.endsWith('/jobs/j1') && offline) throw new Error('offline');
+      const response = await originalFetch(url, init);
+      if (url.endsWith('/retry')) { retries++; offline = true; server.silently('j1', 'processing'); throw new Error('response lost'); }
+      return response;
+    } });
+    const exec = new CloudExecutor({ api, adapter, pipeline: { providerId: 'official-tinify', operations: [{ type: 'compress' }], destinations: [{ type: 'download' }] } });
+    exec.addFiles([file('a')]);
+    await exec.start();
+    server.silently('j1', 'canceled');
+    await exec.refetch();
+    await expect(exec.retry(exec.snapshot[0]!.id, 'all')).rejects.toThrow('无法确认');
+    expect(exec.snapshot[0]?.status).toBe('canceled');
+    offline = false;
+    await exec.retry(exec.snapshot[0]!.id, 'all');
+    expect(exec.snapshot[0]?.status).toBe('processing');
+    expect(retries).toBe(1);
+    await exec.dispose();
+  });
+
+  it.each([true, false])('retry未确认期间processing SSE早到=%s时，真实状态可以离开旧canceled', async early => {
+    const server = new FakeServer();
+    const originalFetch = server.fetch;
+    let offline = false;
+    const api = new ApiClient({ baseUrl: 'http://srv', getToken: async () => 't0k', upload: server.upload, fetch: async (url, init) => {
+      if (offline && url.endsWith('/jobs/j1')) throw new Error('offline');
+      const response = await originalFetch(url, init);
+      if (url.endsWith('/retry')) {
+        offline = true;
+        if (early) { server.push({ type: 'job', jobId: 'j1', status: 'processing', progress: 0.4 }); await tick(5); }
+        throw new Error('retry response lost');
+      }
+      return response;
+    } });
+    const exec = new CloudExecutor({ api, adapter, pipeline: { providerId: 'official-tinify', operations: [{ type: 'compress' }], destinations: [{ type: 'download' }] } });
+    exec.addFiles([file('a')]);
+    await exec.start();
+    server.silently('j1', 'canceled');
+    await exec.refetch();
+    await expect(exec.retry(exec.snapshot[0]!.id, 'all')).rejects.toThrow('无法确认');
+    if (!early) server.push({ type: 'job', jobId: 'j1', status: 'processing', progress: 0.4 });
+    await tick(5);
+    expect(exec.snapshot[0]?.status).toBe('processing');
+    expect(exec.snapshot[0]?.progress).toBe(0.4);
+    await exec.dispose();
+  });
+  it('adapter.read期间取消，读取完成后不上传或开始Provider处理', async () => {
+    const server = new FakeServer();
+    let readStarted = false;
+    let release!: (bytes: Uint8Array) => void;
+    const read = new Promise<Uint8Array>(resolve => { release = resolve; });
+    const exec = new CloudExecutor({ api: new ApiClient({ baseUrl: 'http://srv', getToken: async () => 't0k', upload: server.upload, fetch: server.fetch }), adapter: { ...adapter, read: async () => { readStarted = true; return read; } }, pipeline: { providerId: 'official-tinify', operations: [{ type: 'compress' }], destinations: [{ type: 'download' }] } });
+    exec.addFiles([file('a')]);
+    const run = exec.start();
+    await until(() => readStarted);
+    await exec.cancel(exec.snapshot[0]!.id);
+    release(new Uint8Array(4));
+    await run;
+    expect(server.requests.filter(request => request.path.includes('(multipart)'))).toHaveLength(0);
+    expect(server.requests.some(request => request.path.endsWith('/start'))).toBe(false);
+    expect(exec.snapshot[0]?.status).toBe('canceled');
+    await exec.dispose();
+  });
+
+  it.each(['file', 'url'] as const)('已取消%s晚返回job时，补偿cancel完成之前不能/start收费', async kind => {
+    const server = new FakeServer();
+    const originalFetch = server.fetch;
+    let releaseUpload!: () => void;
+    let releaseCancel!: () => void;
+    let uploadStarted = false;
+    let cancelStarted = false;
+    const uploadGate = new Promise<void>(resolve => { releaseUpload = resolve; });
+    const cancelGate = new Promise<void>(resolve => { releaseCancel = resolve; });
+    const api = new ApiClient({ baseUrl: 'http://srv', getToken: async () => 't0k', upload: async request => {
+      if (kind === 'file' && request.body.get('files') instanceof File && (request.body.get('files') as File).name === 'a.png') { uploadStarted = true; await uploadGate; }
+      return server.upload(request);
+    }, fetch: async (url, init) => {
+      if (kind === 'url' && url.endsWith('/items')) { uploadStarted = true; await uploadGate; }
+      if (url.endsWith('/cancel')) {
+        cancelStarted = true;
+        await cancelGate;
+        const jobId = url.split('/').at(-2)!;
+        server.silently(jobId, 'canceled');
+      }
+      return originalFetch(url, init);
+    } });
+    const exec = new CloudExecutor({ api, adapter, pipeline: { providerId: 'official-tinify', operations: [{ type: 'compress' }], destinations: [{ type: 'download' }] } });
+    if (kind === 'file') exec.addFiles([file('a')]); else exec.addUrls(['https://image.example/a.png']);
+    exec.addFiles([file('other')]);
+    const run = exec.start();
+    await until(() => uploadStarted);
+    await exec.cancel(exec.snapshot[0]!.id);
+    releaseUpload();
+    await until(() => cancelStarted);
+    try {
+      await tick(5);
+      expect(server.requests.some(request => request.path.endsWith('/start'))).toBe(false);
+    } finally { releaseCancel(); await run; await exec.dispose(); }
+    expect(exec.snapshot[0]?.status).toBe('canceled');
+    expect(exec.snapshot[1]?.status).toBe('queued');
+    expect([...server.jobs.values()].filter(job => job.status === 'queued')).toHaveLength(1);
+  });
+
+  it('补偿cancel持续失败时/start计费请求为0，恢复后再次Start只启动未取消图片', async () => {
+    const server = new FakeServer();
+    const originalFetch = server.fetch;
+    let failCancel = true;
+    let started = false;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const api = new ApiClient({ baseUrl: 'http://srv', getToken: async () => 't0k', upload: async request => {
+      if ((request.body.get('files') as File).name === 'a.png') { started = true; await gate; }
+      return server.upload(request);
+    }, fetch: async (url, init) => {
+      if (url.endsWith('/cancel')) {
+        if (failCancel) return json(503, { code: 'PROVIDER_UNAVAILABLE', message: 'offline', requestId: 'r', retryable: true });
+        server.silently(url.split('/').at(-2)!, 'canceled');
+      }
+      return originalFetch(url, init);
+    } });
+    const exec = new CloudExecutor({ api, adapter, pipeline: { providerId: 'official-tinify', operations: [{ type: 'compress' }], destinations: [{ type: 'download' }] } });
+    exec.addFiles([file('a'), file('other')]);
+    const run = exec.start();
+    await until(() => started);
+    await exec.cancel(exec.snapshot[0]!.id);
+    release();
+    await run;
+    expect(server.requests.some(request => request.path.endsWith('/start'))).toBe(false);
+    expect(exec.snapshot.map(item => item.status)).toEqual(['canceled', 'draft']);
+    failCancel = false;
+    await exec.start();
+    expect(exec.snapshot.map(item => item.status)).toEqual(['canceled', 'queued']);
+    expect([...server.jobs.values()].filter(job => job.status === 'queued')).toHaveLength(1);
+    expect(server.jobs.size).toBe(2);
+    await exec.dispose();
+  });
+
+  it('XHR取消未返回jobId但Server已留草稿时，GET确认并取消孤立草稿后再/start', async () => {
+    const server = new FakeServer();
+    const originalFetch = server.fetch;
+    let started = false;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const api = new ApiClient({ baseUrl: 'http://srv', getToken: async () => 't0k', upload: async request => {
+      if ((request.body.get('files') as File).name === 'a.png') {
+        started = true;
+        await gate;
+        await server.upload(request);
+        throw new DOMException('aborted', 'AbortError');
+      }
+      return server.upload(request);
+    }, fetch: async (url, init) => {
+      if (url.endsWith('/cancel')) server.silently(url.split('/').at(-2)!, 'canceled');
+      return originalFetch(url, init);
+    } });
+    const exec = new CloudExecutor({ api, adapter, pipeline: { providerId: 'official-tinify', operations: [{ type: 'compress' }], destinations: [{ type: 'download' }] } });
+    exec.addFiles([file('a'), file('other')]);
+    const run = exec.start();
+    await until(() => started);
+    await exec.cancel(exec.snapshot[0]!.id);
+    release();
+    await run;
+    const get = server.requests.findIndex(request => request.path === '/batches/b1' && request.method === 'GET');
+    const cancel = server.requests.findIndex(request => request.path.endsWith('/cancel'));
+    const start = server.requests.findIndex(request => request.path.endsWith('/start'));
+    expect(get).toBeGreaterThan(-1);
+    expect(cancel).toBeGreaterThan(get);
+    expect(start).toBeGreaterThan(cancel);
+    expect([...server.jobs.values()].filter(job => job.status === 'queued')).toHaveLength(1);
+    await exec.dispose();
+  });
+  it('/start 未到达Server时按远端draft恢复，再次开始复用已上传图片', async () => {
+    const server = new FakeServer();
+    const originalFetch = server.fetch;
+    let starts = 0;
+    const api = new ApiClient({ baseUrl: 'http://srv', getToken: async () => 't0k', upload: server.upload, fetch: async (url, init) => {
+      if (url.endsWith('/start') && ++starts === 1) throw new Error('start offline');
+      return originalFetch(url, init);
+    } });
+    const exec = new CloudExecutor({ api, adapter, pipeline: { providerId: 'official-tinify', operations: [{ type: 'compress' }], destinations: [{ type: 'download' }] } });
+    exec.addFiles([file('a')]);
+    await exec.start();
+    expect(exec.snapshot[0]?.status).toBe('draft');
+    expect(exec.snapshot[0]?.error?.message).toContain('请再次点击开始处理');
+    expect(server.requests.some(request => request.path === '/batches/b1' && request.method === 'GET')).toBe(true);
+    await exec.start();
+    expect(starts).toBe(2);
+    expect(server.jobs.size).toBe(1);
+    expect(server.requests.filter(request => request.path.includes('(multipart)'))).toHaveLength(1);
+    expect(server.requests.some(request => request.path.endsWith('/retry'))).toBe(false);
+    expect(exec.snapshot[0]?.status).toBe('queued');
+    await exec.dispose();
+  });
+
+  it.each(['processing', 'completed'] as const)('/start 响应丢失但Server已%s时校正实态，不重新启动或上传', async status => {
+    const server = new FakeServer();
+    const originalFetch = server.fetch;
+    const api = new ApiClient({ baseUrl: 'http://srv', getToken: async () => 't0k', upload: server.upload, fetch: async (url, init) => {
+      if (url.endsWith('/start')) {
+        await originalFetch(url, init);
+        server.silently('j1', status, status === 'completed' ? [{ outputId: 'j1-o', destination: { type: 'download' }, status: 'completed' }] : undefined);
+        throw new Error('response lost');
+      }
+      return originalFetch(url, init);
+    } });
+    const exec = new CloudExecutor({ api, adapter, pipeline: { providerId: 'official-tinify', operations: [{ type: 'compress' }], destinations: [{ type: 'download' }] } });
+    exec.addFiles([file('a')]);
+    await exec.start();
+    expect(exec.snapshot[0]?.status).toBe(status);
+    if (status === 'completed') expect(exec.snapshot[0]?.output?.size).toBe(2);
+    await exec.start();
+    expect(server.requests.filter(request => request.path.endsWith('/start'))).toHaveLength(1);
+    expect(server.jobs.size).toBe(1);
+    await exec.dispose();
+  });
+
+  it.each(['completed', 'failed'] as const)('取消与Server %s竞争且无额外SSE时，cancel响应后按Job校正终态', async status => {
+    const server = new FakeServer();
+    const originalFetch = server.fetch;
+    const api = new ApiClient({ baseUrl: 'http://srv', getToken: async () => 't0k', upload: server.upload, fetch: async (url, init) => {
+      if (url.endsWith('/cancel')) server.silently('j1', status);
+      return originalFetch(url, init);
+    } });
+    const exec = new CloudExecutor({ api, adapter, pipeline: { providerId: 'official-tinify', operations: [{ type: 'compress' }], destinations: [{ type: 'download' }] } });
+    exec.addFiles([file('a')]);
+    await exec.start();
+    await exec.cancel(exec.snapshot[0]!.id);
+    expect(exec.snapshot[0]?.status).toBe(status);
+    expect(server.requests.some(request => request.path === '/jobs/j1' && request.method === 'GET')).toBe(true);
+    await exec.dispose();
+  });
+
+  it('URL添加期间取消中断请求，晚失败不能把canceled改成failed', async () => {
+    const server = new FakeServer();
+    const originalFetch = server.fetch;
+    let started = false;
+    let requestSignal: AbortSignal | undefined;
+    let fail!: (reason: Error) => void;
+    const api = new ApiClient({ baseUrl: 'http://srv', getToken: async () => 't0k', upload: server.upload, fetch: async (url, init) => {
+      if (url.endsWith('/items') && init?.method === 'POST') {
+        started = true;
+        requestSignal = init.signal ?? undefined;
+        return new Promise<Response>((_resolve, reject) => { fail = reject; });
+      }
+      return originalFetch(url, init);
+    } });
+    const exec = new CloudExecutor({ api, adapter, pipeline: { providerId: 'official-tinify', operations: [{ type: 'compress' }], destinations: [{ type: 'download' }] } });
+    exec.addUrls(['https://images.example/a.png']);
+    const run = exec.start();
+    await until(() => started);
+    await exec.cancel(exec.snapshot[0]!.id);
+    expect(requestSignal?.aborted).toBe(true);
+    fail(new Error('late network failure'));
+    await run;
+    expect(exec.snapshot[0]?.status).toBe('canceled');
+    expect(exec.snapshot[0]?.error).toBeUndefined();
+    expect(server.requests.some(request => request.path.endsWith('/start'))).toBe(false);
+    await exec.dispose();
+  });
+
+  it('/start与校正GET都断网后，恢复连接的重试先拉批次，不误走Provider retry', async () => {
+    const server = new FakeServer();
+    const originalFetch = server.fetch;
+    let offline = true;
+    const api = new ApiClient({ baseUrl: 'http://srv', getToken: async () => 't0k', upload: server.upload, fetch: async (url, init) => {
+      if (offline && (url.endsWith('/start') || (url.endsWith('/batches/b1') && (!init?.method || init.method === 'GET')))) throw new Error('offline');
+      return originalFetch(url, init);
+    } });
+    const exec = new CloudExecutor({ api, adapter, pipeline: { providerId: 'official-tinify', operations: [{ type: 'compress' }], destinations: [{ type: 'download' }] } });
+    exec.addFiles([file('a')]);
+    await exec.start();
+    expect(exec.snapshot[0]?.status).toBe('failed');
+    expect(exec.snapshot[0]?.error?.message).toContain('无法确认');
+    offline = false;
+    await exec.retry(exec.snapshot[0]!.id, 'all');
+    expect(exec.snapshot[0]?.status).toBe('draft');
+    await exec.start();
+    expect(exec.snapshot[0]?.status).toBe('queued');
+    expect(server.jobs.size).toBe(1);
+    expect(server.requests.some(request => request.path.endsWith('/retry'))).toBe(false);
+    await exec.dispose();
+  });
+
+  it('多个URL共享5个上传并发，取消一张不影响其他URL', async () => {
+    const server = new FakeServer();
+    const originalFetch = server.fetch;
+    let active = 0;
+    let peak = 0;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const api = new ApiClient({ baseUrl: 'http://srv', getToken: async () => 't0k', upload: server.upload, fetch: async (url, init) => {
+      if (url.endsWith('/items') && init?.method === 'POST') {
+        active++;
+        peak = Math.max(peak, active);
+        await gate;
+        active--;
+        if (init.signal?.aborted) throw new DOMException('aborted', 'AbortError');
+      }
+      return originalFetch(url, init);
+    } });
+    const exec = new CloudExecutor({ api, adapter, pipeline: { providerId: 'official-tinify', operations: [{ type: 'compress' }], destinations: [{ type: 'download' }] } });
+    exec.addUrls(Array.from({ length: 9 }, (_, index) => 'https://images.example/' + index + '.png'));
+    const run = exec.start();
+    try {
+      await until(() => active > 0);
+      await tick(3);
+      expect(peak).toBe(5);
+      await exec.cancel(exec.snapshot[0]!.id);
+    } finally {
+      release();
+      await run;
+      await exec.dispose();
+    }
+    expect(exec.snapshot[0]?.status).toBe('canceled');
+    expect(exec.snapshot.slice(1).every(item => item.status === 'queued')).toBe(true);
+    expect(server.jobs.size).toBe(8);
+  });
+
+  it('连续开始不重复创建批次，开始期间新加的图片保持草稿', async () => {
+    const { server, exec } = setup();
+    exec.addFiles([file('a')]);
+    const first = exec.start();
+    exec.addFiles([file('b')]);
+    const second = exec.start();
+    await Promise.all([first, second]);
+    expect(server.requests.filter(r => r.path === '/batches')).toHaveLength(1);
+    expect(server.jobs.size).toBe(2);
+    expect(exec.snapshot.map(i => i.status)).toEqual(['queued', 'queued']);
+    await exec.dispose();
+  });
+
+  it('云端终态不被迟到的 processing 事件覆盖', async () => {
+    const { server, exec } = setup();
+    exec.addFiles([file('a')]);
+    await exec.start();
+    await until(() => server.streams.length === 1);
+    server.push({ type: 'job', jobId: 'j1', status: 'completed' });
+    await until(() => exec.snapshot[0]?.status === 'completed');
+    server.push({ type: 'job', jobId: 'j1', status: 'processing', progress: 0.2 });
+    await tick(10);
+    expect(exec.snapshot[0]?.status).toBe('completed');
+    expect(exec.snapshot[0]?.progress).toBe(1);
+    await exec.dispose();
+  });
+
+  it('本次上传失败后再次点击开始可以重试上传，不重复处理成功任务', async () => {
+    const server = new FakeServer();
+    let uploads = 0;
+    const exec = new CloudExecutor({ api: new ApiClient({ baseUrl: 'http://srv', getToken: async () => 't0k', fetch: server.fetch, upload: async request => {
+      if (++uploads === 1) throw new Error('upload offline');
+      return server.upload(request);
+    } }), adapter, pipeline: { providerId: 'official-tinify', operations: [{ type: 'compress' }], destinations: [{ type: 'download' }] } });
+    exec.addFiles([file('a')]);
+    await exec.start();
+    expect(exec.snapshot[0]?.status).toBe('failed');
+    await exec.retry(exec.snapshot[0]!.id, 'all');
+    expect(exec.snapshot[0]?.status).toBe('draft');
+    await exec.start();
+    expect(server.jobs.size).toBe(1);
+    expect(exec.snapshot[0]?.status).toBe('queued');
+    await exec.dispose();
+  });
+  it('重试的完成事件先于HTTP响应抵达时，不回退为queued', async () => {
+    const server = new FakeServer();
+    const originalFetch = server.fetch;
+    const api = new ApiClient({ baseUrl: 'http://srv', getToken: async () => 't0k', upload: server.upload, fetch: async (url, init) => {
+      const response = await originalFetch(url, init);
+      if (url.endsWith('/retry')) {
+        server.push({ type: 'job', jobId: 'j1', status: 'completed', outputs: [{ outputId: 'j1-o', destination: { type: 'download' }, status: 'completed' }] });
+        await tick(10);
+      }
+      return response;
+    } });
+    const exec = new CloudExecutor({ api, adapter, pipeline: { providerId: 'official-tinify', operations: [{ type: 'compress' }], destinations: [{ type: 'download' }] } });
+    exec.addFiles([file('a')]);
+    await exec.start();
+    await until(() => server.streams.length === 1);
+    server.push({ type: 'job', jobId: 'j1', status: 'failed', error: { code: 'PROVIDER_ERROR', message: 'retry', retryable: true, requestId: 'r' } });
+    await until(() => exec.snapshot[0]?.status === 'failed');
+    await exec.retry(exec.snapshot[0]!.id, 'all');
+    expect(exec.snapshot[0]?.status).toBe('completed');
+    await exec.dispose();
+  });
+
+  it('取消请求失败向调用者报告错误，任务保持可取消，不能永久显示取消中', async () => {
+    const server = new FakeServer();
+    const originalFetch = server.fetch;
+    const api = new ApiClient({ baseUrl: 'http://srv', getToken: async () => 't0k', upload: server.upload, fetch: async (url, init) => {
+      if (url.endsWith('/cancel')) return json(503, { code: 'PROVIDER_UNAVAILABLE', message: 'network offline', retryable: true, requestId: 'r' });
+      return originalFetch(url, init);
+    } });
+    const exec = new CloudExecutor({ api, adapter, pipeline: { providerId: 'official-tinify', operations: [{ type: 'compress' }], destinations: [{ type: 'download' }] } });
+    exec.addFiles([file('a')]);
+    await exec.start();
+    const cancel = exec.cancel(exec.snapshot[0]!.id);
+    expect(cancel).toBeInstanceOf(Promise);
+    if (cancel) await expect(cancel).rejects.toThrow('network offline');
+    expect(exec.snapshot[0]?.status).toBe('queued');
+    await exec.dispose();
+  });
+
   it('加图不发任何请求；点开始才建批次 → 上传（带进度）→ /start；全程带 Bearer', async () => {
     const { server, exec } = setup();
     const progress: number[] = [];

@@ -51,7 +51,9 @@ export class ApiClient {
   }
 
   async raw(path: string, init: RequestInit = {}): Promise<Response> {
+    throwIfAborted(init.signal ?? undefined);
     const headers = await this.headers((init.headers as Record<string, string>) ?? {});
+    throwIfAborted(init.signal ?? undefined);
     const res = await this.fetchImpl(this.url(path), { ...init, headers });
     if (!res.ok) throw await toError(res.status, await res.text());
     return res;
@@ -70,24 +72,27 @@ export class ApiClient {
   providers(): Promise<ImageProviderManifest[]> { return this.json('/providers'); }
   usage(id: ProviderId): Promise<ProviderUsageResponse> { return this.json('/providers/' + encodeURIComponent(id) + '/usage'); }
   createBatch(req: CreateBatchRequest): Promise<{ batchId: string; status: 'draft' }> { return this.json('/batches', { method: 'POST' }, req); }
-  getBatch(batchId: string): Promise<Batch> { return this.json('/batches/' + batchId); }
+  getBatch(batchId: string, signal?: AbortSignal): Promise<Batch> { return this.json('/batches/' + batchId, { signal }); }
   getJob(jobId: string): Promise<Job> { return this.json('/jobs/' + jobId); }
-  addUrls(batchId: string, urls: readonly string[]): Promise<AddItemsResponse> { return this.json('/batches/' + batchId + '/items', { method: 'POST' }, { urls }); }
+  addUrls(batchId: string, urls: readonly string[], signal?: AbortSignal): Promise<AddItemsResponse> { return this.json('/batches/' + batchId + '/items', { method: 'POST', signal }, { urls }); }
   async deleteItem(batchId: string, jobId: string): Promise<void> { await this.raw('/batches/' + batchId + '/items/' + jobId, { method: 'DELETE' }); }
   async start(batchId: string): Promise<void> { await this.raw('/batches/' + batchId + '/start', { method: 'POST' }); }
   async cancelJob(jobId: string): Promise<void> { await this.raw('/jobs/' + jobId + '/cancel', { method: 'POST' }); }
   async cancelBatch(batchId: string): Promise<void> { await this.raw('/batches/' + batchId + '/cancel', { method: 'POST' }); }
   async retry(jobId: string, scope: 'all' | 'outputs'): Promise<void> { await this.json('/jobs/' + jobId + '/retry', { method: 'POST' }, { scope }); }
   async result(jobId: string): Promise<Blob> { return (await this.raw('/jobs/' + jobId + '/result')).blob(); }
-  async archive(batchId: string): Promise<Blob> { return (await this.raw('/batches/' + batchId + '/archive')).blob(); }
+  async archive(batchId: string, signal?: AbortSignal): Promise<Blob> { return (await this.raw('/batches/' + batchId + '/archive', { signal })).blob(); }
 
   /** multipart 上传单个文件，带上传进度 */
   async uploadFile(batchId: string, file: Blob, filename: string, onProgress?: (ratio: number) => void, signal?: AbortSignal): Promise<AddItemsResponse> {
+    throwIfAborted(signal);
     const body = new FormData();
     body.append('files', file, filename);
+    const headers = await this.headers();
+    throwIfAborted(signal);
     const res = await this.uploader({
       url: this.url('/batches/' + batchId + '/items'),
-      headers: await this.headers(),
+      headers,
       body,
       signal,
       onProgress: (loaded, total) => onProgress?.(total > 0 ? loaded / total : 0)
@@ -115,13 +120,23 @@ async function toError(status: number, text: string): Promise<ApiRequestError> {
 }
 
 export const xhrUpload: Uploader = req => new Promise((resolve, reject) => {
+  if (req.signal?.aborted) { reject(new DOMException('上传已取消', 'AbortError')); return; }
   const xhr = new XMLHttpRequest();
+  let settled = false;
+  const cleanup = () => req.signal?.removeEventListener('abort', onAbort);
+  const fail = (error: Error) => { if (settled) return; settled = true; cleanup(); reject(error); };
+  const onAbort = () => { xhr.abort(); fail(new DOMException('上传已取消', 'AbortError')); };
   xhr.open('POST', req.url);
   for (const [k, v] of Object.entries(req.headers)) xhr.setRequestHeader(k, v);
   xhr.upload.onprogress = e => req.onProgress?.(e.loaded, e.lengthComputable ? e.total : 0);
-  xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText });
-  xhr.onerror = () => reject(new Error('上传失败，网络错误'));
-  xhr.onabort = () => reject(new DOMException('上传已取消', 'AbortError'));
-  req.signal?.addEventListener('abort', () => xhr.abort(), { once: true });
+  xhr.onload = () => { if (settled) return; settled = true; cleanup(); resolve({ status: xhr.status, body: xhr.responseText }); };
+  xhr.onerror = () => fail(new Error('上传失败，网络错误'));
+  xhr.onabort = () => fail(new DOMException('上传已取消', 'AbortError'));
+  req.signal?.addEventListener('abort', onAbort, { once: true });
+  if (req.signal?.aborted) { onAbort(); return; }
   xhr.send(req.body);
 });
+
+export function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new DOMException('请求已取消', 'AbortError');
+}

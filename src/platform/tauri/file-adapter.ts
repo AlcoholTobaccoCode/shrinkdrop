@@ -61,6 +61,14 @@ export function createTauriFileAdapter(options: TauriFileAdapterOptions = {}): F
       });
     },
 
+    async saveDownload(temp: TempFile, suggestedName: string): Promise<boolean> {
+      const result = await invoke<{ saved: boolean }>('save_temp_file', {
+        tempFileId: handleId(temp),
+        suggestedName
+      });
+      return result.saved;
+    },
+
     async replaceOriginal(temp: TempFile, source: SourceFile): Promise<void> {
       await invoke('replace_original', {
         tempFileId: handleId(temp),

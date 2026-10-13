@@ -77,6 +77,7 @@ export class TaskQueue {
     }
 
     try {
+      if (controller.signal.aborted) throw controller.signal.reason ?? new Error('任务已取消');
       const value = await item.run({ signal: controller.signal });
       item.resolve(value);
     } catch (error) {

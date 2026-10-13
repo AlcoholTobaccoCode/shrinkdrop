@@ -4,7 +4,9 @@ import vue from '@vitejs/plugin-vue';
 export default defineConfig({
   plugins: [vue()],
   server: {
-    port: 5170
+    host: '127.0.0.1',
+    port: 5170,
+    strictPort: true
   },
   build: {
     target: 'es2020'

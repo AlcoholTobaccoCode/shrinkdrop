@@ -151,6 +151,9 @@ pub fn write_temp<R: tauri::Runtime>(
     if bytes.is_empty() {
         return Err("压缩结果为空，无法写入临时文件".to_string());
     }
+    if task_id.is_empty() || task_id.len() > 160 || !task_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err("临时文件任务标识无效".to_string());
+    }
     let extension = clean_extension(extension)?;
     let source = state
         .sources
@@ -160,14 +163,9 @@ pub fn write_temp<R: tauri::Runtime>(
         .find(|(source_id, _)| task_id.ends_with(&format!("-{source_id}")))
         .map(|(_, source)| source.clone());
 
-    let directory = source
-        .as_ref()
-        .and_then(|record| record.path.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| {
-            app.path()
-                .temp_dir()
-                .unwrap_or_else(|_| std::env::temp_dir())
-        });
+    // 第一阶段只下载副本，临时结果写进应用缓存，兼容原图目录只读的场景。
+    let directory = app.path().temp_dir().unwrap_or_else(|_| std::env::temp_dir())
+        .join(format!("tinypng-workbench-{}", std::process::id()));
     fs::create_dir_all(&directory).map_err(|error| format!("创建临时文件目录失败: {error}"))?;
 
     let temp_id = state.new_id("temp");
@@ -358,4 +356,126 @@ fn mime_for_path(path: &Path) -> String {
         _ => "application/octet-stream",
     }
     .to_string()
+}
+
+//#region 保存下载结果
+pub fn save_temp_to_path(state: &FileState, temp_id: &str, destination: &Path) -> Result<(), String> {
+    let record = state.temps.lock().map_err(|_| "文件状态锁已损坏".to_string())?
+        .get(temp_id).cloned().ok_or_else(|| "处理结果已失效，请重新处理".to_string())?;
+    let parent = destination.parent().ok_or_else(|| "保存目录无效".to_string())?;
+    let name = destination.file_name().ok_or_else(|| "保存文件名无效".to_string())?;
+    let resolved = if destination.exists() {
+        fs::canonicalize(destination)
+    } else {
+        fs::canonicalize(parent).map(|directory| directory.join(name))
+    }.map_err(|error| format!("无法访问保存位置: {error}"))?;
+
+    // 下载仅保存副本，第一阶段不允许通过保存对话框覆盖已导入的原图。
+    let sources = state.sources.lock().map_err(|_| "文件状态锁已损坏".to_string())?;
+    if sources.values().any(|source| fs::canonicalize(&source.path).ok().as_ref() == Some(&resolved)) {
+        return Err("请换一个文件名或目录，下载结果不能覆盖原图".to_string());
+    }
+    drop(sources);
+    if fs::canonicalize(&record.path).ok().as_ref() == Some(&resolved) {
+        return Err("保存位置不能是处理结果的临时文件".to_string());
+    }
+
+    let save_id = state.new_id("save");
+    let scratch = parent.join(format!(".tinypng-{}-{save_id}.tmp", std::process::id()));
+    let mut output = OpenOptions::new().create_new(true).write(true).open(&scratch)
+        .map_err(|error| format!("无法创建下载文件: {error}"))?;
+    let result = (|| {
+        let mut input = File::open(&record.path).map_err(|error| format!("无法读取处理结果: {error}"))?;
+        std::io::copy(&mut input, &mut output).map_err(|error| format!("保存下载失败: {error}"))?;
+        output.flush().and_then(|_| output.sync_all()).map_err(|error| format!("持久化下载失败: {error}"))?;
+        drop(output);
+        #[cfg(not(windows))]
+        fs::rename(&scratch, destination).map_err(|error| format!("完成下载保存失败: {error}"))?;
+        #[cfg(windows)] {
+            let backup = parent.join(format!(".tinypng-{}-{save_id}.backup", std::process::id()));
+            if backup.exists() { return Err("保存备份文件已存在，请重试".to_string()); }
+            let existed = destination.exists();
+            if existed { fs::rename(destination, &backup).map_err(|error| format!("准备保存失败: {error}"))?; }
+            if let Err(error) = fs::rename(&scratch, destination) {
+                if existed { let _ = fs::rename(&backup, destination); }
+                return Err(format!("完成下载保存失败: {error}"));
+            }
+            if existed { let _ = fs::remove_file(&backup); }
+        }
+        Ok(())
+    })();
+    if result.is_err() { let _ = fs::remove_file(&scratch); }
+    result
+}
+//#endregion
+
+#[cfg(test)]
+mod download_tests {
+    use super::*;
+
+    struct Fixture(PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            let path = std::env::temp_dir().join(format!("tinypng-save-test-{}-{stamp}", std::process::id()));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+
+        fn register_result(&self, state: &FileState) -> PathBuf {
+            let path = self.0.join("result.tmp");
+            fs::write(&path, b"processed-image").unwrap();
+            state.temps.lock().unwrap().insert("temp-result".into(), TempRecord {
+                path: path.clone(), session_id: "test".into(),
+                metadata: FileDescriptor {
+                    id: "temp-result".into(), name: "image.webp".into(), size: 15,
+                    mime: "image/webp".into(), relative_path: "image.webp".into(),
+                    last_modified: None, handle: Some("temp-result".into()),
+                },
+            });
+            path
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+    }
+
+    #[test]
+    fn saves_registered_result_and_keeps_it_available_for_retry() {
+        let fixture = Fixture::new();
+        let state = FileState::default();
+        let result = fixture.register_result(&state);
+        let output = fixture.0.join("download.webp");
+        save_temp_to_path(&state, "temp-result", &output).unwrap();
+        assert_eq!(fs::read(&output).unwrap(), b"processed-image");
+        assert_eq!(fs::read(&result).unwrap(), b"processed-image");
+    }
+
+    #[test]
+    fn unknown_result_cannot_write_a_file() {
+        let fixture = Fixture::new();
+        let output = fixture.0.join("download.webp");
+        assert!(save_temp_to_path(&FileState::default(), "missing", &output).is_err());
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn downloaded_result_cannot_overwrite_an_imported_original() {
+        let fixture = Fixture::new();
+        let state = FileState::default();
+        fixture.register_result(&state);
+        let original = fixture.0.join("original.png");
+        fs::write(&original, b"original-image").unwrap();
+        collect_files(&state, &original, false).unwrap();
+        assert!(save_temp_to_path(&state, "temp-result", &original).is_err());
+        assert_eq!(fs::read(&original).unwrap(), b"original-image");
+        #[cfg(unix)] {
+            let alias = fixture.0.join("alias.png");
+            std::os::unix::fs::symlink(&original, &alias).unwrap();
+            assert!(save_temp_to_path(&state, "temp-result", &alias).is_err());
+            assert_eq!(fs::read(&original).unwrap(), b"original-image");
+        }
+    }
 }

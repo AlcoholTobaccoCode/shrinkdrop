@@ -1,6 +1,4 @@
 import type { FileAdapter, SourceFile, TempFile } from '../../core/files/contracts';
-import { validateInputSize } from '../../core/compression/options';
-import { defaultCompressionOptions } from '../../core/compression/types';
 
 interface TempHandle {
   blob: Blob;
@@ -26,11 +24,7 @@ export class WebFileAdapter implements FileAdapter {
   fromFiles(files: readonly File[]): SourceFile[] {
     return files.flatMap(file => {
       if (!isSupportedFile(file)) return [];
-      try {
-        validateInputSize(file.size, defaultCompressionOptions);
-      } catch {
-        return [];
-      }
+      // 超过 20MB 的交给 workbench store 记为“未加入”并提示，不在这里静默丢弃
       return [this.register(file)];
     });
   }
@@ -70,6 +64,16 @@ export class WebFileAdapter implements FileAdapter {
     throw new Error('Web 端无法覆盖本地原图，请下载压缩结果');
   }
 
+  async saveDownload(file: TempFile, suggestedName: string): Promise<boolean> {
+    const handle = this.temps.get(file.id);
+    if (!handle) throw new Error('结果已清理，请重新下载');
+    const anchor = document.createElement('a');
+    anchor.href = handle.url;
+    anchor.download = suggestedName;
+    anchor.click();
+    return true;
+  }
+
   async cleanup(sessionId: string): Promise<void> {
     for (const [id, handle] of this.temps) {
       if (handle.sessionId === sessionId || handle.sessionId.startsWith(sessionId + '-')) {
@@ -106,6 +110,7 @@ export class WebFileAdapter implements FileAdapter {
         input.remove();
         resolve(files);
       }, { once: true });
+      input.addEventListener('cancel', () => { input.remove(); resolve([]); }, { once: true });
       input.click();
     });
   }

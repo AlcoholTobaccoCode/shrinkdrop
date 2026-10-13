@@ -47,11 +47,16 @@ export class AccountPool {
       throw new ConfigError(`TinifyAccounts.json 格式错误：${i?.path.join('.')} ${i?.message ?? ''}`.trim());
     }
     const seen = new Set<string>();
+    const seenKeys = new Set<string>();
     const list: AccountPublic[] = [];
     for (const e of r.data) {
       const accountId = accountIdOf(e.username);
       if (seen.has(accountId)) throw new ConfigError(`TinifyAccounts.json 有重复账号：${maskUsername(e.username)}`);
+      // 同一凭据换用户名也不能拆成两个预算锁；错误只报告掩码，不输出 key 或其指纹。
+      const keyFingerprint = createHash('sha256').update(e.api_key).digest('hex');
+      if (seenKeys.has(keyFingerprint)) throw new ConfigError(`TinifyAccounts.json 有重复凭据：${maskUsername(e.username)}`);
       seen.add(accountId);
+      seenKeys.add(keyFingerprint);
       const a: AccountPublic = Object.freeze({
         accountId,
         label: maskUsername(e.username),

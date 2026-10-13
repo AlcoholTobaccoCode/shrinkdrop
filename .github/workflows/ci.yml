@@ -20,5 +20,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm test
+      - run: pnpm test:server
+      - run: pnpm --filter @tinypng/server typecheck
+      - run: pnpm check:secrets
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e

@@ -5,6 +5,7 @@ import { configureSettingsStorage, SETTINGS_KEY, useSettingsStore } from '../../
 import { KeychainTokenStorage, SessionTokenStorage, TOKEN_KEY } from '../../src/core/settings/token-storage';
 import { useProviderStore } from '../../src/stores/provider';
 import { toUsageView, useUsageStore } from '../../src/stores/usage';
+import { ApiClient } from '../../src/core/cloud/api-client';
 
 class MapStorage {
   readonly map = new Map<string, string>();
@@ -26,6 +27,53 @@ describe('settingsStore（D2）', () => {
     session = new MapStorage();
     configureSettingsStorage({ kv: local, token: new SessionTokenStorage(session) });
     setActivePinia(createPinia());
+  });
+
+  it('A切到B且没有新token时不把A Bearer发给B，同origin更新可保留', async () => {
+    const store = useSettingsStore();
+    expect(store.setConnection).toBeTypeOf('function');
+    if (!store.setConnection) return;
+    await store.setConnection('https://a.example/', 'A-secret');
+    await store.setConnection('https://a.example:443/proxy', '');
+    expect(await store.getToken('https://a.example')).toBe('A-secret');
+    await store.setConnection('https://b.example', '');
+    const seen: Array<string | undefined> = [];
+    const api = new ApiClient({ baseUrl: store.serverUrl, getToken: () => store.getToken('https://b.example'), fetch: async (_url, init) => { seen.push((init?.headers as Record<string, string>).Authorization); return new Response('[]'); } });
+    await api.providers();
+    expect(seen).toEqual([undefined]);
+    expect(store.hasToken).toBe(false);
+    expect(session.getItem(TOKEN_KEY)).toBeNull();
+    expect(await store.getToken('https://a.example')).toBeUndefined();
+  });
+
+  it('换origin并保存新token时，旧ApiClient也不能拿到B token发给A', async () => {
+    const store = useSettingsStore();
+    expect(store.setConnection).toBeTypeOf('function');
+    if (!store.setConnection) return;
+    await store.setConnection('https://a.example', 'A-secret');
+    await store.setConnection('https://b.example', 'B-secret');
+    expect(await store.getToken('https://a.example')).toBeUndefined();
+    expect(await store.getToken('https://b.example')).toBe('B-secret');
+  });
+
+  it('异步清理旧凭据期间请求等待，完成后A客户端无Bearer、B客户端只得B凭据', async () => {
+    const store = useSettingsStore();
+    await store.setConnection('https://a.example', 'A-secret');
+    let current: string | undefined = 'A-secret';
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    configureSettingsStorage({ token: { kind: 'memory', get: async () => current, set: async value => { current = value; }, clear: async () => { await gate; current = undefined; } } });
+    const save = store.setConnection('https://b.example', 'B-secret');
+    const seen: Array<{ url: string; auth?: string }> = [];
+    const client = (baseUrl: string) => new ApiClient({ baseUrl, getToken: () => store.getToken(baseUrl), fetch: async (url, init) => { seen.push({ url, auth: (init?.headers as Record<string, string>).Authorization }); return new Response('[]'); } });
+    const requests = Promise.all([client('https://a.example').providers(), client('https://b.example').providers()]);
+    await Promise.resolve();
+    expect(seen).toEqual([]);
+    release();
+    await save;
+    await requests;
+    expect(seen.find(request => request.url.startsWith('https://a.example'))?.auth).toBeUndefined();
+    expect(seen.find(request => request.url.startsWith('https://b.example'))?.auth).toBe('Bearer B-secret');
   });
 
   it('Web：令牌只进 sessionStorage，localStorage 里没有 token', async () => {
@@ -108,6 +156,28 @@ describe('usageStore（D2）', () => {
     const view = toUsageView({ ...base, source: 'unknown' });
     expect(view.used).toBeUndefined();
     expect(view.remaining).toBeUndefined();
+  });
+
+  it('无 Compression-Count 时有预算和剩余也不显示数字', () => {
+    const view = toUsageView({ ...base, usedThisMonth: undefined, remaining: 500 });
+    expect(view.used).toBeUndefined();
+    expect(view.remaining).toBeUndefined();
+    expect(view.limit).toBeUndefined();
+  });
+
+  it.each([NaN, -1, null])('无效计数 %s 按未知处理，不能显示NaN或误导预算', count => {
+    const view = toUsageView({ ...base, usedThisMonth: count as number, remaining: 500 });
+    expect(view.used).toBeUndefined();
+    expect(view.remaining).toBeUndefined();
+  });
+
+  it('读取失败时移除旧额度，避免把历史数字伪装成当前用量', async () => {
+    setActivePinia(createPinia());
+    const store = useUsageStore();
+    await store.refresh('official-tinify', async () => ({ providerId: 'official-tinify', accounts: [base] }));
+    await store.refresh('official-tinify', async () => { throw new Error('offline'); });
+    expect(store.views('official-tinify')).toEqual([]);
+    expect(store.error).toBe('offline');
   });
 
   it('refresh 按 provider 存，本地不请求', async () => {

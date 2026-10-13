@@ -171,4 +171,25 @@ describe('工作台模型（D1）', () => {
     expect(session.tasks[1]?.status).toBe('draft');
     expect(session.draftCount).toBe(1);
   });
+
+  it('临时文件写入失败保留已处理结果，重试输出只保存一次，不再次调用 Provider', async () => {
+    const files = adapter();
+    let writes = 0;
+    const originalWrite = files.writeTemp;
+    files.writeTemp = async (...args) => {
+      if (++writes === 1) throw new Error('disk full');
+      return originalWrite(...args);
+    };
+    let providerCalls = 0;
+    const session = new CompressionSession({ adapter: files, provider: provider(() => { providerCalls++; }) });
+    session.addFiles([file('a')]);
+    await session.run();
+    const item = session.tasks[0]!;
+    expect(displayStatus(item)).toBe('output-failed');
+    expect(item.output?.bytes).toEqual(new Uint8Array([1, 2]));
+    await session.retry(item.id, 'outputs');
+    expect(displayStatus(item)).toBe('completed');
+    expect(providerCalls).toBe(1);
+    expect(writes).toBe(2);
+  });
 });

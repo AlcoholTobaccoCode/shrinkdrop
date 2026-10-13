@@ -12,7 +12,7 @@ export interface ResizePlan {
 
 /**
  * - inside：等比缩到框内，不放大；画布 = 缩放后尺寸
- * - contain：等比放进框内（可放大），画布 = 框尺寸，四周留白（透明/白底）居中
+ * - contain：等比缩到框内，不放大小图；画布 = 框尺寸，四周留白（透明/白底）居中
  * - cover：等比铺满框（可放大），画布 = 框尺寸，居中裁掉多余部分
  * 只给宽或高时三种都按等比缩放处理（inside 仍不放大）。
  */
@@ -48,6 +48,7 @@ export function planResize(srcW: number, srcH: number, op: ResizeOp): ResizePlan
     const h = Math.max(1, Math.round(srcH * scale));
     return { width: w, height: h, ...full, dx: 0, dy: 0, dw: w, dh: h };
   }
+  scale = Math.min(scale, 1);
   const dw = srcW * scale;
   const dh = srcH * scale;
   return { width, height, ...full, dx: (width - dw) / 2, dy: (height - dh) / 2, dw, dh };

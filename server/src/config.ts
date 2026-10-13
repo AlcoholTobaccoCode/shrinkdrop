@@ -1,4 +1,5 @@
 import { readFileSync, existsSync } from 'node:fs';
+import { isIP } from 'node:net';
 import { z } from 'zod';
 import { LIMITS } from '@tinypng/shared';
 
@@ -7,6 +8,7 @@ const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost']);
 export const serverConfigSchema = z.object({
   host: z.string().min(1).default('127.0.0.1'),
   port: z.number().int().min(1).max(65535).default(8787),
+  corsOrigins: z.array(z.string().min(1)).default(['http://localhost:5170', 'http://127.0.0.1:5170', 'tauri://localhost', 'http://tauri.localhost', 'https://tauri.localhost']),
   concurrency: z.number().int().min(1).max(32).default(LIMITS.concurrency),
   maxFileBytes: z.number().int().positive().default(LIMITS.maxFileBytes),
   tmpTtlHours: z.number().positive().default(LIMITS.tmpTtlHours),
@@ -29,7 +31,7 @@ export type ServerConfig = z.infer<typeof serverConfigSchema>;
 export class ConfigError extends Error {}
 
 export function isLoopback(host: string): boolean {
-  return LOOPBACK.has(host) || host.startsWith('127.');
+  return LOOPBACK.has(host) || (isIP(host) === 4 && host.split('.')[0] === '127');
 }
 
 export function parseConfig(raw: unknown): ServerConfig {

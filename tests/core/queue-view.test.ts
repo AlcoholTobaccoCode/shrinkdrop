@@ -31,4 +31,10 @@ describe('队列项 8 种展示状态（interaction-specs 2.1）', () => {
     expect(queueItemView({ ...base, status: 'failed', output: result, outputs: [{ outputId: 'o', destination: { type: 'download' }, status: 'failed' }] }).note).toBe('不消耗额度');
     expect(queueItemView({ ...base, status: 'completed', output: result, compressedSize: 400, outputs: [{ outputId: 'o', destination: { type: 'download' }, status: 'completed' }] }).text).toBe('节省 60.0%');
   });
+
+  it('结果比原图大时说明体积增加；未知原始体积不编造节省率', () => {
+    const completed: WorkbenchItem = { ...base, status: 'completed', output: result, compressedSize: 1500, outputs: [{ outputId: 'o', destination: { type: 'download' }, status: 'completed' }] };
+    expect(queueItemView(completed).text).toBe('体积增加 50.0%');
+    expect(queueItemView({ ...completed, originalSize: 0 }).text).toBe('已处理 · 原始体积未知');
+  });
 });

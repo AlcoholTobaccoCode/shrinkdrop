@@ -2,6 +2,23 @@ import { describe, expect, it } from 'vitest';
 import { TaskQueue } from '../../src/core/queues/task-queue';
 
 describe('TaskQueue', () => {
+  it('排队期间取消的任务不执行run，后续任务仍正常', async () => {
+    const queue = new TaskQueue(1);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const first = queue.add(() => gate);
+    const controller = new AbortController();
+    let executions = 0;
+    const queued = queue.add(async () => { executions++; }, { signal: controller.signal });
+    const rejection = expect(queued).rejects.toMatchObject({ name: 'AbortError' });
+    controller.abort();
+    const next = queue.add(async () => 'ok');
+    release();
+    await first;
+    await rejection;
+    await expect(next).resolves.toBe('ok');
+    expect(executions).toBe(0);
+  });
   it('限制并发数量并等待空闲', async () => {
     const queue = new TaskQueue(2);
     let active = 0;

@@ -13,16 +13,19 @@ export interface UsageView {
 }
 
 export function toUsageView(account: AccountUsage): UsageView {
-  const known = account.source !== 'unknown' && account.usedThisMonth !== undefined;
+  const count = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value) && value >= 0 ? value : undefined;
+  const used = count(account.usedThisMonth);
+  const limit = count(account.limitThisMonth);
+  const known = account.source !== 'unknown' && used !== undefined;
   return {
     label: account.label,
     status: account.status,
-    used: known ? account.usedThisMonth : undefined,
-    limit: known ? account.limitThisMonth : undefined,
+    used: known ? used : undefined,
+    limit: known ? limit : undefined,
     remaining: known
-      ? account.remaining ?? (account.limitThisMonth !== undefined ? Math.max(0, account.limitThisMonth - (account.usedThisMonth ?? 0)) : undefined)
+      ? count(account.remaining) ?? (limit !== undefined ? Math.max(0, limit - used) : undefined)
       : undefined,
-    source: account.source,
+    source: known ? account.source : 'unknown',
     observedAt: account.observedAt
   };
 }
@@ -32,17 +35,23 @@ export type UsageFetcher = (providerId: ProviderId) => Promise<ProviderUsageResp
 export const useUsageStore = defineStore('usage', {
   state: () => ({
     byProvider: {} as Record<string, UsageView[]>,
+    loading: false,
     error: undefined as string | undefined
   }),
   actions: {
     async refresh(providerId: ProviderId, fetcher: UsageFetcher): Promise<void> {
       if (providerId === 'local') return;
+      if (this.loading) return;
+      this.loading = true;
       try {
         const res = await fetcher(providerId);
         this.byProvider[providerId] = res.accounts.map(toUsageView);
         this.error = undefined;
       } catch (error) {
+        this.byProvider[providerId] = [];
         this.error = error instanceof Error ? error.message : '获取额度失败';
+      } finally {
+        this.loading = false;
       }
     },
     views(providerId: ProviderId): UsageView[] {

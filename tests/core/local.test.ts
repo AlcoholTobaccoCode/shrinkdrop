@@ -18,6 +18,9 @@ describe('planResize（D3）', () => {
     const p = planResize(4000, 2000, { type: 'resize', width: 1000, height: 1000, fit: 'contain' });
     expect(p).toMatchObject({ width: 1000, height: 1000, dw: 1000, dh: 500, dx: 0, dy: 250 });
   });
+  it('contain：小图不放大，8×4内容居中放入12×12固定画布', () => {
+    expect(planResize(8, 4, { type: 'resize', width: 12, height: 12, fit: 'contain' })).toMatchObject({ width: 12, height: 12, dw: 8, dh: 4, dx: 2, dy: 4 });
+  });
   it('cover：画布为框尺寸，居中裁切', () => {
     const p = planResize(4000, 2000, { type: 'resize', width: 1000, height: 1000, fit: 'cover' });
     expect(p).toMatchObject({ width: 1000, height: 1000, sw: 2000, sh: 2000, sx: 1000, sy: 0, dw: 1000, dh: 1000 });
@@ -195,5 +198,38 @@ describe('workbenchStore + LocalExecutor（D2/D3）', () => {
     store.addFiles([file('a'), file('b')]);
     expect(store.remove(store.items[0]!.id)).toBe(true);
     expect(store.items.map(i => i.source.kind === 'file' && i.source.file.id)).toEqual(['b']);
+  });
+
+  it('固定尺寸补边必须填全宽高，没有有效操作也不能开始', () => {
+    const store = useWorkbenchStore();
+    store.addFiles([file('a')]);
+    store.setPipeline({ providerId: 'local', operations: [{ type: 'resize', fit: 'contain', width: 100 }], destinations: [{ type: 'download' }] });
+    expect(store.canStart).toBe(false);
+    store.setPipeline({ providerId: 'local', operations: [{ type: 'resize', fit: 'contain', width: 100, height: 80 }], destinations: [{ type: 'download' }] });
+    expect(store.canStart).toBe(true);
+    store.setPipeline({ providerId: 'local', operations: [], destinations: [{ type: 'download' }] });
+    expect(store.canStart).toBe(false);
+  });
+
+  it('处理中锁定操作方案，新添加素材仍是草稿且可单独手动开始', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    configureExecutorFactory((_mode, pipeline) => new LocalExecutor({ adapter: adapter(), pipeline, provider: {
+      process: async bytes => { await gate; return { bytes, size: bytes.length, mime: 'image/png', width: 1, height: 1, ratio: 1 }; }
+    } }));
+    const store = useWorkbenchStore();
+    store.addFiles([file('a')]);
+    const first = store.start();
+    store.addFiles([file('b')]);
+    expect(store.draftCount).toBe(1);
+    expect(store.canStart).toBe(true);
+    expect(store.pipelineLocked).toBe(true);
+    expect(() => store.setPipeline({ ...store.pipeline, operations: [{ type: 'convert', format: 'webp' }] })).toThrow('处理中');
+    expect(store.pipeline.operations).toEqual([{ type: 'compress' }]);
+    release();
+    await first;
+    expect(store.items[1]?.status).toBe('draft');
+    await store.start();
+    expect(store.items[1]?.status).toBe('completed');
   });
 });

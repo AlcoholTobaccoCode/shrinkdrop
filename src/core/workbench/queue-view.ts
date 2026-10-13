@@ -16,6 +16,12 @@ export interface QueueItemView {
 
 const runningText = { uploading: '上传中', processing: '处理中', saving: '保存中' } as const;
 
+export function sizeChangeLabel(original: number, result: number | undefined): string {
+  if (original <= 0 || result === undefined) return '已处理 · 原始体积未知';
+  const change = (1 - result / original) * 100;
+  return (change < 0 ? '体积增加 ' : '节省 ') + Math.abs(change).toFixed(1) + '%';
+}
+
 export function queueItemView(item: WorkbenchItem, position?: number, local = item.mode === 'private-local'): QueueItemView {
   const shown = displayStatus(item);
   switch (shown) {
@@ -35,17 +41,16 @@ export function queueItemView(item: WorkbenchItem, position?: number, local = it
       };
     }
     case 'completed': {
-      const saved = item.compressedSize !== undefined && item.originalSize > 0
-        ? Math.max(0, (1 - item.compressedSize / item.originalSize) * 100).toFixed(1)
-        : '0.0';
-      return { state: 'completed', text: '节省 ' + saved + '%', actions: ['download'] };
+      return { state: 'completed', text: sizeChangeLabel(item.originalSize, item.compressedSize), actions: ['download'] };
     }
     case 'partial': {
       const failed = item.outputs.filter(o => o.status === 'failed').length;
       return { state: 'partial', text: '已处理 · ' + String(failed) + ' 个目的地失败', actions: ['retry-outputs', 'download'] };
     }
-    case 'output-failed':
-      return { state: 'output-failed', text: '已处理，保存失败', actions: ['retry-outputs'], note: '不消耗额度' };
+    case 'output-failed': {
+      const error = item.outputs.find(output => output.status === 'failed')?.error?.message ?? item.error?.message;
+      return { state: 'output-failed', text: '已处理，保存失败' + (error ? '：' + error : ''), actions: ['retry-outputs'], note: '不消耗额度' };
+    }
     case 'failed':
       return {
         state: 'failed',

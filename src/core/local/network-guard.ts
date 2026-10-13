@@ -1,6 +1,7 @@
 /**
  * 本地私有模式的网络护栏：处理期间把 fetch / XHR / WebSocket / EventSource / sendBeacon 换成会抛错的版本，
- * 并统计被拦下的请求数（界面常驻“网络请求 0”）。引用计数，多个批次并行时最后一个结束才恢复。
+ * 并统计被拦下的请求数（界面常驻“网络请求 0”）。Tauri 本机文件 IPC 单独校验，不计为联网。
+ * 引用计数，多个批次并行时最后一个结束才恢复。
  */
 export class NetworkBlockedError extends Error {
   constructor(what: string) {
@@ -11,6 +12,37 @@ export class NetworkBlockedError extends Error {
 
 type Global = typeof globalThis & Record<string, unknown>;
 const KEYS = ['fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource'] as const;
+
+//#region 本机文件 IPC 能力
+const LOCAL_FILE_COMMANDS = new Set([
+  '/choose_files', '/choose_directory', '/read_file', '/write_temp', '/save_temp_file', '/cleanup_temp_files'
+]);
+
+/** Tauri 的 fetch 传输是本机 IPC；普通 localhost、其他命令或伪装地址仍按网络请求拦截。 */
+function isLocalFileIpc(target: Global, input: RequestInfo | URL, init?: RequestInit): boolean {
+  const runtime = target.__TAURI_INTERNALS__ as { invoke?: unknown; convertFileSrc?: unknown } | undefined;
+  if (typeof runtime?.invoke !== 'function' || typeof runtime.convertFileSrc !== 'function') return false;
+  try {
+    const request = typeof Request !== 'undefined' && input instanceof Request ? input : undefined;
+    const url = new URL(request?.url ?? String(input));
+    const internalHost = (url.protocol === 'ipc:' && url.hostname === 'localhost')
+      || (url.protocol === 'http:' && url.hostname === 'ipc.localhost');
+    if (!internalHost || url.username || url.password || url.port || url.search || url.hash || !LOCAL_FILE_COMMANDS.has(url.pathname)) return false;
+    if ((init?.method ?? request?.method ?? 'GET').toUpperCase() !== 'POST') return false;
+    const headers = new Headers(init?.headers ?? request?.headers);
+    const contentType = headers.get('Content-Type');
+    const callback = headers.get('Tauri-Callback');
+    const error = headers.get('Tauri-Error');
+    // 随机 invoke key 的真实匹配和文件 ID 校验由原生端执行；这里保留原生调用特征。
+    return Boolean(headers.get('Tauri-Invoke-Key')?.trim())
+      && callback !== null && /^\d+$/.test(callback) && Number(callback) <= 0xffffffff
+      && error !== null && /^\d+$/.test(error) && Number(error) <= 0xffffffff
+      && (contentType === 'application/json' || contentType === 'application/octet-stream');
+  } catch {
+    return false;
+  }
+}
+//#endregion
 
 export class NetworkGuard {
   /** 被拦下的请求数；正常应为 0 */
@@ -31,8 +63,13 @@ export class NetworkGuard {
       if (!(key in this.target)) continue;
       this.saved.set(key, this.target[key]);
       const guard = this;
+      const original = this.target[key];
       const blocker = key === 'fetch'
-        ? (input: unknown) => { guard.blocked += 1; return Promise.reject(new NetworkBlockedError(String(input))); }
+        ? (input: RequestInfo | URL, init?: RequestInit) => {
+          if (isLocalFileIpc(guard.target, input, init)) return (original as typeof fetch).call(guard.target, input, init);
+          guard.blocked += 1;
+          return Promise.reject(new NetworkBlockedError(String(input)));
+        }
         : function Blocked(): never { guard.blocked += 1; throw new NetworkBlockedError(key); };
       (this.target as Record<string, unknown>)[key] = blocker;
     }

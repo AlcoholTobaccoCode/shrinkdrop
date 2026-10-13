@@ -3,7 +3,7 @@ import type { FileAdapter, SourceFile } from '../files/contracts';
 import { TaskQueue } from '../queues/task-queue';
 import type { Executor } from '../workbench/executor';
 import { isActive, type OutputState, type Pipeline, type WorkbenchError, type WorkbenchItem } from '../workbench/model';
-import { ApiRequestError, type ApiClient } from './api-client';
+import { ApiRequestError, throwIfAborted, type ApiClient } from './api-client';
 import { SseClient, type ConnectionState, type SseClientOptions } from './sse';
 
 export interface CloudExecutorOptions {
@@ -40,6 +40,15 @@ export class CloudExecutor implements Executor {
   private sse?: SseClient;
   private seq = 0;
   private idleWaiters: Array<() => void> = [];
+  private startTail: Promise<void> = Promise.resolve();
+  /** /start 响应丢失时先校正 Server 实态，不能误走 Provider retry。 */
+  private readonly unconfirmedStarts = new Set<string>();
+  private readonly unconfirmedRetries = new Set<string>();
+  private readonly observedRetryEvents = new Set<string>();
+  private readonly submittedJobs = new Set<string>();
+  private readonly cancelledRemoteJobs = new Set<string>();
+  private readonly pendingRemoteCancels = new Map<string, Promise<void>>();
+  private needsUploadReconciliation = false;
 
   constructor(private readonly options: CloudExecutorOptions) {
     this.pipeline = options.pipeline;
@@ -72,70 +81,127 @@ export class CloudExecutor implements Executor {
   }
 
   /** “开始处理”：建批次（首次）→ 上传草稿 → /start → 订阅 SSE */
-  async start(): Promise<void> {
+  start(): Promise<void> {
     const drafts = this.items.filter(item => item.status === 'draft');
-    if (!drafts.length) return;
+    if (!drafts.length) return Promise.resolve();
+    // 先认领这次草稿，再异步建批次，防止重复点击上传同一张图片。
+    for (const item of drafts) { item.status = 'uploading'; item.progress = 0; item.error = undefined; }
+    this.emit();
+    const run = this.startTail.then(() => this.startDrafts(drafts));
+    this.startTail = run.catch(() => undefined);
+    return run;
+  }
+
+  private async startDrafts(drafts: CloudItem[]): Promise<void> {
     try {
       await this.ensureBatch();
     } catch (error) {
-      for (const item of drafts) this.fail(item, error);
+      for (const item of drafts) if (item.status !== 'canceled') this.fail(item, error);
       this.emit();
       return;
     }
     const batchId = this.batchId!;
-    for (const item of drafts) { item.status = 'uploading'; item.progress = 0; }
-    this.emit();
-
-    const files = drafts.filter(item => item.source.kind === 'file');
-    const urls = drafts.filter(item => item.source.kind === 'url');
+    const files = drafts.filter(item => item.source.kind === 'file' && !item.jobId && item.status !== 'canceled');
+    const urls = drafts.filter(item => item.source.kind === 'url' && !item.jobId && item.status !== 'canceled');
     const uploads = files.map(item => this.uploadOne(batchId, item));
     if (urls.length) uploads.push(this.uploadUrls(batchId, urls));
     await Promise.all(uploads);
 
-    if (!this.items.some(item => item.jobId && item.status === 'draft')) {
+    try {
+      await this.confirmCancelledUploads();
+    } catch {
+      for (const item of drafts) if (item.jobId && item.status === 'uploading') {
+        item.status = 'draft';
+        item.error = { code: 'UNKNOWN', message: '取消确认失败，其余图片已保留为草稿。请恢复连接后再次开始。' };
+      }
+      this.emit();
+      return;
+    }
+
+    const ready = drafts.filter(item => item.jobId && item.status === 'uploading');
+    if (!ready.length) {
       this.emit();
       return;
     }
     this.openEvents();
+    for (const item of ready) if (item.jobId) this.submittedJobs.add(item.jobId);
     try {
       await this.options.api.start(batchId);
-      for (const item of this.items) if (item.jobId && item.status === 'draft') item.status = 'queued';
+      for (const item of ready) if (item.status === 'uploading') item.status = 'queued';
     } catch (error) {
-      for (const item of this.items) if (item.jobId && item.status === 'draft') this.fail(item, error);
+      for (const item of ready) this.unconfirmedStarts.add(item.id);
+      try {
+        await this.refetch();
+        for (const item of ready) if (item.status === 'draft') item.error = { code: 'UNKNOWN', message: 'Server 尚未开始处理，已恢复草稿。请再次点击开始处理。' };
+      } catch {
+        for (const item of ready) if (item.status !== 'canceled') this.fail(item, new Error('暂时无法确认 Server 是否开始处理，请恢复连接后重试'));
+      }
     }
     this.emit();
   }
 
-  cancel(itemId: string): void {
+  async cancel(itemId: string): Promise<void> {
     const item = this.find(itemId);
     if (!item) return;
-    if (item.status === 'draft' && !item.jobId) {
+    if (!item.jobId && !TERMINAL_JOB_STATUSES.includes(item.status)) {
       item.status = 'canceled';
+      this.uploadControllers.get(item.id)?.abort();
       this.emit();
       return;
     }
     this.uploadControllers.get(item.id)?.abort();
+    if (item.jobId && item.status === 'uploading' && !this.submittedJobs.has(item.jobId)) {
+      item.status = 'canceled';
+      this.emit();
+      await this.compensateCancel(item.jobId);
+      return;
+    }
     if (item.jobId && !TERMINAL_JOB_STATUSES.includes(item.status)) {
       // 乐观显示，收到 canceled 事件定稿
-      void this.options.api.cancelJob(item.jobId).catch(error => {
+      try {
+        await this.options.api.cancelJob(item.jobId);
+        // 完成与取消可能竞争，终态时 Server 无须再次推送 canceled 事件。
+        applyJob(item, await this.options.api.getJob(item.jobId), true);
+        this.emit();
+      } catch (error) {
         item.error = toError(error);
         this.emit();
-      });
+        throw error;
+      }
     }
   }
 
-  cancelAll(): void {
+  async cancelAll(): Promise<void> {
     for (const item of this.items) {
-      if (item.status === 'draft' && !item.jobId) item.status = 'canceled';
+      if (!item.jobId && !TERMINAL_JOB_STATUSES.includes(item.status)) item.status = 'canceled';
       this.uploadControllers.get(item.id)?.abort();
     }
-    if (this.batchId) void this.options.api.cancelBatch(this.batchId).catch(() => undefined);
     this.emit();
+    if (this.batchId) {
+      await this.options.api.cancelBatch(this.batchId);
+      await this.refetch();
+    }
   }
 
   async retry(itemId: string, scope: 'all' | 'outputs'): Promise<void> {
     const item = this.find(itemId);
     if (!item) return;
+    if (item.jobId && this.unconfirmedRetries.has(item.id)) {
+      applyJob(item, await this.options.api.getJob(item.jobId), true, 'retry');
+      this.unconfirmedRetries.delete(item.id);
+      this.observedRetryEvents.delete(item.id);
+      if (isActive(item.status)) this.openEvents();
+      this.emit();
+      return;
+    }
+    if (this.unconfirmedStarts.has(item.id)) {
+      await this.refetch();
+      if (this.unconfirmedStarts.has(item.id)) throw new Error('Server 中没有找到已上传任务，请清空后重新添加');
+      if (item.status === 'draft' || item.status === 'completed' || isActive(item.status)) {
+        if (isActive(item.status)) this.openEvents();
+        return;
+      }
+    }
     if (!item.jobId) {
       // 上传前就失败的：回到草稿，下次“开始处理”再上传
       item.status = 'draft';
@@ -144,19 +210,38 @@ export class CloudExecutor implements Executor {
       this.emit();
       return;
     }
+    const previous = { ...item, outputs: item.outputs.map(output => ({ ...output })) };
+    // 先进入重试状态，SSE 可能比 HTTP 响应更早报告完成，不能随后回退。
+    item.error = undefined;
+    if (scope === 'outputs') {
+      item.status = 'saving';
+      for (const output of item.outputs) if (output.status === 'failed') { output.status = 'saving'; output.error = undefined; }
+    } else {
+      item.status = 'queued';
+      item.progress = 0;
+      item.output = undefined;
+      item.compressedSize = undefined;
+    }
+    this.emit();
+    this.unconfirmedRetries.add(item.id);
+    this.observedRetryEvents.delete(item.id);
     try {
       await this.options.api.retry(item.jobId, scope);
-      item.error = undefined;
-      if (scope === 'outputs') {
-        item.status = 'saving';
-        for (const o of item.outputs) if (o.status === 'failed') { o.status = 'saving'; o.error = undefined; }
-      } else {
-        item.status = 'queued';
-        item.progress = 0;
-      }
+      this.unconfirmedRetries.delete(item.id);
+      this.observedRetryEvents.delete(item.id);
       this.openEvents();
     } catch (error) {
-      item.error = toError(error);
+      try {
+        applyJob(item, await this.options.api.getJob(item.jobId), true, 'retry');
+        this.unconfirmedRetries.delete(item.id);
+        this.observedRetryEvents.delete(item.id);
+        if (isActive(item.status)) this.openEvents();
+      } catch {
+        if (!this.observedRetryEvents.has(item.id) && !TERMINAL_JOB_STATUSES.includes(item.status)) Object.assign(item, previous);
+        item.error = { code: 'UNKNOWN', message: '无法确认重试是否已被 Server 接受，请恢复连接后重试。', cause: error };
+        this.emit();
+        throw new Error(item.error.message);
+      }
     }
     this.emit();
   }
@@ -210,19 +295,27 @@ export class CloudExecutor implements Executor {
   }
 
   /** zip 全部下载（Server 打包） */
-  async downloadArchive(): Promise<{ blob: Blob; filename: string }> {
+  async downloadArchive(signal?: AbortSignal): Promise<{ blob: Blob; filename: string }> {
     if (!this.batchId) throw new Error('还没有可下载的结果');
-    return { blob: await this.options.api.archive(this.batchId), filename: 'images-' + this.batchId.slice(0, 8) + '.zip' };
+    return { blob: await this.options.api.archive(this.batchId, signal), filename: 'images-' + this.batchId.slice(0, 8) + '.zip' };
   }
 
   /** 全量校正（重连后 / 手动刷新） */
-  async refetch(): Promise<void> {
+  async refetch(signal?: AbortSignal): Promise<void> {
     if (!this.batchId) return;
-    const batch = await this.options.api.getBatch(this.batchId);
+    const batch = await this.options.api.getBatch(this.batchId, signal);
+    // 请求实现可能忽略取消；迟到校正不能在关闭后改写任务。
+    throwIfAborted(signal);
     this.batchStatus = batch.status;
     for (const job of batch.jobs) {
       const item = this.items.find(i => i.jobId === job.jobId);
-      if (item) applyJob(item, job, true);
+      if (item) {
+        applyJob(item, job, true, this.unconfirmedRetries.has(item.id) ? 'retry' : this.unconfirmedStarts.has(item.id) ? 'start' : undefined);
+        if (job.status === 'draft') this.submittedJobs.delete(job.jobId);
+        this.unconfirmedStarts.delete(item.id);
+        this.unconfirmedRetries.delete(item.id);
+        this.observedRetryEvents.delete(item.id);
+      }
     }
     this.emit();
   }
@@ -265,21 +358,28 @@ export class CloudExecutor implements Executor {
     if (item.source.kind !== 'file') return;
     const file = item.source.file;
     const controller = new AbortController();
+    let uploadAttempted = false;
     this.uploadControllers.set(item.id, controller);
     try {
       await this.uploadQueue.add(async ({ signal }) => {
+        throwIfAborted(signal);
+        throwIfAborted(controller.signal);
         signal.addEventListener('abort', () => controller.abort(), { once: true });
         const bytes = await this.options.adapter.read(file);
+        throwIfAborted(signal);
+        throwIfAborted(controller.signal);
         const blob = new Blob([bytes.slice().buffer as ArrayBuffer], { type: file.mime });
+        uploadAttempted = true;
         const res = await this.options.api.uploadFile(batchId, blob, file.name, ratio => {
           item.progress = ratio;
           this.emit();
         }, controller.signal);
         const job = res.jobs[0];
         if (!job) throw new Error('Server 没有返回任务');
-        this.bind(item, job);
+        await this.bind(item, job, controller.signal);
       }, { signal: controller.signal });
     } catch (error) {
+      if (uploadAttempted && !item.jobId) this.needsUploadReconciliation = true;
       if (controller.signal.aborted) item.status = 'canceled';
       else this.fail(item, error);
     } finally {
@@ -289,25 +389,73 @@ export class CloudExecutor implements Executor {
   }
 
   private async uploadUrls(batchId: string, items: CloudItem[]): Promise<void> {
+    // 每个 URL 独立取消；取消一张不会中断同批次其他 URL。
+    await Promise.all(items.map(item => this.uploadUrl(batchId, item)));
+  }
+
+  private async uploadUrl(batchId: string, item: CloudItem): Promise<void> {
+    const controller = new AbortController();
+    let uploadAttempted = false;
+    this.uploadControllers.set(item.id, controller);
     try {
-      const res = await this.options.api.addUrls(batchId, items.map(i => (i.source.kind === 'url' ? i.source.url : '')));
-      items.forEach((item, index) => {
-        const job = res.jobs[index];
-        if (job) this.bind(item, job);
-        else this.fail(item, new Error('Server 没有返回任务'));
-      });
+      const res = await this.uploadQueue.add(() => {
+        throwIfAborted(controller.signal);
+        uploadAttempted = true;
+        return this.options.api.addUrls(batchId, [item.source.kind === 'url' ? item.source.url : ''], controller.signal);
+      }, { signal: controller.signal });
+      const job = res.jobs[0];
+      if (job) await this.bind(item, job, controller.signal);
+      else if (item.status !== 'canceled') this.fail(item, new Error('Server 没有返回任务'));
     } catch (error) {
-      for (const item of items) this.fail(item, error);
+      if (uploadAttempted && !item.jobId) this.needsUploadReconciliation = true;
+      if (item.status !== 'canceled') {
+        if (controller.signal.aborted) item.status = 'canceled';
+        else this.fail(item, error);
+      }
+    } finally {
+      this.uploadControllers.delete(item.id);
+      this.emit();
     }
   }
 
-  private bind(item: CloudItem, job: Job): void {
+  private async bind(item: CloudItem, job: Job, signal?: AbortSignal): Promise<void> {
     item.jobId = job.jobId;
     item.batchId = job.batchId;
-    item.status = 'draft';
+    if (item.status === 'canceled' || signal?.aborted) {
+      item.status = 'canceled';
+      await this.compensateCancel(job.jobId);
+      return;
+    }
+    item.status = 'uploading';
     item.progress = 1;
     if (job.input) item.originalSize = job.input.size;
     if (job.outputs.length) item.outputs = job.outputs.map(o => ({ ...o }));
+  }
+
+  /** 已上传但被取消的草稿必须确认撤销，不能让随后/start把它们一起计费。 */
+  private async compensateCancel(jobId: string): Promise<void> {
+    this.cancelledRemoteJobs.add(jobId);
+    let request = this.pendingRemoteCancels.get(jobId);
+    if (!request) {
+      request = this.options.api.cancelJob(jobId);
+      this.pendingRemoteCancels.set(jobId, request);
+    }
+    try {
+      await request;
+      this.cancelledRemoteJobs.delete(jobId);
+    } finally {
+      if (this.pendingRemoteCancels.get(jobId) === request) this.pendingRemoteCancels.delete(jobId);
+    }
+  }
+
+  private async confirmCancelledUploads(): Promise<void> {
+    if (this.needsUploadReconciliation && this.batchId) {
+      const batch = await this.options.api.getBatch(this.batchId);
+      const known = new Set(this.items.flatMap(item => item.jobId ? [item.jobId] : []));
+      for (const job of batch.jobs) if (job.status === 'draft' && !known.has(job.jobId)) this.cancelledRemoteJobs.add(job.jobId);
+    }
+    await Promise.all([...this.cancelledRemoteJobs].map(jobId => this.compensateCancel(jobId)));
+    this.needsUploadReconciliation = false;
   }
 
   private fail(item: CloudItem, error: unknown): void {
@@ -327,7 +475,7 @@ export class CloudExecutor implements Executor {
           this.connection = state;
           this.connectionListeners.forEach(l => l(state));
         },
-        onReconnected: () => this.refetch().catch(() => undefined)
+        onReconnected: signal => this.refetch(signal)
       });
     }
     this.sse.start();
@@ -344,7 +492,11 @@ export class CloudExecutor implements Executor {
     }
     const item = this.items.find(i => i.jobId === event.jobId);
     if (!item) return;
-    if (item.status === 'canceled' && event.status !== 'canceled') return; // 取消后的迟到事件丢弃
+    const retryRecovery = this.unconfirmedRetries.has(item.id) && (isActive(event.status) || event.status === 'completed' || event.status === 'failed');
+    if (!retryRecovery && item.status === 'canceled' && event.status !== 'canceled') return;
+    if (!retryRecovery && TERMINAL_JOB_STATUSES.includes(item.status) && !TERMINAL_JOB_STATUSES.includes(event.status)) return;
+    if (retryRecovery) this.observedRetryEvents.add(item.id);
+    if (event.status === 'processing' && item.status !== 'processing') item.attempts += 1;
     item.status = event.status;
     if (event.progress !== undefined) item.progress = event.progress;
     if (event.outputs) item.outputs = event.outputs.map(o => ({ ...o }));
@@ -373,8 +525,9 @@ export class CloudExecutor implements Executor {
 }
 
 /** 全量合并：Server 为准，但不让非终态覆盖本地已收到的 canceled */
-function applyJob(item: CloudItem, job: Job, full: boolean): void {
-  if (item.status === 'canceled' && job.status !== 'canceled') return;
+function applyJob(item: CloudItem, job: Job, full: boolean, reconcileRequest?: 'start' | 'retry'): void {
+  if (reconcileRequest !== 'retry' && item.status === 'canceled' && job.status !== 'canceled') return;
+  if (!reconcileRequest && TERMINAL_JOB_STATUSES.includes(item.status) && !TERMINAL_JOB_STATUSES.includes(job.status)) return;
   item.status = job.status;
   item.attempts = job.attempts;
   if (job.progress !== undefined) item.progress = job.progress;
