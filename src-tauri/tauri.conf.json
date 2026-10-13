@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "TinyPNG Cross Platform",
+  "productName": "TinyPNG Lite",
   "version": "0.1.0",
-  "identifier": "com.tinypng.crossplatform",
+  "identifier": "com.tinypng.lite",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://127.0.0.1:5170",
@@ -13,16 +13,17 @@
     "windows": [
       {
         "label": "main",
-        "title": "TinyPNG Cross Platform",
-        "width": 960,
-        "height": 720,
-        "minWidth": 640,
-        "minHeight": 480,
+        "title": "TinyPNG Lite",
+        "width": 820,
+        "height": 640,
+        "minWidth": 600,
+        "minHeight": 420,
         "resizable": true
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost http: https: blob: data:"
+      "csp": "default-src 'self'; img-src 'self' asset: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost",
+      "devCsp": "default-src 'self'; img-src 'self' asset: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:5170"
     }
   },
   "bundle": {

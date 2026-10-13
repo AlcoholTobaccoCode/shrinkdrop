@@ -1,13 +1,11 @@
 name: CI
-
 on:
   push:
     branches: [main]
   pull_request:
-
 jobs:
-  web:
-    runs-on: ubuntu-latest
+  check:
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -18,10 +16,11 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build
       - run: pnpm test
-      - run: pnpm test:server
-      - run: pnpm --filter @tinypng/server typecheck
+      - run: pnpm build
       - run: pnpm check:secrets
-      - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm test:e2e
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked

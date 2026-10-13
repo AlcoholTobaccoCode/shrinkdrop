@@ -1,7 +1,7 @@
 [package]
 name = "tinypng-cross-platform"
 version = "0.1.0"
-description = "跨平台本地图片压缩客户端"
+description = "轻量匿名图片压缩桌面客户端"
 authors = ["Tinypng Cross Platform"]
 edition = "2021"
 
@@ -17,4 +17,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2.11.5", features = [] }
 tauri-plugin-dialog = "2.7.1"
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "native-tls"] }
+tokio = { version = "1", features = ["sync", "time", "macros", "rt"] }
+image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "webp"] }
+getrandom = "0.4"
+same-file = "1"

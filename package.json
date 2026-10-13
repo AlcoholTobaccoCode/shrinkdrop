@@ -1,5 +1,5 @@
 {
-  "name": "tinypng-cross-platform",
+  "name": "tinypng-lite",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,29 +9,20 @@
     "build": "vue-tsc --noEmit && vite build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test",
     "tauri": "tauri",
-    "check:secrets": "node scripts/check-dist-secrets.mjs dist",
-    "server:init": "node scripts/init-server-config.mjs",
-    "server:dev": "pnpm --filter @tinypng/server dev",
-    "server:start": "pnpm --filter @tinypng/server start",
-    "test:server": "pnpm --filter @tinypng/server test"
+    "check:secrets": "node scripts/check-dist-secrets.mjs dist"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.5.0",
-    "@tinypng/shared": "workspace:*",
-    "pinia": "^4.0.3",
-    "reka-ui": "^2.11.0",
-    "vue": "^3.5.22",
-    "fflate": "^0.8.2"
+    "vue": "^3.5.22"
   },
   "devDependencies": {
-    "@playwright/test": "^1.52.0",
     "@tauri-apps/cli": "^2.5.0",
     "@vitejs/plugin-vue": "^5.2.4",
     "typescript": "^5.7.3",
     "vite": "^6.2.0",
     "vitest": "^3.2.4",
     "vue-tsc": "^2.2.8"
-  }
+  },
+  "description": "无 key、无 Server 的轻量图片压缩桌面客户端"
 }

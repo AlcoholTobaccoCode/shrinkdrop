@@ -1,11 +1,12 @@
-# 发布检查清单
+# 轻量版发布检查
 
-- [ ] 版本号同步 `package.json`、`src-tauri/tauri.conf.json` 和发布 tag。
-- [ ] `pnpm install --frozen-lockfile`、`pnpm build`、`pnpm test` 通过。
-- [ ] Web 浏览器测试在带 Chromium 的 CI runner 通过。
-- [ ] macOS universal 安装包能启动，Windows x64 安装包能启动。
-- [ ] 文件选择、目录扫描、拖拽、取消、重试、下载和错误提示已验证。
-- [ ] 桌面端原子覆盖失败时不会提示成功，窗口退出后临时文件已清理。
-- [ ] Web 端不展示覆盖原图入口，复制不支持时有明确错误文案。
-- [ ] 未配置代码签名时不得把产物称为生产发布版本。
-- [ ] 隐私文档与实际 Provider 行为一致。
+- [ ] 版本同步package.json、Cargo.toml、tauri.conf.json与tag。
+- [x] frozen依赖安装、Vue类型、Vitest、Web构建及敏感内容扫描通过。
+- [x] Rust取消、固定网址、图像校验、限额及文件保存测试通过。
+- [x] PNG/JPG/WebP匿名实际压缩成功，格式和尺寸保持原样。
+- [x] 原生文件/目录导入、手动开始、取消、重试、单张与全部保存已验。
+- [ ] Finder到窗口的真实拖放验收。
+- [x] 退出后请求和临时结果已清理，开发测试端口已关闭。
+- [ ] macOS和Windows安装包各自有原生启动验收；未验平台保持待验。
+- [ ] 正式发布前完成代码签名；调试或未签名产物不得写成已发布。
+- [x] 隐私文档与匿名上传行为一致。
