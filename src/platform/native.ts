@@ -1,5 +1,5 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
-import type { BulkSaveResult, CompressionResult, LiteAdapter, ProgressEvent, SourceFile } from '../core/lite/types';
+import type { BulkOverwriteResult, BulkSaveResult, CompressionResult, LiteAdapter, ProgressEvent, SourceFile } from '../core/lite/types';
 
 export type NativeInvoke = <T = unknown>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -14,6 +14,8 @@ export function createNativeAdapter(invoke: NativeInvoke = tauriInvoke): LiteAda
     cancel: taskId => invoke<void>('cancel_compression', { taskId }),
     save: (tempFileId, suggestedName) => invoke<{ saved: boolean }>('save_temp_file', { tempFileId, suggestedName }),
     saveResults: tempFileIds => invoke<BulkSaveResult>('save_results', { tempFileIds }),
+    overwrite: tempFileId => invoke<{ overwritten: boolean }>('overwrite_temp_file', { tempFileId }),
+    overwriteResults: tempFileIds => invoke<BulkOverwriteResult>('overwrite_results', { tempFileIds }),
     cleanup: sessionId => invoke<void>('cleanup_temp_files', { sessionId })
   };
 }

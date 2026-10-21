@@ -23,6 +23,12 @@ export interface BulkSaveResult {
   canceled: boolean;
 }
 
+export interface BulkOverwriteResult {
+  overwritten: number;
+  failed: BulkSaveResult['failed'];
+  canceled: boolean;
+}
+
 export interface LiteAdapter {
   desktop: boolean;
   chooseFiles(): Promise<SourceFile[]>;
@@ -32,7 +38,14 @@ export interface LiteAdapter {
   cancel(taskId: string): Promise<void>;
   save(tempFileId: string, suggestedName: string): Promise<{ saved: boolean }>;
   saveResults(tempFileIds: string[]): Promise<BulkSaveResult>;
+  overwrite(tempFileId: string): Promise<{ overwritten: boolean }>;
+  overwriteResults(tempFileIds: string[]): Promise<BulkOverwriteResult>;
   cleanup(sessionId: string): Promise<void>;
 }
 
-export interface ProgressEvent { taskId: string; stage: 'uploading' | 'downloading' }
+export interface ProgressEvent {
+  taskId: string;
+  stage: 'uploading' | 'processing' | 'downloading' | 'verifying';
+  transferred?: number;
+  total?: number;
+}

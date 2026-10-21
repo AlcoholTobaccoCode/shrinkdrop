@@ -33,6 +33,8 @@ function fixture(desktop = true) {
     cancel: vi.fn(async () => undefined),
     save: vi.fn(async () => ({ saved: true })),
     saveResults: vi.fn(async ids => ({ saved: ids.length, failed: [], canceled: false })),
+    overwrite: vi.fn(async () => ({ overwritten: true })),
+    overwriteResults: vi.fn(async ids => ({ overwritten: ids.length, failed: [], canceled: false })),
     cleanup: vi.fn(async () => undefined)
   };
   let serial = 0;
@@ -47,6 +49,48 @@ describe('TinyPNG Lite session', () => {
     await session.importSources([source('a')]);
     expect(session.state.items[0]).toMatchObject({ status: 'draft', thumbnailUrl: 'blob:1' });
     expect(adapter.compress).not.toHaveBeenCalled();
+  });
+
+  it('auto compression is opt-in, starts existing drafts and keeps at most five active requests', async () => {
+    const { session, requests } = fixture();
+    expect(session.state.autoCompress).toBe(false);
+    await session.importSources(Array.from({ length: 7 }, (_, index) => source(String(index))));
+    expect(requests).toHaveLength(0);
+    session.setAutoCompress(true);
+    expect(requests).toHaveLength(5);
+    expect(session.state.items.filter(item => item.status === 'queued')).toHaveLength(2);
+    requests[0]!.gate.resolve(output('0')); await flush();
+    requests[1]!.gate.resolve(output('1')); await flush();
+    requests.forEach(request => request.gate.resolve(output(request.sourceId)));
+    await session.whenIdle();
+  });
+
+  it('auto compression starts newly imported images before slow thumbnails finish', async () => {
+    const { session, requests, adapter } = fixture();
+    const reading = deferred<Uint8Array>();
+    vi.mocked(adapter.readFile).mockReturnValue(reading.promise);
+    session.setAutoCompress(true);
+    const importing = session.importSources([source('a')]);
+    expect(requests).toHaveLength(1);
+    reading.resolve(new Uint8Array([1])); await importing;
+    requests[0]!.gate.resolve(output('a')); await session.whenIdle();
+    session.setAutoCompress(false);
+    await session.importSources([source('b')]);
+    expect(session.state.items[1]!.status).toBe('draft');
+    expect(requests).toHaveLength(1);
+  });
+
+  it('turning auto compression off preserves active work and never retries failed or canceled rows', async () => {
+    const { session, requests } = fixture();
+    session.setAutoCompress(true); await session.importSources([source('a'), source('b')]);
+    session.setAutoCompress(false);
+    expect(session.state.items[0]!.status).toBe('processing');
+    requests[0]!.gate.reject('HTTP 401');
+    await session.cancel(session.state.items[1]!.id);
+    requests[1]!.gate.resolve(output('b')); await session.whenIdle();
+    session.setAutoCompress(true);
+    expect(requests).toHaveLength(2);
+    expect(session.state.items.map(item => item.status)).toEqual(['failed', 'canceled']);
   });
 
   it.each(['files', 'directory'] as const)('reports the native empty-import reason for %s selection', async kind => {
@@ -407,6 +451,83 @@ describe('TinyPNG Lite session', () => {
     expect(session.state.notice).toBe('已取消保存。');
   });
 
+  it('single overwrite cancellation leaves the result and original status unchanged', async () => {
+    const { session, adapter, requests } = fixture();
+    await session.importSources([source('a')]); session.start();
+    requests[0]!.gate.resolve(output('a')); await session.whenIdle();
+    vi.mocked(adapter.overwrite).mockResolvedValueOnce({ overwritten: false });
+    const item = session.state.items[0]!;
+    await session.overwrite(item.id);
+    expect(item.overwritten).toBe(false);
+    expect(item.result?.tempFileId).toBe('temp-a');
+    expect(session.state.notice).toBe('已取消覆盖，原图未修改。');
+    await session.overwrite(item.id);
+    expect(item.overwritten).toBe(true);
+    expect(adapter.overwrite).toHaveBeenCalledTimes(2);
+    expect(adapter.compress).toHaveBeenCalledTimes(1);
+  });
+
+  it('overwrite blocks duplicate dialogs and clearing until native confirmation and replacement settle', async () => {
+    const { session, adapter, requests } = fixture();
+    await session.importSources([source('a')]); session.start();
+    requests[0]!.gate.resolve(output('a')); await session.whenIdle();
+    const gate = deferred<{ overwritten: boolean }>();
+    vi.mocked(adapter.overwrite).mockReturnValue(gate.promise);
+    const replacing = session.overwrite(session.state.items[0]!.id);
+    expect(session.summary.value.saving).toBe(true);
+    await session.overwrite(session.state.items[0]!.id);
+    expect(await session.clear()).toBe(false);
+    expect(adapter.overwrite).toHaveBeenCalledTimes(1);
+    gate.resolve({ overwritten: true }); await replacing;
+    expect(session.summary.value.saving).toBe(false);
+    expect(session.state.items[0]!.overwritten).toBe(true);
+  });
+
+  it('partial batch overwrite reports failures by result id and retries only remaining rows', async () => {
+    const { session, adapter, requests } = fixture();
+    await session.importSources([source('a'), source('b')]); session.start();
+    requests.forEach(request => request.gate.resolve(output(request.sourceId))); await session.whenIdle();
+    vi.mocked(adapter.overwriteResults).mockResolvedValueOnce({
+      overwritten: 1, failed: [{ id: 'temp-b', name: 'b.png', message: '原图已被修改，请重新导入并压缩后再覆盖' }], canceled: false
+    });
+    await session.overwriteAll();
+    expect(session.state.items[0]!.overwritten).toBe(true);
+    expect(session.state.items[1]!.overwritten).toBe(false);
+    expect(session.state.items[1]!.overwriteError).toContain('原图已被修改');
+    expect(session.state.notice).toMatch(/1.*1/);
+    await session.overwriteAll();
+    expect(adapter.overwriteResults).toHaveBeenLastCalledWith(['temp-b']);
+    expect(session.state.items[1]!.overwritten).toBe(true);
+    expect(session.state.items[1]!.overwriteError).toBeUndefined();
+    expect(adapter.compress).toHaveBeenCalledTimes(2);
+  });
+
+  it('canceling batch overwrite never marks rows overwritten and allows saving copies', async () => {
+    const { session, adapter, requests } = fixture();
+    await session.importSources([source('a')]); session.start();
+    requests[0]!.gate.resolve(output('a')); await session.whenIdle();
+    vi.mocked(adapter.overwriteResults).mockResolvedValue({ overwritten: 0, failed: [], canceled: true });
+    await session.overwriteAll();
+    expect(session.state.items[0]!.overwritten).toBe(false);
+    expect(session.state.notice).toBe('已取消覆盖，原图未修改。');
+    await session.save(session.state.items[0]!.id);
+    expect(session.state.items[0]!.saved).toBe(true);
+  });
+
+  it('unknown overwrite errors are friendly and retry never uploads again', async () => {
+    const { session, adapter, requests } = fixture();
+    await session.importSources([source('a')]); session.start();
+    requests[0]!.gate.resolve(output('a')); await session.whenIdle();
+    vi.mocked(adapter.overwrite).mockRejectedValueOnce('<html>disk full</html>');
+    const item = session.state.items[0]!;
+    await session.overwrite(item.id);
+    expect(item.overwriteError).toBe('覆盖失败，请检查原图权限或可用空间后重试。');
+    expect(item.status).toBe('completed');
+    await session.overwrite(item.id);
+    expect(item.overwritten).toBe(true);
+    expect(adapter.compress).toHaveBeenCalledTimes(1);
+  });
+
   it('retains completed output and reports an increased size truthfully', async () => {
     const { session, requests } = fixture();
     await session.importSources([source('a')]); session.start();
@@ -433,5 +554,24 @@ describe('TinyPNG Lite session', () => {
     expect(session.state.items[0]!.stage).toBe('uploading');
     requests[0]!.gate.resolve(output('a')); await flush();
     requests[1]!.gate.resolve(output('a')); await session.whenIdle();
+  });
+
+  it('keeps byte progress bounded, ignores stale attempts, and only completes after the result is ready', async () => {
+    const { session, requests } = fixture();
+    await session.importSources([source('a')]); session.start();
+    const item = session.state.items[0]!;
+    session.updateProgress({ taskId: requests[0]!.taskId, stage: 'uploading', transferred: 500, total: 1000 });
+    expect(item.progress).toBeGreaterThan(0);
+    expect(item.progress).toBeLessThan(0.5);
+    session.updateProgress({ taskId: requests[0]!.taskId, stage: 'processing' });
+    const waiting = item.progress;
+    session.updateProgress({ taskId: requests[0]!.taskId, stage: 'downloading', transferred: 500, total: 500 });
+    expect(item.progress).toBeGreaterThan(waiting);
+    expect(item.progress).toBeLessThan(1);
+    session.updateProgress({ taskId: requests[0]!.taskId, stage: 'downloading', transferred: -2, total: 500 });
+    expect(item.progress).toBeGreaterThan(waiting);
+    requests[0]!.gate.resolve(output('a')); await session.whenIdle();
+    expect(item.progress).toBe(1);
+    expect(item.status).toBe('completed');
   });
 });

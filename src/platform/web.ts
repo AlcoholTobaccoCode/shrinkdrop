@@ -41,6 +41,7 @@ export function createBrowserAdapter(): LiteAdapter {
     },
     compress: desktopRequired, cancel: desktopRequired,
     save: desktopRequired, saveResults: desktopRequired,
+    overwrite: desktopRequired, overwriteResults: desktopRequired,
     cleanup: async () => undefined
   };
 }

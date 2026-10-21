@@ -12,6 +12,9 @@ export interface LiteItem {
   attempt: number;
   taskId?: string;
   stage?: ProgressEvent['stage'];
+  progress: number;
+  transferred?: number;
+  transferTotal?: number;
   thumbnailUrl?: string;
   thumbnailFailed?: boolean;
   result?: CompressionResult;
@@ -21,6 +24,9 @@ export interface LiteItem {
   saving: boolean;
   saved: boolean;
   saveError?: string;
+  overwriting: boolean;
+  overwritten: boolean;
+  overwriteError?: string;
 }
 interface Attempt {
   taskId: string;
@@ -55,7 +61,7 @@ export function createLiteSession(adapter: LiteAdapter, options: SessionOptions 
   let disposePromise: Promise<void> | undefined;
   const state = reactive({
     items: [] as LiteItem[], notice: '', noticeKind: 'info' as 'info' | 'success' | 'error',
-    importing: false, clearing: false, bulkSaving: false
+    importing: false, clearing: false, bulkSaving: false, bulkOverwriting: false, autoCompress: false
   });
   const summary = computed(() => {
     const completed = state.items.filter(item => item.status === 'completed' && item.result);
@@ -66,9 +72,10 @@ export function createLiteSession(adapter: LiteAdapter, options: SessionOptions 
       completed: completed.length,
       failed: state.items.filter(item => item.status === 'failed').length,
       canceled: state.items.filter(item => item.status === 'canceled').length,
+      overwritable: completed.filter(item => !item.overwritten).length,
       originalBytes: state.items.reduce((total, item) => total + item.source.size, 0),
       savedBytes: completed.reduce((total, item) => total + item.source.size - item.result!.size, 0),
-      saving: state.bulkSaving || state.items.some(item => item.saving)
+      saving: state.bulkSaving || state.bulkOverwriting || state.items.some(item => item.saving || item.overwriting)
     };
   });
   function notify(message: string, kind: typeof state.noticeKind = 'info') {
@@ -104,7 +111,7 @@ export function createLiteSession(adapter: LiteAdapter, options: SessionOptions 
       }
       state.items.push({
         id: String(++nextId), source, status: 'draft', attempt: 0,
-        cancelPending: false, saving: false, saved: false
+        cancelPending: false, saving: false, saved: false, progress: 0, overwriting: false, overwritten: false
       });
       const item = state.items[state.items.length - 1]!;
       reads.push(thumbnails.add(async () => {
@@ -120,6 +127,7 @@ export function createLiteSession(adapter: LiteAdapter, options: SessionOptions 
     }
     if (skipped) notify(`已跳过 ${skipped} 个重复或无效文件。支持 PNG、JPEG、WebP，单张不超过 20 MB。`);
     else if (sources.length) state.notice = '';
+    if (state.autoCompress) start(false);
     await Promise.all(reads);
     state.importing = false;
   }
@@ -143,11 +151,12 @@ export function createLiteSession(adapter: LiteAdapter, options: SessionOptions 
     attempts.set(item.id, attempt);
     Object.assign(item, {
       status: 'queued', taskId: attempt.taskId, stage: undefined, result: undefined,
-      error: undefined, cancelError: undefined, cancelPending: false, saved: false, saveError: undefined
+      error: undefined, cancelError: undefined, cancelPending: false, saved: false, saveError: undefined,
+      progress: 0, transferred: undefined, transferTotal: undefined, overwritten: false, overwriteError: undefined
     });
     void queue.add(async () => {
       if (!current(item, attempt)) return;
-      item.status = 'processing'; item.stage = 'uploading';
+      item.status = 'processing'; item.stage = 'uploading'; item.progress = 0.02;
       try {
         const result = await adapter.compress(item.source.id, attempt.taskId);
         if (attempt.cancelPromise) await attempt.cancelPromise;
@@ -155,7 +164,7 @@ export function createLiteSession(adapter: LiteAdapter, options: SessionOptions 
         if (!result.tempFileId || !Number.isFinite(result.size) || result.size <= 0) {
           throw new Error('invalid result');
         }
-        item.result = result; item.status = 'completed'; item.stage = undefined;
+        item.result = result; item.status = 'completed'; item.stage = undefined; item.progress = 1;
         item.cancelError = undefined;
       } catch (error) {
         if (attempt.cancelPromise) await attempt.cancelPromise;
@@ -168,10 +177,15 @@ export function createLiteSession(adapter: LiteAdapter, options: SessionOptions 
       // 排队期间取消会拒绝队列 Promise，此时状态已由 cancel 更新。
     });
   }
-  function start() {
+  function start(clearNotice = true) {
     if (!adapter.desktop || disposed || state.clearing) return;
-    state.notice = '';
+    if (clearNotice) state.notice = '';
     state.items.filter(item => item.status === 'draft').forEach(enqueue);
+  }
+  function setAutoCompress(enabled: boolean) {
+    if (!adapter.desktop || disposed || state.clearing) return;
+    state.autoCompress = enabled;
+    if (enabled) start();
   }
   function retry(id: string) {
     const item = find(id);
@@ -209,7 +223,18 @@ export function createLiteSession(adapter: LiteAdapter, options: SessionOptions 
   function updateProgress(event: ProgressEvent) {
     if (disposed) return;
     const item = state.items.find(item => item.taskId === event.taskId);
-    if (item?.status === 'processing' && !item.cancelPending) item.stage = event.stage;
+    if (item?.status !== 'processing' || item.cancelPending) return;
+    if (!['uploading', 'processing', 'downloading', 'verifying'].includes(event.stage)) return;
+    const hasBytes = Number.isFinite(event.transferred) && event.transferred! >= 0
+      && Number.isFinite(event.total) && event.total! > 0;
+    const ratio = hasBytes ? Math.min(event.transferred! / event.total!, 1) : 0;
+    const progress = { uploading: 0.02 + ratio * 0.4, processing: 0.45,
+      downloading: 0.65 + ratio * 0.3, verifying: 0.97 }[event.stage];
+    item.stage = event.stage;
+    item.transferred = hasBytes ? Math.min(event.transferred!, event.total!) : undefined;
+    item.transferTotal = hasBytes ? event.total : undefined;
+    // 阶段占比只驱动视觉填充；厂商处理期间不编造百分比，也不因切换站点倒退。
+    item.progress = Math.max(item.progress, progress);
   }
   //#endregion
 
@@ -222,7 +247,7 @@ export function createLiteSession(adapter: LiteAdapter, options: SessionOptions 
   }
   async function save(id: string) {
     const item = find(id);
-    if (!adapter.desktop || disposed || state.clearing || state.bulkSaving
+    if (!adapter.desktop || disposed || state.clearing || summary.value.saving
       || !item?.result || item.status !== 'completed' || item.saving) return;
     item.saving = true; item.saveError = undefined;
     try {
@@ -253,6 +278,45 @@ export function createLiteSession(adapter: LiteAdapter, options: SessionOptions 
       items.forEach(item => { item.saveError = message; });
       notify(message, 'error');
     } finally { state.bulkSaving = false; }
+  }
+  //#endregion
+
+  //#region 确认后覆盖原图
+  async function overwrite(id: string) {
+    const item = find(id);
+    if (!adapter.desktop || disposed || state.clearing || summary.value.saving
+      || item?.status !== 'completed' || !item.result || item.overwritten) return;
+    item.overwriting = true; item.overwriteError = undefined;
+    try {
+      const result = await trackSave(adapter.overwrite(item.result.tempFileId));
+      if (result.overwritten) {
+        item.overwritten = true;
+        notify(`已覆盖 ${item.source.name}。`, 'success');
+      } else notify('已取消覆盖，原图未修改。');
+    } catch (error) { item.overwriteError = overwriteError(error); }
+    finally { item.overwriting = false; }
+  }
+  async function overwriteAll() {
+    if (!adapter.desktop || disposed || state.clearing || summary.value.saving) return;
+    const items = state.items.filter(item => item.status === 'completed' && item.result && !item.overwritten);
+    if (!items.length) return;
+    state.bulkOverwriting = true;
+    items.forEach(item => { item.overwriteError = undefined; });
+    try {
+      const result = await trackSave(adapter.overwriteResults(items.map(item => item.result!.tempFileId)));
+      const failed = new Map(result.failed.map(failure => [failure.id, overwriteError(failure.message)]));
+      for (const item of items) {
+        if (failed.has(item.result!.tempFileId)) item.overwriteError = failed.get(item.result!.tempFileId);
+        else if (!result.canceled && result.overwritten === items.length - failed.size) item.overwritten = true;
+      }
+      if (result.canceled) notify('已取消覆盖，原图未修改。');
+      else if (result.failed.length) notify(`已覆盖 ${result.overwritten} 张，${result.failed.length} 张覆盖失败，可单独重试。`, 'error');
+      else notify(`已覆盖 ${result.overwritten} 张原图。`, 'success');
+    } catch (error) {
+      const message = overwriteError(error);
+      items.forEach(item => { item.overwriteError = message; });
+      notify(message, 'error');
+    } finally { state.bulkOverwriting = false; }
   }
   //#endregion
 
@@ -302,8 +366,8 @@ export function createLiteSession(adapter: LiteAdapter, options: SessionOptions 
   }
   //#endregion
 
-  return { state, summary, get sessionId() { return sessionId; }, importSources, choose, start, retry, cancel, updateProgress,
-    save, saveAll, remove, clear, dispose, whenIdle: () => queue.onIdle(), notify };
+  return { state, summary, get sessionId() { return sessionId; }, importSources, choose, start, setAutoCompress, retry, cancel, updateProgress,
+    save, saveAll, overwrite, overwriteAll, remove, clear, dispose, whenIdle: () => queue.onIdle(), notify };
 }
 
 //#region 面向用户的错误反馈
@@ -371,6 +435,21 @@ const nativeSaveMessages = new Map([
 
 function saveError(error: unknown): string {
   return nativeSaveMessages.get(errorMessage(error)) ?? '保存失败，请检查目标文件夹或可用空间后重试。';
+}
+const nativeOverwriteMessages = new Set([
+  '压缩结果已失效，请重新处理',
+  '压缩结果无法读取，请重新处理',
+  '原图已被修改，请重新导入并压缩后再覆盖',
+  '原图已不存在或位置改变，请重新导入',
+  '原图为只读文件，请修改权限后重试',
+  '无法读取原图，请检查文件权限',
+  '覆盖失败，原图未修改，请检查目录权限或可用空间',
+  '覆盖失败，原图未修改，请关闭占用图片的程序后重试',
+  '此结果无法关联原图，请重新导入并压缩'
+]);
+function overwriteError(error: unknown): string {
+  const message = errorMessage(error);
+  return nativeOverwriteMessages.has(message) ? message : '覆盖失败，请检查原图权限或可用空间后重试。';
 }
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === 'string' ? error : '';

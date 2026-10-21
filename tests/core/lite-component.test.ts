@@ -25,4 +25,10 @@ describe('browser preview screen', () => {
     expect(html).toMatch(/<button[^>]*disabled[^>]*>[\s\S]*?保存全部/);
     expect(html).toContain('拖入图片');
   });
+  it('renders an opt-in upload switch and the explicit overwrite privacy copy', () => {
+    expect(html).toContain('上传自动压缩');
+    expect(html).toMatch(/role="switch"[^>]*aria-checked="false"/);
+    expect(html).toContain('批量覆盖');
+    expect(html).toContain('除非手动覆盖，原图不会被修改');
+  });
 });

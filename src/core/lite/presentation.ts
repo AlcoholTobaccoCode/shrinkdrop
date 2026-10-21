@@ -17,7 +17,16 @@ export function sizeChange(original: number, output: number) {
 
 export function statusLabel(item: LiteItem): string {
   if (item.cancelPending) return '正在取消';
-  if (item.status === 'processing') return item.stage === 'downloading' ? '正在下载' : '正在上传';
+  if (item.status === 'processing') {
+    const label = { uploading: '正在上传', processing: '正在压缩', downloading: '正在下载', verifying: '正在校验' }[item.stage ?? 'uploading'];
+    if ((item.stage === 'uploading' || item.stage === 'downloading')
+      && item.transferTotal && item.transferred !== undefined) {
+      return `${label} ${Math.floor(item.transferred / item.transferTotal * 100)}%`;
+    }
+    return label;
+  }
+  if (item.overwriting) return '正在确认并覆盖';
+  if (item.status === 'completed' && item.overwritten) return '已覆盖原图';
   if (item.status === 'completed' && item.saved) return '已保存';
   return { draft: '待开始', queued: '等待压缩', completed: '已完成', canceled: '已取消', failed: '压缩失败' }[item.status];
 }

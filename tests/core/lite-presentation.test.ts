@@ -19,6 +19,12 @@ describe('readable image feedback', () => {
     item.cancelPending = false;
     expect(statusLabel(item)).toBe('正在上传');
     item.stage = 'downloading'; expect(statusLabel(item)).toBe('正在下载');
+    item.transferred = 250; item.transferTotal = 1000;
+    expect(statusLabel(item)).toBe('正在下载 25%');
+    item.stage = 'processing'; expect(statusLabel(item)).toBe('正在压缩');
+    item.stage = 'verifying'; expect(statusLabel(item)).toBe('正在校验');
     item.status = 'canceled'; expect(statusLabel(item)).toBe('已取消');
+    item.status = 'completed'; item.overwritten = true;
+    expect(statusLabel(item)).toBe('已覆盖原图');
   });
 });
