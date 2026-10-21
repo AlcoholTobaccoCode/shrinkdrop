@@ -1,4 +1,6 @@
 import type { LiteAdapter, SourceFile } from '../core/lite/types';
+import type { ShareAdapter } from '../core/share/types';
+import { emptyShareStatus } from '../core/share/types';
 import { createUUID } from '../core/lite/id';
 
 //#region 浏览器文件预览
@@ -43,6 +45,24 @@ export function createBrowserAdapter(): LiteAdapter {
     save: desktopRequired, saveResults: desktopRequired,
     overwrite: desktopRequired, overwriteResults: desktopRequired,
     cleanup: async () => undefined
+  };
+}
+//#endregion
+
+//#region 浏览器预览的分享占位
+export function createBrowserShareAdapter(): ShareAdapter {
+  const desktopRequired = async (): Promise<never> => { throw new Error('局域网分享需要桌面版。'); };
+  return {
+    desktop: false,
+    status: async () => emptyShareStatus(),
+    start: desktopRequired,
+    stop: async () => emptyShareStatus(),
+    addFiles: desktopRequired,
+    removeFile: desktopRequired,
+    pickFiles: desktopRequired,
+    qrSvg: desktopRequired,
+    onStatus: async () => () => {},
+    setTitle: async title => { if (typeof document !== 'undefined') document.title = title; }
   };
 }
 //#endregion

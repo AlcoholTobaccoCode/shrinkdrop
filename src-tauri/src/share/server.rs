@@ -1,6 +1,6 @@
 //! 分享服务的 HTTP 路由、鉴权与安全响应头。
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use axum::extract::{Path, Request, State};
 use axum::http::{header, HeaderName, HeaderValue, StatusCode};
@@ -22,7 +22,7 @@ const CSP: &str = "default-src 'none'; style-src 'self'; script-src 'self'; img-
 #[derive(Clone)]
 pub struct Context {
     pub token: Arc<String>,
-    pub files: Arc<Vec<SharedFile>>,
+    pub files: Arc<RwLock<Vec<SharedFile>>>,
     pub port: u16,
 }
 
@@ -116,9 +116,13 @@ async fn list_files(
     Path(token): Path<String>,
 ) -> Json<Vec<FileView>> {
     let base = format!("/s/{token}");
+    let files = context
+        .files
+        .read()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
     Json(
-        context
-            .files
+        files
             .iter()
             .map(|file| FileView {
                 id: file.id,
@@ -135,15 +139,22 @@ async fn download(
     Path((_token, id)): Path<(String, u32)>,
     request: Request,
 ) -> Response {
-    let Some(file) = context.files.iter().find(|file| file.id == id) else {
-        return StatusCode::NOT_FOUND.into_response();
+    let (path, name) = {
+        let files = match context.files.read() {
+            Ok(files) => files,
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+        let Some(file) = files.iter().find(|file| file.id == id) else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        (file.path.clone(), file.name.clone())
     };
 
-    let mut response = match ServeFile::new(&file.path).oneshot(request).await {
+    let mut response = match ServeFile::new(&path).oneshot(request).await {
         Ok(response) => response.map(axum::body::Body::new),
         Err(_) => return StatusCode::NOT_FOUND.into_response(),
     };
-    if let Ok(value) = HeaderValue::from_str(&content_disposition(&file.name)) {
+    if let Ok(value) = HeaderValue::from_str(&content_disposition(&name)) {
         response
             .headers_mut()
             .insert(header::CONTENT_DISPOSITION, value);

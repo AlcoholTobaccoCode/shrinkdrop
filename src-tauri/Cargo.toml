@@ -29,3 +29,4 @@ axum = "0.8"
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs"] }
 if-addrs = "0.13"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }

@@ -1,6 +1,6 @@
 # File Share 设计（局域网分享面）
 
-日期：2026-10-21。状态：P0 已完成，P1 待开始。
+日期：2026-10-21。状态：P0、P1 已完成，P2 待开始。
 
 参考项目：[file-share](https://github.com/cky-thinker/file-share)（Electron/uTools + Express + Vue 访客页，MIT）。只借鉴能力与协议形状，服务端与访客页均重写。
 
@@ -39,7 +39,7 @@ src-tauri/src/share/
 
 - 服务在 `tauri::async_runtime` 的 tokio 上运行；`watch` 通道通知优雅关闭，2 秒后强制 abort。
 - `ShareManager` 持有 `Option<Running>`；分享列表在停止后仍保留，重启复用。
-- 状态变化通过 `share://status` 事件推给前端；访客侧通过 SSE。
+- 状态变化通过 `share-status` 事件推给前端；访客侧通过 SSE。
 - 访客页独立 Vite 入口 `share-web/`，构建产物用 `include_dir!` 嵌入二进制（预计 gzip 后 60~90KB）。
 
 ## 数据模型
@@ -137,7 +137,15 @@ stopped → starting → running { url, port } → stopping → stopped
 - 已实现：进程内 axum 起停、32 位十六进制 token、Host 与端口校验、内嵌访客页（HTML/CSS/JS 分离）、文件列表、单文件 Range 下载、`Content-Disposition`、`nosniff` / CSP / `X-Frame-Options`、关窗即停、局域网地址探测（过滤虚拟网卡）。
 - 测试：`cargo test --lib` 47 项通过（新增 8 项：token 长度、Host 白名单、token 路径匹配、文件名编码、空文件拒绝、列表与 206、错误 token 404、外站 Host 403）。
 - 体积：release 二进制 11.2MB → 13.2MB（+1.94MB）；手动 `strip` 后 9.2MB → 11.0MB（+1.83MB）。后续可在发布 profile 打开 `strip` 抵消这部分增长。
-- 未做：桌面分享面、翻面动效、二维码、上传、PIN/账号、SSE（P1~P3）。
+- 当时未做：桌面分享面、翻面动效、二维码、上传、PIN/账号、SSE（已在 P1 补上前四项）。
+
+## P1 结果（2026-10-21）
+
+- 已实现：顶部「压缩 / 分享」两段开关与整卡 3D 翻面；品牌名与窗口标题随面切换；分享面起停、追加/移除文件、复制链接、SVG 二维码、状态与错误提示；两面保持挂载，翻面不打断压缩队列。
+- 原生端新增 `share_pick_files`、`share_add_files`、`share_remove_file`、`share_qr_svg`、`share_set_title`；运行中列表用 `RwLock` 动态更新，状态通过 `share-status` 事件同步。
+- 修复：运行中追加文件时 ID 从 1 重新分配，删除一项会连带删掉同 ID 的旧文件；现在从已有最大 ID 递增。
+- 验证：vitest 94 项、cargo test 50 项通过；Mac 实测翻面与标题切换，真实分享 `docs/panda.avif`：页面 200、列表 JSON 正确、下载 SHA256 与源文件一致、Range 206、错误 token 404、外站 Host 403、停止后端口释放。
+- 未做：访客页仍是 P0 的移动优先单页（目录、搜索、上传、SSE、中英在 P2）；PIN 与账号在 P3；压缩结果直连分享在 P4。
 
 ## 测试
 

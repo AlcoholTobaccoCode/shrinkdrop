@@ -1,5 +1,6 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import type { BulkOverwriteResult, BulkSaveResult, CompressionResult, LiteAdapter, ProgressEvent, SourceFile } from '../core/lite/types';
+import type { ShareAdapter, ShareStatus } from '../core/share/types';
 
 export type NativeInvoke = <T = unknown>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -40,5 +41,25 @@ export async function connectDesktopEvents(handlers: {
     }));
     return () => unlisten.forEach(stop => stop());
   } catch (error) { unlisten.forEach(stop => stop()); throw error; }
+}
+//#endregion
+
+//#region 局域网分享接口
+export function createNativeShareAdapter(invoke: NativeInvoke = tauriInvoke): ShareAdapter {
+  return {
+    desktop: true,
+    status: () => invoke<ShareStatus>('share_status'),
+    start: paths => invoke<ShareStatus>('share_start', { paths }),
+    stop: () => invoke<ShareStatus>('share_stop'),
+    addFiles: paths => invoke<ShareStatus>('share_add_files', { paths }),
+    removeFile: id => invoke<ShareStatus>('share_remove_file', { id }),
+    pickFiles: () => invoke<string[]>('share_pick_files'),
+    qrSvg: url => invoke<string>('share_qr_svg', { url }),
+    onStatus: async handler => {
+      const { listen } = await import('@tauri-apps/api/event');
+      return listen<ShareStatus>('share-status', event => handler(event.payload));
+    },
+    setTitle: title => invoke<void>('share_set_title', { title })
+  };
 }
 //#endregion

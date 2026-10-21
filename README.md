@@ -1,6 +1,6 @@
 # TinyPNG Lite
 
-一个只做图片压缩的轻量桌面客户端。界面参考 [uTools TinyPNG 插件](https://github.com/csj8520/utools-plugin-tinypng)。
+一个只做图片压缩的轻量桌面客户端，并内置一个局域网分享面（File Share）。界面参考 [uTools TinyPNG 插件](https://github.com/csj8520/utools-plugin-tinypng)。
 
 ## 使用
 
@@ -16,6 +16,16 @@
 客户端直接使用 TinyPNG/TinyJPG/Tinify 匿名网页服务，无需 API key 或自用 Server。压缩图片会上传到这些厂商服务；输入格式和图片尺寸保持原样。
 
 请求沿用参考项目的站点切换与请求头处理，最多尝试3个固定站点，总超时60秒。网页接口可能拒绝请求，列表会显示错误；点击重试仍使用匿名线路。
+
+## 局域网分享（File Share）
+
+顶部「压缩 / 分享」可整卡翻面切换。两面同时挂载，翻到分享面时压缩队列继续跑，分享运行期间也可以随时切回复制结果。
+
+1. 在分享面点击「选择文件」，选中的文件立即开始分享。
+2. 桌面显示 `http://<局域网 IP>:5421/s/<会话令牌>` 链接和二维码；手机与电脑连同一个 Wi-Fi，扫码或打开链接即可下载。
+3. 运行中可以继续添加文件或移除单个文件；点击「停止分享」立即释放端口，旧链接失效。
+
+不做云中转，文件只在这台电脑与访问者之间传输。当前阶段只支持分享文件，暂不支持文件夹、网页上传、PIN 和账号权限；浏览器预览版无法开启分享。
 
 ## 开发与构建
 
@@ -38,10 +48,10 @@ pnpm tauri build
 
 ## 分支
 
-- `main`：轻量压缩客户端，当前默认分支。前端只保留Vue和Tauri API；Rust负责网络、文件注册、取消及原生保存。
+- `main`：轻量压缩客户端与局域网分享面，当前默认分支。前端只保留Vue和Tauri API；Rust负责压缩网络、文件注册、取消、原生保存与分享服务。
 - `codex/workbench-archive`：完整工作台，保存于提交`3b9d413`，含共享合同、Server 与历史验收。日常开发不基于此分支。
 
 更早的 10-10 骨架已归档为标签 `archive/pre-batch-split`，不再作为分支维护。
 
 
-设计与进度见 [轻量版设计](docs/lite/design.md)、[实现计划](docs/lite/plan.md)、[2026-10-20 交互补充](docs/lite/2026-10-20-enhancements.md)。实际验证见 [本次验收](docs/lite/2026-10-20-verification.md)、[初版验收](docs/lite/verification.md)。
+设计与进度见 [轻量版设计](docs/lite/design.md)、[实现计划](docs/lite/plan.md)、[2026-10-20 交互补充](docs/lite/2026-10-20-enhancements.md)、[局域网分享设计](docs/share/design.md)。实际验证见 [本次验收](docs/lite/2026-10-20-verification.md)、[初版验收](docs/lite/verification.md)。

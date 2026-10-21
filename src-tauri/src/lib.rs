@@ -49,7 +49,12 @@ pub fn run() {
             commands::overwrite_results,
             share::share_start,
             share::share_stop,
-            share::share_status
+            share::share_status,
+            share::share_add_files,
+            share::share_remove_file,
+            share::share_pick_files,
+            share::share_qr_svg,
+            share::share_set_title
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");
