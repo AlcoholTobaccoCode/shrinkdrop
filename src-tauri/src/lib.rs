@@ -4,12 +4,14 @@ mod commands;
 mod compression;
 mod file_ops;
 mod overwrite;
+mod share;
 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(file_ops::FileState::default())
         .manage(compression::CompressionState::default())
+        .manage(share::ShareManager::default())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
                 let paths = paths.clone();
@@ -31,6 +33,7 @@ pub fn run() {
             ) {
                 window.state::<compression::CompressionState>().cancel_all();
                 let _ = file_ops::cleanup_all(&window.state::<file_ops::FileState>());
+                window.state::<share::ShareManager>().shutdown_now();
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -43,7 +46,10 @@ pub fn run() {
             commands::save_temp_file,
             commands::save_results,
             commands::overwrite_temp_file,
-            commands::overwrite_results
+            commands::overwrite_results,
+            share::share_start,
+            share::share_stop,
+            share::share_status
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");
