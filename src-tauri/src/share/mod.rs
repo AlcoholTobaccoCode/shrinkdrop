@@ -10,36 +10,46 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 use tokio::net::TcpListener;
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 
 const DEFAULT_PORT: u16 = 5421;
-const MAX_SHARED_FILES: usize = 200;
+const MAX_SHARED_ITEMS: usize = 200;
 /// 停止服务时等待在途下载的时间。
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 
-/// 分享中的一个文件。真实路径只留在 Rust 侧。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ItemKind {
+    File,
+    Dir,
+}
+
+/// 分享中的一个文件或目录。真实路径只留在 Rust 侧。
 #[derive(Clone)]
-pub struct SharedFile {
+pub struct SharedItem {
     pub id: u32,
+    pub kind: ItemKind,
     pub name: String,
     pub path: PathBuf,
     pub size: u64,
+    pub modified: Option<u64>,
 }
 
-/// 下发给前端的文件描述，不含本机路径。
+/// 下发给前端的描述，不含本机路径。
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SharedFileView {
+pub struct SharedItemView {
     pub id: u32,
+    pub kind: ItemKind,
     pub name: String,
     pub size: u64,
-    pub url: String,
+    pub modified: Option<u64>,
 }
 
 #[derive(Clone, Serialize, Default)]
@@ -48,22 +58,22 @@ pub struct ShareStatus {
     pub running: bool,
     pub url: Option<String>,
     pub port: Option<u16>,
-    pub files: Vec<SharedFileView>,
+    pub items: Vec<SharedItemView>,
     /// 所有候选局域网地址，前端用于切换网卡。
     pub addresses: Vec<String>,
     pub warning: Option<String>,
 }
 
 struct Running {
+    token: String,
     url: String,
     port: u16,
-    /// 访客文件路径前缀，形如 `/s/<token>`。
-    path_base: String,
-    files: Arc<RwLock<Vec<SharedFile>>>,
+    items: Arc<RwLock<Vec<SharedItem>>>,
     next_id: AtomicU32,
     addresses: Vec<String>,
     shutdown: watch::Sender<bool>,
     task: tokio::task::JoinHandle<()>,
+    events: broadcast::Sender<()>,
 }
 
 #[derive(Default)]
@@ -71,9 +81,13 @@ pub struct ShareManager {
     running: Mutex<Option<Running>>,
 }
 
+fn shared_temp_dir(token: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("tinypng-share-{token}"))
+}
+
 impl ShareManager {
     pub async fn start(&self, paths: Vec<String>) -> Result<ShareStatus, String> {
-        let files = collect_files(paths)?;
+        let items = collect_items(paths)?;
         // 先停掉旧会话，复用同一端口与列表语义。
         let _ = self.stop().await;
 
@@ -84,15 +98,17 @@ impl ShareManager {
             .first()
             .cloned()
             .unwrap_or_else(|| "127.0.0.1".to_string());
-        let path_base = format!("/s/{token}");
-        let url = format!("http://{primary}:{port}{path_base}");
+        let url = format!("http://{primary}:{port}/s/{token}");
 
-        let next_id = files.iter().map(|file| file.id).max().unwrap_or(0) + 1;
-        let files = Arc::new(RwLock::new(files));
+        let next_id = items.iter().map(|item| item.id).max().unwrap_or(0) + 1;
+        let items = Arc::new(RwLock::new(items));
+        let (events, _) = broadcast::channel(16);
         let context = server::Context {
-            token: Arc::new(token),
-            files: files.clone(),
+            token: Arc::new(token.clone()),
+            items: items.clone(),
             port,
+            events: events.clone(),
+            zip_dir: shared_temp_dir(&token),
         };
         let app = server::router(context);
 
@@ -105,14 +121,15 @@ impl ShareManager {
         });
 
         let running = Running {
+            token,
             url,
             port,
-            path_base,
-            files,
+            items,
             next_id: AtomicU32::new(next_id),
             addresses,
             shutdown,
             task,
+            events,
         };
         let status = status_from(&running);
         *self
@@ -133,12 +150,13 @@ impl ShareManager {
             {
                 task.abort();
             }
+            let _ = fs::remove_dir_all(shared_temp_dir(&running.token));
         }
         ShareStatus::default()
     }
 
-    /// 服务运行中追加文件；重复路径会被忽略。
-    pub fn add_files(&self, paths: Vec<String>) -> Result<ShareStatus, String> {
+    /// 服务运行中追加文件或目录；重复路径会被忽略。
+    pub fn add_items(&self, paths: Vec<String>) -> Result<ShareStatus, String> {
         let guard = self
             .running
             .lock()
@@ -147,32 +165,32 @@ impl ShareManager {
             return Err("分享还没有开始".to_string());
         };
 
-        let candidates = collect_files(paths)?;
+        let candidates = collect_items(paths)?;
         {
-            let mut files = running
-                .files
+            let mut items = running
+                .items
                 .write()
                 .map_err(|_| "分享列表不可用，请重试".to_string())?;
-            if files.len() + candidates.len() > MAX_SHARED_FILES {
-                return Err(format!("一次最多分享 {MAX_SHARED_FILES} 个文件"));
+            if items.len() + candidates.len() > MAX_SHARED_ITEMS {
+                return Err(format!("一次最多分享 {MAX_SHARED_ITEMS} 项"));
             }
+            let mut changed = false;
             for candidate in candidates {
-                if files.iter().any(|file| file.path == candidate.path) {
+                if items.iter().any(|item| item.path == candidate.path) {
                     continue;
                 }
                 let id = running.next_id.fetch_add(1, Ordering::SeqCst);
-                files.push(SharedFile {
-                    id,
-                    name: candidate.name,
-                    path: candidate.path,
-                    size: candidate.size,
-                });
+                items.push(SharedItem { id, ..candidate });
+                changed = true;
+            }
+            if changed {
+                let _ = running.events.send(());
             }
         }
         Ok(status_from(running))
     }
 
-    pub fn remove_file(&self, id: u32) -> Result<ShareStatus, String> {
+    pub fn remove_item(&self, id: u32) -> Result<ShareStatus, String> {
         let guard = self
             .running
             .lock()
@@ -181,11 +199,15 @@ impl ShareManager {
             return Err("分享还没有开始".to_string());
         };
         {
-            let mut files = running
-                .files
+            let mut items = running
+                .items
                 .write()
                 .map_err(|_| "分享列表不可用，请重试".to_string())?;
-            files.retain(|file| file.id != id);
+            let before = items.len();
+            items.retain(|item| item.id != id);
+            if items.len() != before {
+                let _ = running.events.send(());
+            }
         }
         Ok(status_from(running))
     }
@@ -195,6 +217,7 @@ impl ShareManager {
         if let Some(running) = self.running.lock().ok().and_then(|mut guard| guard.take()) {
             let _ = running.shutdown.send(true);
             running.task.abort();
+            let _ = fs::remove_dir_all(shared_temp_dir(&running.token));
         }
     }
 
@@ -211,8 +234,8 @@ impl ShareManager {
 }
 
 fn status_from(running: &Running) -> ShareStatus {
-    let files = running
-        .files
+    let items = running
+        .items
         .read()
         .map(|guard| guard.clone())
         .unwrap_or_default();
@@ -220,13 +243,14 @@ fn status_from(running: &Running) -> ShareStatus {
         running: true,
         url: Some(running.url.clone()),
         port: Some(running.port),
-        files: files
+        items: items
             .iter()
-            .map(|file| SharedFileView {
-                id: file.id,
-                name: file.name.clone(),
-                size: file.size,
-                url: format!("{}/f/{}", running.path_base, file.id),
+            .map(|item| SharedItemView {
+                id: item.id,
+                kind: item.kind,
+                name: item.name.clone(),
+                size: item.size,
+                modified: item.modified,
             })
             .collect(),
         addresses: running.addresses.clone(),
@@ -242,45 +266,59 @@ fn warning_for(addresses: &[String]) -> Option<String> {
     }
 }
 
-/// 校验并登记分享文件：必须是存在的普通文件，按真实路径去重。
-fn collect_files(paths: Vec<String>) -> Result<Vec<SharedFile>, String> {
+fn modified_secs(meta: &fs::Metadata) -> Option<u64> {
+    meta.modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs())
+}
+
+/// 校验并登记分享项：文件或目录，按真实路径去重。
+fn collect_items(paths: Vec<String>) -> Result<Vec<SharedItem>, String> {
     if paths.is_empty() {
-        return Err("请先选择要分享的文件".to_string());
+        return Err("请先选择要分享的文件或文件夹".to_string());
     }
-    if paths.len() > MAX_SHARED_FILES {
-        return Err(format!("一次最多分享 {MAX_SHARED_FILES} 个文件"));
+    if paths.len() > MAX_SHARED_ITEMS {
+        return Err(format!("一次最多分享 {MAX_SHARED_ITEMS} 项"));
     }
 
     let mut seen = HashSet::new();
-    let mut files = Vec::with_capacity(paths.len());
+    let mut items = Vec::with_capacity(paths.len());
     for raw in paths {
         let path = PathBuf::from(&raw);
         let canonical = path
             .canonicalize()
-            .map_err(|_| format!("找不到文件：{}", path.display()))?;
+            .map_err(|_| format!("找不到路径：{}", path.display()))?;
         if !seen.insert(canonical.clone()) {
             continue;
         }
         let meta = fs::metadata(&canonical)
-            .map_err(|_| format!("无法读取文件：{}", canonical.display()))?;
-        if !meta.is_file() {
-            return Err(format!("暂只支持分享文件：{}", canonical.display()));
-        }
-        if meta.len() == 0 {
-            return Err(format!("文件是空的，暂时无法分享：{}", canonical.display()));
-        }
+            .map_err(|_| format!("无法读取路径：{}", canonical.display()))?;
+        let kind = if meta.is_dir() {
+            ItemKind::Dir
+        } else if meta.is_file() {
+            ItemKind::File
+        } else {
+            return Err(format!("只支持分享文件或文件夹：{}", canonical.display()));
+        };
         let name = canonical
             .file_name()
             .map(|value| value.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "文件".to_string());
-        files.push(SharedFile {
-            id: files.len() as u32 + 1,
+            .unwrap_or_else(|| "共享内容".to_string());
+        items.push(SharedItem {
+            id: items.len() as u32 + 1,
+            kind,
             name,
             path: canonical,
-            size: meta.len(),
+            size: if kind == ItemKind::File {
+                meta.len()
+            } else {
+                0
+            },
+            modified: modified_secs(&meta),
         });
     }
-    Ok(files)
+    Ok(items)
 }
 
 /// 生成 32 位十六进制会话 token。
@@ -351,23 +389,23 @@ pub async fn share_stop(
 }
 
 #[tauri::command]
-pub fn share_add_files(
+pub fn share_add_items(
     app: AppHandle,
     manager: tauri::State<'_, ShareManager>,
     paths: Vec<String>,
 ) -> Result<ShareStatus, String> {
-    let status = manager.add_files(paths)?;
+    let status = manager.add_items(paths)?;
     let _ = app.emit("share-status", status.clone());
     Ok(status)
 }
 
 #[tauri::command]
-pub fn share_remove_file(
+pub fn share_remove_item(
     app: AppHandle,
     manager: tauri::State<'_, ShareManager>,
     id: u32,
 ) -> Result<ShareStatus, String> {
-    let status = manager.remove_file(id)?;
+    let status = manager.remove_item(id)?;
     let _ = app.emit("share-status", status.clone());
     Ok(status)
 }
@@ -396,6 +434,21 @@ pub async fn share_pick_files(app: AppHandle) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+pub async fn share_pick_directory(app: AppHandle) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(folder) = app.dialog().file().blocking_pick_folder() else {
+            return Vec::new();
+        };
+        folder
+            .into_path()
+            .map(|path| vec![path.display().to_string()])
+            .unwrap_or_default()
+    })
+    .await
+    .map_err(|_| "选择文件夹失败，请重试".to_string())
+}
+
+#[tauri::command]
 pub fn share_qr_svg(url: String) -> Result<String, String> {
     qr_svg(&url)
 }
@@ -414,16 +467,26 @@ pub fn share_set_title(app: AppHandle, title: String) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    fn temp_file(name: &str, bytes: &[u8]) -> PathBuf {
+    fn temp_dir(name: &str) -> PathBuf {
         let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+            .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let dir =
             std::env::temp_dir().join(format!("tinypng-share-test-{}-{stamp}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(name);
+        dir.join(name)
+    }
+
+    fn temp_file(name: &str, bytes: &[u8]) -> PathBuf {
+        let path = temp_dir(name);
         fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    fn temp_folder(name: &str) -> PathBuf {
+        let path = temp_dir(name);
+        fs::create_dir_all(&path).unwrap();
         path
     }
 
@@ -435,10 +498,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_missing_and_empty_files() {
-        assert!(collect_files(vec![]).is_err());
-        let path = temp_file("empty.png", b"");
-        assert!(collect_files(vec![path.display().to_string()]).is_err());
+    async fn collects_files_and_folders() {
+        assert!(collect_items(vec![]).is_err());
+        assert!(collect_items(vec!["/definitely/missing/path".into()]).is_err());
+
+        let file = temp_file("one.txt", b"one");
+        let folder = temp_folder("folder");
+        let items = collect_items(vec![
+            file.display().to_string(),
+            folder.display().to_string(),
+            file.display().to_string(),
+        ])
+        .unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].kind, ItemKind::File);
+        assert_eq!(items[1].kind, ItemKind::Dir);
     }
 
     #[test]
@@ -454,13 +528,13 @@ mod tests {
     #[tokio::test]
     async fn lists_and_serves_file_with_range() {
         let path = temp_file("测试 图片.png", b"0123456789abcdef");
-        let files = collect_files(vec![path.display().to_string()]).unwrap();
-        let (base, _token, _shared) = server_tests::spawn(files).await;
+        let items = collect_items(vec![path.display().to_string()]).unwrap();
+        let (base, _token, _items) = server_tests::spawn(items).await;
         let origin = base.split("/s/").next().unwrap_or_default().to_string();
 
         let client = reqwest::Client::new();
         let list: serde_json::Value = client
-            .get(format!("{base}/api/files"))
+            .get(format!("{base}/api/items"))
             .send()
             .await
             .unwrap()
@@ -469,8 +543,10 @@ mod tests {
             .unwrap();
         assert_eq!(list.as_array().unwrap().len(), 1);
         assert_eq!(list[0]["name"], "测试 图片.png");
+        assert_eq!(list[0]["kind"], "file");
 
-        let file_url = format!("{origin}{}", list[0]["url"].as_str().unwrap());
+        let _ = origin;
+        let file_url = format!("{base}/api/download?id={}", list[0]["id"]);
         let full = client.get(&file_url).send().await.unwrap();
         assert_eq!(full.status(), reqwest::StatusCode::OK);
         let disposition = full
@@ -496,15 +572,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn live_list_reflects_added_files() {
+    async fn live_list_reflects_added_items() {
         let first = temp_file("first.txt", b"one");
         let second = temp_file("second.txt", b"two");
-        let files = collect_files(vec![first.display().to_string()]).unwrap();
-        let (base, _token, shared) = server_tests::spawn(files).await;
+        let items = collect_items(vec![first.display().to_string()]).unwrap();
+        let (base, _token, shared) = server_tests::spawn(items).await;
         let client = reqwest::Client::new();
 
         let before: Vec<serde_json::Value> = client
-            .get(format!("{base}/api/files"))
+            .get(format!("{base}/api/items"))
             .send()
             .await
             .unwrap()
@@ -513,19 +589,20 @@ mod tests {
             .unwrap();
         assert_eq!(before.len(), 1);
 
-        // 运行中追加文件后，访客列表应立即看到新条目。
         {
             let mut guard = shared.write().unwrap();
-            guard.push(SharedFile {
+            guard.push(SharedItem {
                 id: 2,
+                kind: ItemKind::File,
                 name: "second.txt".to_string(),
                 path: second,
                 size: 3,
+                modified: None,
             });
         }
 
         let after: Vec<serde_json::Value> = client
-            .get(format!("{base}/api/files"))
+            .get(format!("{base}/api/items"))
             .send()
             .await
             .unwrap()
@@ -539,7 +616,8 @@ mod tests {
     #[tokio::test]
     async fn manager_lifecycle_serves_adds_and_stops() {
         let first = temp_file("life-a.txt", b"hello");
-        let second = temp_file("life-b.txt", b"world");
+        let folder = temp_folder("life-folder");
+        fs::write(folder.join("inside.txt"), b"inside").unwrap();
         let manager = ShareManager::default();
 
         let status = manager
@@ -554,7 +632,7 @@ mod tests {
 
         let client = reqwest::Client::new();
         let listed: Vec<serde_json::Value> = client
-            .get(format!("{local}/api/files"))
+            .get(format!("{local}/api/items"))
             .send()
             .await
             .unwrap()
@@ -564,36 +642,111 @@ mod tests {
         assert_eq!(listed.len(), 1);
 
         let added = manager
-            .add_files(vec![second.display().to_string()])
+            .add_items(vec![folder.display().to_string()])
             .unwrap();
-        assert_eq!(added.files.len(), 2);
+        assert_eq!(added.items.len(), 2);
+        assert!(added.items.iter().any(|item| item.kind == ItemKind::Dir));
 
-        let removed = manager.remove_file(added.files[0].id).unwrap();
-        assert_eq!(removed.files.len(), 1);
+        let removed = manager.remove_item(added.items[0].id).unwrap();
+        assert_eq!(removed.items.len(), 1);
 
         let stopped = manager.stop().await;
         assert!(!stopped.running);
-        assert!(manager.status().files.is_empty());
+        assert!(manager.status().items.is_empty());
 
-        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        tokio::time::sleep(Duration::from_millis(120)).await;
         assert!(client
-            .get(format!("{local}/api/files"))
+            .get(format!("{local}/api/items"))
             .send()
             .await
             .is_err());
     }
 
     #[tokio::test]
+    async fn serves_directory_listing_zip_and_thumbnails() {
+        let folder = temp_folder("listing");
+        fs::create_dir_all(folder.join("sub")).unwrap();
+        fs::write(folder.join("notes.txt"), b"hi").unwrap();
+        fs::write(folder.join("sub/inner.txt"), b"inner").unwrap();
+        image::RgbImage::new(8, 8)
+            .save(folder.join("photo.png"))
+            .unwrap();
+
+        let items = collect_items(vec![folder.display().to_string()]).unwrap();
+        let (base, _token, _items) = server_tests::spawn(items).await;
+        let client = reqwest::Client::new();
+
+        let listing: serde_json::Value = client
+            .get(format!("{base}/api/list?id=1&path="))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let entries = listing["entries"].as_array().unwrap();
+        assert!(entries
+            .iter()
+            .any(|entry| entry["name"] == "sub" && entry["kind"] == "dir"));
+        assert!(entries
+            .iter()
+            .any(|entry| entry["name"] == "photo.png" && entry["thumb"] == true));
+
+        let nested: serde_json::Value = client
+            .get(format!("{base}/api/list?id=1&path=sub"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(nested["path"], serde_json::json!(["sub"]));
+        assert_eq!(nested["entries"].as_array().unwrap().len(), 1);
+
+        let zip = client
+            .get(format!("{base}/api/download?id=1&path="))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(zip.status(), reqwest::StatusCode::OK);
+        assert!(zip
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains("zip")));
+        assert!(zip.bytes().await.unwrap().starts_with(b"PK"));
+
+        let thumb = client
+            .get(format!("{base}/api/thumb?id=1&path=photo.png"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(thumb.status(), reqwest::StatusCode::OK);
+        assert_eq!(
+            thumb.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
+            "image/jpeg"
+        );
+        assert!(!thumb.bytes().await.unwrap().is_empty());
+
+        let traversal = client
+            .get(format!("{base}/api/list?id=1&path=..%2F"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(traversal.status(), reqwest::StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn rejects_wrong_token_and_foreign_host() {
         let path = temp_file("a.txt", b"hello");
-        let files = collect_files(vec![path.display().to_string()]).unwrap();
-        let (base, token, _shared) = server_tests::spawn(files).await;
+        let items = collect_items(vec![path.display().to_string()]).unwrap();
+        let (base, token, _items) = server_tests::spawn(items).await;
 
         let client = reqwest::Client::new();
         let wrong = base.replace(&token, "deadbeef");
         assert_eq!(
             client
-                .get(format!("{wrong}/api/files"))
+                .get(format!("{wrong}/api/items"))
                 .send()
                 .await
                 .unwrap()
@@ -602,7 +755,7 @@ mod tests {
         );
 
         let foreign = client
-            .get(format!("{base}/api/files"))
+            .get(format!("{base}/api/items"))
             .header(reqwest::header::HOST, "evil.example.com")
             .send()
             .await
@@ -615,21 +768,25 @@ mod tests {
         use std::sync::{Arc, RwLock};
 
         use tokio::net::TcpListener;
+        use tokio::sync::broadcast;
 
         use super::super::server;
-        use super::super::SharedFile;
+        use super::super::SharedItem;
 
         pub async fn spawn(
-            files: Vec<SharedFile>,
-        ) -> (String, String, Arc<RwLock<Vec<SharedFile>>>) {
+            items: Vec<SharedItem>,
+        ) -> (String, String, Arc<RwLock<Vec<SharedItem>>>) {
             let token = "test-token".to_string();
             let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
             let port = listener.local_addr().unwrap().port();
-            let shared = Arc::new(RwLock::new(files));
+            let shared = Arc::new(RwLock::new(items));
+            let (events, _) = broadcast::channel(16);
             let context = server::Context {
                 token: Arc::new(token.clone()),
-                files: shared.clone(),
+                items: shared.clone(),
                 port,
+                events,
+                zip_dir: std::env::temp_dir().join("tinypng-share-test-zips"),
             };
             let app = server::router(context);
             tokio::spawn(async move {

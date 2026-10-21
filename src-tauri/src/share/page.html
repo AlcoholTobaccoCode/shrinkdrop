@@ -14,15 +14,28 @@
         <span class="mark" aria-hidden="true">F</span>
         <div class="head-text">
           <h1>File Share</h1>
-          <p class="sub">同一局域网内，点击文件即可下载</p>
+          <p class="sub" data-i18n="subtitle">同一局域网内，点击文件即可下载</p>
         </div>
+        <button id="lang" class="lang" type="button" aria-label="切换语言">EN</button>
       </header>
 
-      <ul id="files" class="files" aria-live="polite">
-        <li class="empty">正在加载…</li>
-      </ul>
+      <div class="toolbar">
+        <nav id="crumbs" class="crumbs" aria-label="位置"></nav>
+        <a id="downloadDir" class="download-dir" hidden></a>
+        <label class="search">
+          <span class="search-icon" aria-hidden="true"></span>
+          <input id="search" type="search" autocomplete="off" spellcheck="false"
+            data-i18n-placeholder="search" placeholder="搜索当前文件夹" />
+        </label>
+      </div>
 
-      <footer class="foot">由 TinyPNG Lite 分享 · 文件只在你的设备与这台电脑之间传输</footer>
+      <div id="status" class="status" role="status" aria-live="polite"></div>
+      <div id="list" class="list"></div>
+
+      <footer class="foot">
+        <span data-i18n="footer">由 TinyPNG Lite 分享 · 文件只在你的设备与这台电脑之间传输</span>
+        <span id="conn" class="conn" hidden></span>
+      </footer>
     </main>
     <script src="{{BASE}}/assets/app.js"></script>
   </body>

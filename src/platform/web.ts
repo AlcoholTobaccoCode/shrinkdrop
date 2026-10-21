@@ -57,9 +57,10 @@ export function createBrowserShareAdapter(): ShareAdapter {
     status: async () => emptyShareStatus(),
     start: desktopRequired,
     stop: async () => emptyShareStatus(),
-    addFiles: desktopRequired,
-    removeFile: desktopRequired,
+    addItems: desktopRequired,
+    removeItem: desktopRequired,
     pickFiles: desktopRequired,
+    pickDirectory: desktopRequired,
     qrSvg: desktopRequired,
     onStatus: async () => () => {},
     setTitle: async title => { if (typeof document !== 'undefined') document.title = title; }

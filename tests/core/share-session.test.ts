@@ -6,14 +6,14 @@ const runningStatus = (overrides: Partial<ShareStatus> = {}): ShareStatus => ({
   running: true,
   url: 'http://192.168.1.5:5421/s/token',
   port: null,
-  files: [{ id: 1, name: 'a.png', size: 1024, url: '/s/token/f/1' }],
+  items: [{ id: 1, kind: 'file', name: 'a.png', size: 1024, modified: null }],
   addresses: ['192.168.1.5'],
   warning: null,
   ...overrides
 });
 
 const stoppedStatus = (): ShareStatus => ({
-  running: false, url: null, port: null, files: [], addresses: [], warning: null
+  running: false, url: null, port: null, items: [], addresses: [], warning: null
 });
 
 const flush = async () => { for (let index = 0; index < 6; index++) await Promise.resolve(); };
@@ -25,14 +25,15 @@ function fixture() {
     status: vi.fn(async () => stoppedStatus()),
     start: vi.fn(async () => runningStatus()),
     stop: vi.fn(async () => stoppedStatus()),
-    addFiles: vi.fn(async () => runningStatus({
-      files: [
-        { id: 1, name: 'a.png', size: 1024, url: '/s/token/f/1' },
-        { id: 2, name: 'b.png', size: 2048, url: '/s/token/f/2' }
+    addItems: vi.fn(async () => runningStatus({
+      items: [
+        { id: 1, kind: 'file', name: 'a.png', size: 1024, modified: null },
+        { id: 2, kind: 'dir', name: 'photos', size: 0, modified: null }
       ]
     })),
-    removeFile: vi.fn(async () => runningStatus({ files: [] })),
+    removeItem: vi.fn(async () => runningStatus({ items: [] })),
     pickFiles: vi.fn(async () => ['/tmp/a.png']),
+    pickDirectory: vi.fn(async () => ['/tmp/photos']),
     qrSvg: vi.fn(async () => '<svg></svg>'),
     onStatus: vi.fn(async handler => { push = handler; return () => {}; }),
     setTitle: vi.fn(async () => {})
@@ -62,7 +63,7 @@ describe('share session', () => {
     expect(session.state.phase).toBe('running');
     expect(session.running.value).toBe(true);
     expect(session.state.url).toContain('/s/token');
-    expect(session.state.files).toHaveLength(1);
+    expect(session.state.items).toHaveLength(1);
     expect(session.state.qr).toBe('<svg></svg>');
     expect(session.port.value).toBe(5421);
   });
@@ -91,11 +92,12 @@ describe('share session', () => {
     const session = createShareSession(adapter);
     await session.pickAndShare();
     await session.addFiles();
-    expect(session.state.files).toHaveLength(2);
+    expect(session.state.items).toHaveLength(2);
+    expect(session.state.items[1].kind).toBe('dir');
 
     await session.remove(1);
-    expect(adapter.removeFile).toHaveBeenCalledWith(1);
-    expect(session.state.files).toHaveLength(0);
+    expect(adapter.removeItem).toHaveBeenCalledWith(1);
+    expect(session.state.items).toHaveLength(0);
   });
 
   it('stops sharing and clears the link', async () => {
@@ -108,13 +110,22 @@ describe('share session', () => {
     expect(session.state.qr).toBe('');
   });
 
+  it('starts sharing a folder through the directory picker', async () => {
+    const { adapter } = fixture();
+    const session = createShareSession(adapter);
+    await session.pickAndShareFolder();
+    expect(adapter.pickDirectory).toHaveBeenCalledOnce();
+    expect(adapter.start).toHaveBeenCalledWith(['/tmp/photos']);
+    expect(session.state.phase).toBe('running');
+  });
+
   it('applies pushed status events', async () => {
     const { adapter, emit } = fixture();
     const session = createShareSession(adapter);
     await session.connect();
-    emit(runningStatus({ files: [] }));
+    emit(runningStatus({ items: [] }));
     await flush();
     expect(session.state.phase).toBe('running');
-    expect(session.state.files).toHaveLength(0);
+    expect(session.state.items).toHaveLength(0);
   });
 });

@@ -135,6 +135,10 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); share.dis
             <button class="button" :disabled="shareState.phase !== 'running' || shareState.adding" @click="share.addFiles()">
               <LiteIcon name="plus" />添加文件
             </button>
+            <button class="button button--icon" :disabled="shareState.phase !== 'running' || shareState.adding"
+              aria-label="添加文件夹" title="添加文件夹" @click="share.addFolder()">
+              <LiteIcon name="folder" />
+            </button>
             <button class="button button--quiet" :disabled="shareState.phase === 'stopping'" @click="share.stop()">
               {{ shareState.phase === 'stopping' ? '正在停止' : '停止分享' }}
             </button>
@@ -251,8 +255,8 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); share.dis
                 <div class="share-copy">
                   <strong>{{ shareRunning ? '正在分享' : shareBusy ? '正在准备' : '分享未开始' }}</strong>
                   <p>{{ shareRunning
-                    ? `已分享 ${shareState.files.length} 个文件，手机扫码即可下载`
-                    : '手机与电脑连同一个 Wi-Fi，选择文件后扫码下载' }}</p>
+                    ? `已分享 ${shareState.items.length} 项，手机扫码即可下载`
+                    : '手机与电脑连同一个 Wi-Fi，选择文件或文件夹后扫码下载' }}</p>
                 </div>
                 <span v-if="shareRunning && sharePort" class="share-port">端口 {{ sharePort }}</span>
               </div>
@@ -275,34 +279,41 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); share.dis
                     <span v-else class="share-qr-hint">{{ shareState.qrError ? '二维码生成失败，请用链接访问' : '正在生成二维码…' }}</span>
                   </div>
                   <div class="share-files">
-                    <ul class="share-list" aria-label="已分享文件">
-                      <li v-for="file in shareState.files" :key="file.id" class="share-row">
-                        <span class="share-name" :title="file.name">{{ file.name }}</span>
-                        <span class="share-size">{{ formatBytes(file.size) }}</span>
-                        <button class="icon-button" :aria-label="`移除 ${file.name}`" :disabled="!desktop" @click="share.remove(file.id)"><LiteIcon name="close" /></button>
+                    <ul class="share-list" aria-label="已分享内容">
+                      <li v-for="item in shareState.items" :key="item.id" class="share-row">
+                        <span class="share-name" :title="item.name">{{ item.name }}</span>
+                        <span class="share-size">{{ item.kind === 'dir' ? '文件夹' : formatBytes(item.size) }}</span>
+                        <button class="icon-button" :aria-label="`移除 ${item.name}`" :disabled="!desktop" @click="share.remove(item.id)"><LiteIcon name="close" /></button>
                       </li>
                     </ul>
-                    <p v-if="!shareState.files.length" class="share-empty-hint">列表已清空，点右上角「添加文件」继续。</p>
+                    <p v-if="!shareState.items.length" class="share-empty-hint">列表已清空，点右上角「添加文件」继续。</p>
                   </div>
                 </div>
               </template>
 
-              <button v-else class="drop-zone drop-zone--empty share-empty"
-                :disabled="!desktop || shareBusy" @click="share.pickAndShare()">
+              <div v-else class="drop-zone drop-zone--empty share-empty">
                 <span class="drop-icon"><LiteIcon name="upload" /></span>
-                <strong>{{ shareBusy ? '正在准备分享链接' : desktop ? '选择文件，立即开始分享' : '桌面版才能开启分享' }}</strong>
-                <span>任意类型文件 · 单次最多 200 个</span>
+                <strong>{{ shareBusy ? '正在准备分享链接' : desktop ? '选择内容，立即开始分享' : '桌面版才能开启分享' }}</strong>
+                <span>文件或文件夹 · 单次最多 200 项</span>
+                <div class="share-empty-actions">
+                  <button class="button button--primary" :disabled="!desktop || shareBusy" @click="share.pickAndShare()">
+                    <LiteIcon name="plus" />选择文件
+                  </button>
+                  <button class="button" :disabled="!desktop || shareBusy" @click="share.pickAndShareFolder()">
+                    <LiteIcon name="folder" />选择文件夹
+                  </button>
+                </div>
                 <span class="empty-hint">链接只在分享期间有效，停止后立即失效</span>
-              </button>
+              </div>
             </div>
 
             <p class="privacy-note">文件只在同一局域网内传输；停止分享后链接立即失效。</p>
             <footer class="footer footer--share">
               <div class="summary" aria-live="polite">
-                <p><strong>{{ shareState.files.length }} 个文件</strong><span v-if="shareState.files.length">{{ formatBytes(shareTotalSize) }}</span></p>
+                <p><strong>{{ shareState.items.length }} 项</strong><span v-if="shareTotalSize">{{ formatBytes(shareTotalSize) }}</span></p>
                 <p class="summary-detail">
                   <span v-if="shareRunning">同一 Wi-Fi 下可访问 · 停止后链接失效</span>
-                  <span v-else>选择文件后自动生成链接与二维码</span>
+                  <span v-else>选择内容后自动生成链接与二维码</span>
                 </p>
               </div>
             </footer>

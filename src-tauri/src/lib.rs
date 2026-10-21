@@ -50,9 +50,10 @@ pub fn run() {
             share::share_start,
             share::share_stop,
             share::share_status,
-            share::share_add_files,
-            share::share_remove_file,
+            share::share_add_items,
+            share::share_remove_item,
             share::share_pick_files,
+            share::share_pick_directory,
             share::share_qr_svg,
             share::share_set_title
         ])

@@ -1,5 +1,5 @@
 import { computed, reactive } from 'vue';
-import type { ShareAdapter, ShareFile, ShareStatus } from './types';
+import type { ShareAdapter, ShareItem, ShareStatus } from './types';
 
 export type SharePhase = 'idle' | 'starting' | 'running' | 'stopping';
 
@@ -10,7 +10,7 @@ export type SharePhase = 'idle' | 'starting' | 'running' | 'stopping';
 export function createShareSession(adapter: ShareAdapter) {
   const state = reactive({
     phase: 'idle' as SharePhase,
-    files: [] as ShareFile[],
+    items: [] as ShareItem[],
     url: '',
     addresses: [] as string[],
     warning: '',
@@ -23,7 +23,7 @@ export function createShareSession(adapter: ShareAdapter) {
 
   const running = computed(() => state.phase === 'running');
   const busy = computed(() => state.phase === 'starting' || state.phase === 'stopping');
-  const totalSize = computed(() => state.files.reduce((total, file) => total + file.size, 0));
+  const totalSize = computed(() => state.items.reduce((total, item) => total + (item.kind === 'file' ? item.size : 0), 0));
   const port = computed(() => {
     const matched = state.url.match(/:(\d+)\/s\//);
     return matched ? Number(matched[1]) : null;
@@ -53,7 +53,7 @@ export function createShareSession(adapter: ShareAdapter) {
   }
 
   function apply(status: ShareStatus) {
-    state.files = status.files ?? [];
+    state.items = status.items ?? [];
     state.url = status.url ?? '';
     state.addresses = status.addresses ?? [];
     state.warning = status.warning ?? '';
@@ -88,12 +88,12 @@ export function createShareSession(adapter: ShareAdapter) {
     }
   }
 
-  async function pickAndShare() {
+  async function pickAndStart(pick: () => Promise<string[]>) {
     if (!adapter.desktop || busy.value) return;
     state.error = '';
     state.phase = 'starting';
     try {
-      const paths = await adapter.pickFiles();
+      const paths = await pick();
       if (!paths.length) {
         state.phase = 'idle';
         return;
@@ -105,26 +105,42 @@ export function createShareSession(adapter: ShareAdapter) {
     }
   }
 
-  async function addFiles() {
+  function pickAndShare() {
+    return pickAndStart(() => adapter.pickFiles());
+  }
+
+  function pickAndShareFolder() {
+    return pickAndStart(() => adapter.pickDirectory());
+  }
+
+  async function addPaths(pick: () => Promise<string[]>, fallback: string) {
     if (!adapter.desktop || !running.value || state.adding) return;
     state.error = '';
     state.adding = true;
     try {
-      const paths = await adapter.pickFiles();
+      const paths = await pick();
       if (!paths.length) return;
-      apply(await adapter.addFiles(paths));
+      apply(await adapter.addItems(paths));
     } catch (error) {
-      state.error = errorText(error, '添加文件失败，请重试');
+      state.error = errorText(error, fallback);
     } finally {
       state.adding = false;
     }
+  }
+
+  function addFiles() {
+    return addPaths(() => adapter.pickFiles(), '添加文件失败，请重试');
+  }
+
+  function addFolder() {
+    return addPaths(() => adapter.pickDirectory(), '添加文件夹失败，请重试');
   }
 
   async function remove(id: number) {
     if (!running.value) return;
     state.error = '';
     try {
-      apply(await adapter.removeFile(id));
+      apply(await adapter.removeItem(id));
     } catch (error) {
       state.error = errorText(error, '移除文件失败，请重试');
     }
@@ -182,5 +198,5 @@ export function createShareSession(adapter: ShareAdapter) {
     if (copiedTimer) clearTimeout(copiedTimer);
   }
 
-  return { state, running, busy, totalSize, port, connect, refresh, pickAndShare, addFiles, remove, stop, copy, dispose };
+  return { state, running, busy, totalSize, port, connect, refresh, pickAndShare, pickAndShareFolder, addFiles, addFolder, remove, stop, copy, dispose };
 }

@@ -1,6 +1,6 @@
 # File Share 设计（局域网分享面）
 
-日期：2026-10-21。状态：P0、P1 已完成，P2 待开始。
+日期：2026-10-21。状态：P0、P1、P2 已完成，P3 待开始。
 
 参考项目：[file-share](https://github.com/cky-thinker/file-share)（Electron/uTools + Express + Vue 访客页，MIT）。只借鉴能力与协议形状，服务端与访客页均重写。
 
@@ -28,24 +28,19 @@
 src-tauri/src/share/
   mod.rs         ShareManager（Tauri state）、命令、生命周期
   server.rs      axum 路由、鉴权与安全中间件、静态页
-  session.rs     会话状态：token、文件表、账号、设置、连接计数
-  auth.rs        token、PIN、账号口令、cookie、锁定
-  files.rs       路径校验、列目录、Range、缩略图
-  archive.rs     目录 zip（复用缓存、超时清理）
-  upload.rs      multipart 落盘、消毒、配额
-  events.rs      SSE 广播
-  page/          P0 内嵌静态页；P2 起换成 share-web 构建产物
+  net.rs         局域网地址探测
+  page.html/css/js  内嵌访客页（无构建，直接 include_str!）
 ```
 
 - 服务在 `tauri::async_runtime` 的 tokio 上运行；`watch` 通道通知优雅关闭，2 秒后强制 abort。
 - `ShareManager` 持有 `Option<Running>`；分享列表在停止后仍保留，重启复用。
 - 状态变化通过 `share-status` 事件推给前端；访客侧通过 SSE。
-- 访客页独立 Vite 入口 `share-web/`，构建产物用 `include_dir!` 嵌入二进制（预计 gzip 后 60~90KB）。
+- 访客页保持无构建的轻量单页（HTML/CSS/JS 直接内嵌），避免第二套 Vite 构建链；目录、搜索、SSE、中英都在原生 JS 内实现。
 
 ## 数据模型
 
 ```text
-ShareItem { id, kind: file|dir|text, name, path?, text?, size?, addedAt }
+SharedItem { id, kind: file|dir, name, path, size, modified }; 文本与账号在后续阶段
 Account   { id, username, passwordHash, permissions {download, uploadFile, uploadText}, enabled }
 Settings  { port, uploadDir, language, ipFamily, interface, protection, pinHash, autoStart }
 Runtime   { running, url, port, candidates[], connections, transfer }
@@ -65,9 +60,10 @@ Runtime   { running, url, port, candidates[], connections, transfer }
 | GET | `/s/{token}/api/state` | 保护级别、权限、语言、是否需要 PIN/登录 |
 | POST | `/s/{token}/api/unlock` | 校验 PIN，成功后可访问 |
 | POST | `/s/{token}/api/login` | 账号登录（账号模式） |
-| GET | `/s/{token}/api/files?path=` | 列分享项或目录 |
-| GET | `/s/{token}/api/download?name=` | 单文件 Range 下载；目录流式 zip |
-| GET | `/s/{token}/api/thumb?name=` | 图片缩略图（P2） |
+| GET | `/s/{token}/api/items` | 列出全部分享根（文件/目录） |
+| GET | `/s/{token}/api/list?id=&path=` | 列出目录内容，含面包屑路径 |
+| GET | `/s/{token}/api/download?id=&path=` | 单文件 Range 下载；目录现场打包 zip |
+| GET | `/s/{token}/api/thumb?id=&path=` | 图片缩略图（200px JPEG） |
 | POST | `/s/{token}/api/upload` | multipart 上传，写上传目录 |
 | POST | `/s/{token}/api/text` | 写入一条文本 |
 | GET | `/s/{token}/api/events` | SSE：列表与传输变化 |
@@ -146,6 +142,15 @@ stopped → starting → running { url, port } → stopping → stopped
 - 修复：运行中追加文件时 ID 从 1 重新分配，删除一项会连带删掉同 ID 的旧文件；现在从已有最大 ID 递增。
 - 验证：vitest 94 项、cargo test 50 项通过；Mac 实测翻面与标题切换，真实分享 `docs/panda.avif`：页面 200、列表 JSON 正确、下载 SHA256 与源文件一致、Range 206、错误 token 404、外站 Host 403、停止后端口释放。
 - 未做：访客页仍是 P0 的移动优先单页（目录、搜索、上传、SSE、中英在 P2）；PIN 与账号在 P3；压缩结果直连分享在 P4。
+
+## P2 结果（2026-10-21）
+
+- 后端：分享根支持文件与目录；新增 `/api/items`、`/api/list`、`/api/thumb`、`/api/events`，下载接口按 id + 相对路径定位，目录现场打包 zip（单并发、8GB/2 万文件上限、10 分钟清理）。
+- 路径安全：相对路径按段校验，拒绝 `..`、反斜杠与 NUL；canonicalize 后必须仍在分享根内，越界软链被过滤。
+- 访客页：共享根与目录浏览、面包屑、搜索过滤、文件夹打包下载、图片缩略图、SSE 实时刷新、中英切换（跟随浏览器）、亮暗色、加载/空/错误状态与重试。
+- 桌面端：空状态与运行态都支持追加文件/文件夹，分享行区分「文件夹」。
+- 验证：vitest 95 项、cargo test 54 项通过；Mac 实测分享 `docs/lite`：条目/子目录列表正确，zip 9 个条目、288KB，缩略图 200×156 JPEG；访客页 390/900 宽度截图正常，SSE 显示「实时更新」。
+- 未做：上传、文字、PIN、账号权限（P3）；压缩结果直连分享（P4）。
 
 ## 测试
 

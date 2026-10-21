@@ -1,15 +1,18 @@
-export interface ShareFile {
+export type ShareKind = 'file' | 'dir';
+
+export interface ShareItem {
   id: number;
+  kind: ShareKind;
   name: string;
   size: number;
-  url: string;
+  modified: number | null;
 }
 
 export interface ShareStatus {
   running: boolean;
   url: string | null;
   port: number | null;
-  files: ShareFile[];
+  items: ShareItem[];
   addresses: string[];
   warning: string | null;
 }
@@ -19,14 +22,15 @@ export interface ShareAdapter {
   status(): Promise<ShareStatus>;
   start(paths: string[]): Promise<ShareStatus>;
   stop(): Promise<ShareStatus>;
-  addFiles(paths: string[]): Promise<ShareStatus>;
-  removeFile(id: number): Promise<ShareStatus>;
+  addItems(paths: string[]): Promise<ShareStatus>;
+  removeItem(id: number): Promise<ShareStatus>;
   pickFiles(): Promise<string[]>;
+  pickDirectory(): Promise<string[]>;
   qrSvg(url: string): Promise<string>;
   onStatus(handler: (status: ShareStatus) => void): Promise<() => void>;
   setTitle(title: string): Promise<void>;
 }
 
 export function emptyShareStatus(): ShareStatus {
-  return { running: false, url: null, port: null, files: [], addresses: [], warning: null };
+  return { running: false, url: null, port: null, items: [], addresses: [], warning: null };
 }

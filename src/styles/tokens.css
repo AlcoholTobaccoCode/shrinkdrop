@@ -73,6 +73,7 @@ p, h1 { margin: 0; }
 .button--primary:not(:disabled):hover { background: #22663e; border-color: #22663e; }
 .button--primary span { font-size: 11px; padding: 1px 5px; border-radius: 4px; background: #ffffff24; }
 .button--quiet { border-color: transparent; background: transparent; color: var(--muted); padding: 0 9px; }
+.button--icon { width: 36px; padding: 0; }
 .icon-button { display: grid; place-items: center; padding: 0; min-width: 30px; height: 32px; background: transparent; border: 0; border-radius: 5px; color: var(--muted); }
 .preview-banner, .notice { flex-shrink: 0; border-radius: 7px; padding: 10px 12px; margin-bottom: 12px; line-height: 1.55; }
 .preview-banner { color: var(--warning); background: var(--warning-bg); }
@@ -178,6 +179,7 @@ p, h1 { margin: 0; }
 .share-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .share-size { text-align: right; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .share-empty { min-height: 220px; }
+.share-empty-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .share-empty-hint { padding: 18px; color: var(--muted); font-size: 12px; text-align: center; }
 /*#endregion */
 
@@ -200,6 +202,7 @@ p, h1 { margin: 0; }
   .summary-detail { max-width: 240px; }
   .toolbar-end { gap: 6px; }
   .face-tab { padding: 0 8px; font-size: 11px; }
+  .auto-switch > span:first-child { display: none; }
   .share-body { grid-template-columns: 140px minmax(0, 1fr); }
 }
 @media (max-width: 599px) {
