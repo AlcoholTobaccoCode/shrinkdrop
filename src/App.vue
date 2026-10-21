@@ -58,7 +58,7 @@ onBeforeUnmount(() => { unmounted = true; detached(); void session.dispose(); })
   <main class="app-shell" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop">
     <header class="toolbar">
       <div class="brand">
-        <span class="brand-mark"><LiteIcon name="image" /></span>
+        <span class="brand-mark"><img src="/app-icon.png" alt="" width="34" height="34" draggable="false" /></span>
         <h1>TinyPNG <span>Lite</span></h1>
       </div>
       <div class="import-actions">

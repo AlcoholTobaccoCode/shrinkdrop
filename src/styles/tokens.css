@@ -55,8 +55,8 @@ p, h1 { margin: 0; }
 .app-shell { height: 100%; display: flex; flex-direction: column; padding: 0 24px; max-width: 1200px; margin: auto; }
 .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 82px; flex-shrink: 0; }
 .brand { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
-.brand-mark { background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; }
-.brand-mark svg { width: 21px; height: 21px; }
+.brand-mark { display: grid; place-items: center; width: 34px; height: 34px; flex-shrink: 0; }
+.brand-mark img { width: 100%; height: 100%; display: block; -webkit-user-drag: none; }
 .brand h1 { font-size: 20px; letter-spacing: -.6px; font-weight: 680; }
 .brand h1 span { font-weight: 400; color: var(--muted); }
 .import-actions, .footer-actions { display: flex; gap: 8px; align-items: center; }
@@ -147,7 +147,7 @@ p, h1 { margin: 0; }
   .app-shell { padding: 0 18px; }
   .toolbar { min-height: 72px; }
   .brand h1 { font-size: 18px; }
-  .brand-mark { width: 30px; height: 30px; border-radius: 8px; }
+  .brand-mark { width: 30px; height: 30px; }
   .list-heading, .image-row { grid-template-columns: minmax(110px, 1fr) 60px 60px 64px 144px; gap: 6px; }
   .auto-switch { padding: 0 3px; gap: 5px; font-size: 11px; }
   .import-actions { gap: 5px; }
