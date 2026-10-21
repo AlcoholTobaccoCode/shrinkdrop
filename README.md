@@ -38,8 +38,10 @@ pnpm tauri build
 
 ## 分支
 
-- `codex/workbench-archive`：完整工作台，保存于提交`3b9d413`，含共享合同、Server 与历史验收。
-- `codex/compress-lite`：压缩客户端。前端只保留Vue和Tauri API；Rust负责网络、文件注册、取消及原生保存。
+- `main`：轻量压缩客户端，当前默认分支。前端只保留Vue和Tauri API；Rust负责网络、文件注册、取消及原生保存。
+- `codex/workbench-archive`：完整工作台，保存于提交`3b9d413`，含共享合同、Server 与历史验收。日常开发不基于此分支。
+
+更早的 10-10 骨架已归档为标签 `archive/pre-batch-split`，不再作为分支维护。
 
 
 设计与进度见 [轻量版设计](docs/lite/design.md)、[实现计划](docs/lite/plan.md)、[2026-10-20 交互补充](docs/lite/2026-10-20-enhancements.md)。实际验证见 [本次验收](docs/lite/2026-10-20-verification.md)、[初版验收](docs/lite/verification.md)。
