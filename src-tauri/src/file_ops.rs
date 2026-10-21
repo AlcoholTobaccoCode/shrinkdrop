@@ -14,6 +14,7 @@ const SUPPORTED_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp"];
 pub struct FileState {
     pub sources: Mutex<HashMap<String, SourceRecord>>,
     pub temps: Mutex<HashMap<String, TempRecord>>,
+    pub overwrite_gate: Mutex<()>,
     next_id: AtomicU64,
 }
 
@@ -28,6 +29,14 @@ pub struct TempRecord {
     pub path: PathBuf,
     pub session_id: String,
     pub metadata: FileDescriptor,
+    pub original: Option<OriginalSnapshot>,
+}
+
+#[derive(Clone)]
+pub struct OriginalSnapshot {
+    pub path: PathBuf,
+    pub digest: [u8; 32],
+    pub result_digest: [u8; 32],
 }
 
 pub struct PendingResult {
@@ -198,6 +207,7 @@ pub fn write_result(
     source: &SourceRecord,
     bytes: &[u8],
     mime: &str,
+    source_fingerprint: [u8; 32],
 ) -> Result<PendingResult, String> {
     if bytes.is_empty() || bytes.len() > MAX_IMAGE_BYTES {
         return Err("压缩结果为空或过大，请重试".into());
@@ -234,6 +244,11 @@ pub fn write_result(
             path,
             session_id: task_id.into(),
             metadata: descriptor,
+            original: Some(OriginalSnapshot {
+                path: source.path.clone(),
+                digest: source_fingerprint,
+                result_digest: crate::overwrite::fingerprint(bytes),
+            }),
         }),
     })
 }
@@ -508,16 +523,21 @@ pub fn save_to_directory(state: &FileState, ids: &[String], directory: &Path) ->
 #[cfg(test)]
 mod download_tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct Fixture(PathBuf);
     impl Fixture {
         fn new() -> Self {
+            static SERIAL: AtomicUsize = AtomicUsize::new(0);
             let stamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let path = std::env::temp_dir()
-                .join(format!("tinypng-save-test-{}-{stamp}", std::process::id()));
+            let path = std::env::temp_dir().join(format!(
+                "tinypng-save-test-{}-{stamp}-{}",
+                std::process::id(),
+                SERIAL.fetch_add(1, Ordering::Relaxed)
+            ));
             fs::create_dir(&path).unwrap();
             Self(path)
         }
@@ -539,6 +559,7 @@ mod download_tests {
                         last_modified: None,
                         handle: Some("temp-result".into()),
                     },
+                    original: None,
                 },
             );
             path
@@ -826,6 +847,7 @@ mod download_tests {
             &source,
             b"compressed-image",
             "image/png",
+            crate::overwrite::fingerprint(b"original-image"),
         )
         .unwrap();
         assert!(state.temps.lock().unwrap().is_empty());
@@ -851,6 +873,7 @@ mod download_tests {
             &source,
             b"compressed-image",
             "image/png",
+            crate::overwrite::fingerprint(b"original-image"),
         )
         .unwrap();
         let descriptor = pending.register(&state).unwrap();

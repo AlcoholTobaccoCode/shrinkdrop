@@ -245,7 +245,15 @@ fn status_error(status: reqwest::StatusCode) -> String {
     }
 }
 
-async fn limited_body(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8>, String> {
+async fn limited_body(response: reqwest::Response, limit: usize) -> Result<Vec<u8>, String> {
+    limited_body_progress(response, limit, |_| {}).await
+}
+
+async fn limited_body_progress(
+    mut response: reqwest::Response,
+    limit: usize,
+    mut progress: impl FnMut(usize),
+) -> Result<Vec<u8>, String> {
     if response
         .content_length()
         .is_some_and(|length| length > limit as u64)
@@ -262,6 +270,7 @@ async fn limited_body(mut response: reqwest::Response, limit: usize) -> Result<V
             return Err("服务返回的数据过大，请稍后重试".into());
         }
         bytes.extend_from_slice(&chunk);
+        progress(bytes.len());
     }
     Ok(bytes)
 }
@@ -283,7 +292,44 @@ pub struct CompressionResult {
 #[serde(rename_all = "camelCase")]
 struct Progress<'a> {
     task_id: &'a str,
-    stage: &'a str,
+    #[serde(flatten)]
+    transfer: TransferProgress,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct TransferProgress {
+    stage: &'static str,
+    transferred: u64,
+    total: Option<u64>,
+}
+
+fn upload_stream(
+    bytes: Vec<u8>,
+    progress: impl Fn(TransferProgress) + Send + Sync + 'static,
+) -> impl futures_util::Stream<Item = Result<Vec<u8>, std::io::Error>> + Send {
+    futures_util::stream::unfold(
+        (bytes, 0, progress),
+        |(bytes, offset, progress)| async move {
+            if offset == bytes.len() {
+                return None;
+            }
+            let end = (offset + 65_536).min(bytes.len());
+            let chunk = bytes[offset..end].to_vec();
+            progress(TransferProgress {
+                stage: "uploading",
+                transferred: end as u64,
+                total: Some(bytes.len() as u64),
+            });
+            if end == bytes.len() {
+                progress(TransferProgress {
+                    stage: "processing",
+                    transferred: 0,
+                    total: None,
+                });
+            }
+            Some((Ok(chunk), (bytes, end, progress)))
+        },
+    )
 }
 
 #[derive(Deserialize)]
@@ -305,18 +351,28 @@ async fn compress_at_site(
     site: &str,
     bytes: &[u8],
     input: (&str, u32, u32),
-    mut progress: impl FnMut(&str),
+    progress: impl Fn(TransferProgress) + Send + Sync + 'static,
 ) -> Result<Vec<u8>, String> {
     let origin = format!("https://{site}");
-    progress("uploading");
+    let progress = Arc::new(progress);
+    progress(TransferProgress {
+        stage: "uploading",
+        transferred: 0,
+        total: Some(bytes.len() as u64),
+    });
+    let upload_progress = progress.clone();
     let response = client
         .post(format!("{origin}/backend/opt/shrink"))
         .header(reqwest::header::CONTENT_TYPE, input.0)
+        .header(reqwest::header::CONTENT_LENGTH, bytes.len())
         .header(reqwest::header::USER_AGENT, USER_AGENT)
         .header(reqwest::header::ORIGIN, &origin)
         .header(reqwest::header::REFERER, format!("{origin}/"))
         .header("X-Forwarded-For", random_forwarded_ip()?)
-        .body(bytes.to_vec())
+        .body(reqwest::Body::wrap_stream(upload_stream(
+            bytes.to_vec(),
+            move |event| upload_progress(event),
+        )))
         .send()
         .await
         .map_err(|error| {
@@ -340,7 +396,11 @@ async fn compress_at_site(
         return Err("压缩结果的格式或尺寸异常，请稍后重试".into());
     }
     let url = validate_output_url(&output.url)?;
-    progress("downloading");
+    progress(TransferProgress {
+        stage: "downloading",
+        transferred: 0,
+        total: Some(output.size),
+    });
     let response = client
         .get(url)
         .send()
@@ -349,11 +409,23 @@ async fn compress_at_site(
     if !response.status().is_success() {
         return Err(status_error(response.status()));
     }
-    let result = limited_body(response, MAX_IMAGE_BYTES).await?;
+    let result = limited_body_progress(response, MAX_IMAGE_BYTES, |transferred| {
+        progress(TransferProgress {
+            stage: "downloading",
+            transferred: transferred as u64,
+            total: Some(output.size),
+        });
+    })
+    .await?;
     if result.len() as u64 != output.size {
         return Err("压缩结果下载不完整，请重试".into());
     }
     let expected = (input.0.to_string(), input.1, input.2);
+    progress(TransferProgress {
+        stage: "verifying",
+        transferred: 0,
+        total: None,
+    });
     tauri::async_runtime::spawn_blocking(move || {
         let decoded = validate_image(&result)?;
         if (decoded.0, decoded.1, decoded.2) != (expected.0.as_str(), expected.1, expected.2) {
@@ -386,14 +458,17 @@ pub async fn compress<R: tauri::Runtime>(
         .await
         .map_err(|_| "图片读取失败，请重试".to_string())??;
         let client = network_client(true)?;
+        let source_fingerprint = crate::overwrite::fingerprint(&bytes);
         let mut last_error = "压缩服务暂时不可用，请稍后重试".to_string();
         for site in SITES {
-            match compress_at_site(&client, site, &bytes, input, |stage| {
-                let _ = app.emit(
+            let progress_app = app.clone();
+            let progress_task = task_id.clone();
+            match compress_at_site(&client, site, &bytes, input, move |transfer| {
+                let _ = progress_app.emit(
                     "lite-progress",
                     Progress {
-                        task_id: &task_id,
-                        stage,
+                        task_id: &progress_task,
+                        transfer,
                     },
                 );
             })
@@ -416,6 +491,7 @@ pub async fn compress<R: tauri::Runtime>(
                             &source,
                             &bytes,
                             input.0,
+                            source_fingerprint,
                         )
                     })
                     .await
@@ -640,6 +716,55 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn upload_stream_reports_actual_bytes_then_waits_for_processing() {
+        use futures_util::StreamExt;
+        let bytes = vec![7u8; 150_000];
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let received = events.clone();
+        let chunks = upload_stream(bytes.clone(), move |event| {
+            received.lock().unwrap().push(event);
+        })
+        .collect::<Vec<_>>()
+        .await;
+        let uploaded = chunks
+            .into_iter()
+            .flat_map(Result::unwrap)
+            .collect::<Vec<_>>();
+        assert_eq!(uploaded, bytes);
+        let events = events.lock().unwrap();
+        let uploaded = events
+            .iter()
+            .filter(|event| event.stage == "uploading")
+            .collect::<Vec<_>>();
+        assert_eq!(uploaded.len(), 3);
+        assert_eq!(uploaded[0].transferred, 65_536);
+        assert_eq!(uploaded.last().unwrap().transferred, 150_000);
+        assert_eq!(uploaded.last().unwrap().total, Some(150_000));
+        assert_eq!(events.last().unwrap().stage, "processing");
+    }
+
+    #[tokio::test]
+    async fn download_progress_matches_the_bounded_response_body() {
+        let (url, server) = serve_once(
+            "HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\nhello world!",
+        );
+        let response = network_client(false)
+            .unwrap()
+            .get(url)
+            .send()
+            .await
+            .unwrap();
+        let mut received = Vec::new();
+        let body = limited_body_progress(response, 20, |count| received.push(count))
+            .await
+            .unwrap();
+        assert_eq!(body, b"hello world!");
+        assert_eq!(received.last(), Some(&12));
+        assert!(received.windows(2).all(|pair| pair[0] <= pair[1]));
+        server.join().unwrap();
+    }
+
     #[test]
     fn canceled_all_work_blocks_new_and_late_results() {
         let state = CompressionState::default();
@@ -663,7 +788,7 @@ mod tests {
                 "tinypng.com",
                 &bytes,
                 input,
-                |stage| eprintln!("native live stage: {stage}"),
+                |event| eprintln!("native live stage: {}", event.stage),
             ),
         )
         .await

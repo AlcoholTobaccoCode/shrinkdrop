@@ -1,9 +1,11 @@
 use crate::compression::{self, CompressionResult, CompressionState};
 use crate::file_ops::{self, BatchSaveResult, FileDescriptor, FileState};
+use crate::overwrite::{self, BatchOverwriteResult, OriginalTarget};
 use serde::Serialize;
 use std::path::Path;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_dialog::{MessageDialogButtons, MessageDialogKind};
 
 //#region 原生导入与受控读取
 const IMPORT_EMPTY_ERROR: &str =
@@ -207,6 +209,79 @@ pub async fn save_results<R: tauri::Runtime>(
     })
     .await
     .map_err(|_| "批量保存失败，请重试".to_string())?
+}
+//#endregion
+
+//#region 确认覆盖原图
+fn confirm_overwrite<R: tauri::Runtime>(app: &AppHandle<R>, targets: &[OriginalTarget]) -> bool {
+    let message = if targets.len() == 1 {
+        format!(
+            "将用压缩结果替换以下原图：\n{}\n\n此操作无法撤销。",
+            targets[0].path.display()
+        )
+    } else {
+        format!(
+            "将用压缩结果覆盖 {} 张原图，分别写回各自的原始位置。\n\n此操作无法撤销。",
+            targets.len()
+        )
+    };
+    let Some(window) = app.get_webview_window("main") else {
+        return false;
+    };
+    app.dialog()
+        .message(message)
+        .parent(&window)
+        .title(if targets.len() == 1 {
+            "覆盖原图？"
+        } else {
+            "批量覆盖原图？"
+        })
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "覆盖原图".into(),
+            "取消".into(),
+        ))
+        .blocking_show()
+}
+
+#[derive(Serialize)]
+pub struct OverwriteResult {
+    overwritten: bool,
+}
+
+#[tauri::command]
+pub async fn overwrite_temp_file<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    temp_file_id: String,
+) -> Result<OverwriteResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let result =
+            overwrite::overwrite_results(&app.state::<FileState>(), &[temp_file_id], |targets| {
+                confirm_overwrite(&app, targets)
+            })?;
+        if let Some(failure) = result.failed.first() {
+            return Err(failure.message.clone());
+        }
+        Ok(OverwriteResult {
+            overwritten: !result.canceled && result.overwritten == 1,
+        })
+    })
+    .await
+    .map_err(|_| "覆盖失败，请重试".to_string())?
+}
+
+#[tauri::command]
+pub async fn overwrite_results<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    temp_file_ids: Vec<String>,
+) -> Result<BatchOverwriteResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        overwrite::overwrite_results(&app.state::<FileState>(), &temp_file_ids, |targets| {
+            confirm_overwrite(&app, targets)
+        })
+    })
+    .await
+    .map_err(|_| "批量覆盖失败，请重试".to_string())?
 }
 //#endregion
 

@@ -3638,12 +3638,14 @@ dependencies = [
 name = "tinypng-cross-platform"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "getrandom 0.4.3",
  "image",
  "reqwest",
  "same-file",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

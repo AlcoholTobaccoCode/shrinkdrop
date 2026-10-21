@@ -3,6 +3,7 @@ use tauri::{Emitter, Manager};
 mod commands;
 mod compression;
 mod file_ops;
+mod overwrite;
 
 pub fn run() {
     tauri::Builder::default()
@@ -40,7 +41,9 @@ pub fn run() {
             commands::cancel_compression,
             commands::cleanup_temp_files,
             commands::save_temp_file,
-            commands::save_results
+            commands::save_results,
+            commands::overwrite_temp_file,
+            commands::overwrite_results
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");
