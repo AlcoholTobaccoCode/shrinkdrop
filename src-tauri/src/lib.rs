@@ -82,6 +82,8 @@ pub fn run() {
             settings::share_group_add,
             settings::share_group_update,
             settings::share_group_delete,
+            settings::share_group_access,
+            settings::share_group_set_pin,
             share::share_set_active_group
         ])
         .run(tauri::generate_context!())

@@ -145,7 +145,7 @@ export function createBrowserSettingsAdapter(): SettingsAdapter {
           ...current.share,
           groups: [
             ...current.share.groups,
-            { id: `group-${name}`, name, slug: slug ?? `g-${name}` }
+            { id: `group-${name}`, name, slug: slug ?? `g-${name}`, public: false, protection: 'link' as const, pinSet: false, allowUpload: false, allowText: false }
           ]
         }
       };
@@ -167,6 +167,38 @@ export function createBrowserSettingsAdapter(): SettingsAdapter {
       current = {
         ...current,
         share: { ...current.share, groups: current.share.groups.filter(group => group.id !== id) }
+      };
+      return result();
+    },
+    updateGroupAccess: async (id, patch) => {
+      current = {
+        ...current,
+        share: {
+          ...current.share,
+          groups: current.share.groups.map(group =>
+            group.id === id
+              ? {
+                  ...group,
+                  public: patch.public,
+                  protection: patch.protection,
+                  allowUpload: patch.allowUpload,
+                  allowText: patch.allowText
+                }
+              : group
+          )
+        }
+      };
+      return result();
+    },
+    setGroupPin: async (id, pin) => {
+      current = {
+        ...current,
+        share: {
+          ...current.share,
+          groups: current.share.groups.map(group =>
+            group.id === id ? { ...group, pinSet: Boolean(pin) } : group
+          )
+        }
       };
       return result();
     }

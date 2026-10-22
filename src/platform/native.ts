@@ -1,7 +1,7 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import type { BulkOverwriteResult, BulkSaveResult, CompressionResult, LiteAdapter, ProgressEvent, SourceFile } from '../core/lite/types';
 import type { ShareAdapter, ShareStatus } from '../core/share/types';
-import type { Face, Permissions, SettingsAdapter, SettingsMutation, SettingsUpdatePayload, SettingsView } from '../core/settings/types';
+import type { Face, GroupAccessPatch, Permissions, SettingsAdapter, SettingsMutation, SettingsUpdatePayload, SettingsView } from '../core/settings/types';
 
 export type NativeInvoke = <T = unknown>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -104,7 +104,11 @@ export function createNativeSettingsAdapter(invoke: NativeInvoke = tauriInvoke):
     deleteAccount: (id: string) => invoke<SettingsMutation>('share_delete_account', { id }),
     addGroup: (name: string, slug: string | null) => invoke<SettingsMutation>('share_group_add', { name, slug }),
     updateGroup: (id: string, name: string, slug: string) => invoke<SettingsMutation>('share_group_update', { id, name, slug }),
-    deleteGroup: (id: string) => invoke<SettingsMutation>('share_group_delete', { id })
+    deleteGroup: (id: string) => invoke<SettingsMutation>('share_group_delete', { id }),
+    updateGroupAccess: (id: string, patch: GroupAccessPatch) =>
+      invoke<SettingsMutation>('share_group_access', { id, ...patch }),
+    setGroupPin: (id: string, pin: string | null) =>
+      invoke<SettingsMutation>('share_group_set_pin', { id, pin })
   };
 }
 //#endregion

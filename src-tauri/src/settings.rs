@@ -142,6 +142,11 @@ pub struct GroupSettings {
     pub id: String,
     pub name: String,
     pub slug: String,
+    pub public: bool,
+    pub protection: Protection,
+    pub pin_hash: Option<String>,
+    pub allow_upload: bool,
+    pub allow_text: bool,
 }
 
 impl Default for GroupSettings {
@@ -150,6 +155,11 @@ impl Default for GroupSettings {
             id: random_slug(),
             name: "分组".to_string(),
             slug: random_slug(),
+            public: false,
+            protection: Protection::Link,
+            pin_hash: None,
+            allow_upload: false,
+            allow_text: false,
         }
     }
 }
@@ -219,6 +229,11 @@ pub struct GroupView {
     id: String,
     name: String,
     slug: String,
+    public: bool,
+    protection: Protection,
+    pin_set: bool,
+    allow_upload: bool,
+    allow_text: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -276,6 +291,11 @@ pub fn view(settings: &Settings) -> SettingsView {
                     id: group.id.clone(),
                     name: group.name.clone(),
                     slug: group.slug.clone(),
+                    public: group.public,
+                    protection: group.protection,
+                    pin_set: group.pin_hash.is_some(),
+                    allow_upload: group.allow_upload,
+                    allow_text: group.allow_text,
                 })
                 .collect(),
         },
@@ -315,6 +335,11 @@ pub fn share_options(settings: &Settings) -> ShareOptions {
         name: "默认分组".to_string(),
         slug: String::new(),
         upload_dir: root.clone(),
+        public: settings.share.public,
+        protection: settings.share.protection,
+        pin_hash: settings.share.pin_hash.clone(),
+        allow_upload: settings.share.allow_upload,
+        allow_text: settings.share.allow_text,
     }];
     for group in &settings.share.groups {
         groups.push(GroupOptions {
@@ -322,6 +347,11 @@ pub fn share_options(settings: &Settings) -> ShareOptions {
             name: group.name.clone(),
             slug: group.slug.clone(),
             upload_dir: root.join("groups").join(&group.slug),
+            public: group.public,
+            protection: group.protection,
+            pin_hash: group.pin_hash.clone(),
+            allow_upload: group.allow_upload,
+            allow_text: group.allow_text,
         });
     }
     ShareOptions {
@@ -577,6 +607,11 @@ pub async fn share_group_add(
         id: random_slug(),
         name,
         slug,
+        public: false,
+        protection: Protection::Link,
+        pin_hash: None,
+        allow_upload: false,
+        allow_text: false,
     });
     commit(&app, &state, &manager, settings, true).await
 }
@@ -633,6 +668,57 @@ pub async fn share_group_delete(
     if settings.share.groups.len() == before {
         return Err("分组不存在".to_string());
     }
+    commit(&app, &state, &manager, settings, true).await
+}
+
+#[tauri::command]
+pub async fn share_group_access(
+    app: AppHandle,
+    state: State<'_, SettingsState>,
+    manager: State<'_, ShareManager>,
+    id: String,
+    public: bool,
+    protection: Protection,
+    allow_upload: bool,
+    allow_text: bool,
+) -> Result<SettingsMutation, String> {
+    let mut settings = state.get();
+    let Some(group) = settings
+        .share
+        .groups
+        .iter_mut()
+        .find(|group| group.id == id)
+    else {
+        return Err("分组不存在".to_string());
+    };
+    group.public = public;
+    group.protection = protection;
+    group.allow_upload = allow_upload;
+    group.allow_text = allow_text;
+    commit(&app, &state, &manager, settings, true).await
+}
+
+#[tauri::command]
+pub async fn share_group_set_pin(
+    app: AppHandle,
+    state: State<'_, SettingsState>,
+    manager: State<'_, ShareManager>,
+    id: String,
+    pin: Option<String>,
+) -> Result<SettingsMutation, String> {
+    let mut settings = state.get();
+    let Some(group) = settings
+        .share
+        .groups
+        .iter_mut()
+        .find(|group| group.id == id)
+    else {
+        return Err("分组不存在".to_string());
+    };
+    group.pin_hash = match pin {
+        Some(pin) if !pin.is_empty() => Some(auth::hash_secret(pin.trim())?),
+        _ => None,
+    };
     commit(&app, &state, &manager, settings, true).await
 }
 

@@ -152,6 +152,17 @@ export function createSettingsSession(adapter: SettingsAdapter) {
     return mutate(() => adapter.deleteGroup(id), '删除分组失败');
   }
 
+  function updateGroupAccess(
+    id: string,
+    patch: { public: boolean; protection: 'link' | 'pin' | 'accounts'; allowUpload: boolean; allowText: boolean }
+  ) {
+    return mutate(() => adapter.updateGroupAccess(id, patch), '更新分组权限失败');
+  }
+
+  function setGroupPin(id: string, pin: string | null) {
+    return mutate(() => adapter.setGroupPin(id, pin), '保存分组 PIN 失败');
+  }
+
   function dismissToast() {
     state.toast = '';
   }
@@ -171,6 +182,8 @@ export function createSettingsSession(adapter: SettingsAdapter) {
     addGroup,
     updateGroup,
     deleteGroup,
+    updateGroupAccess,
+    setGroupPin,
     dismissToast
   };
 }

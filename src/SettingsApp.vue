@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { createSettingsSession } from './core/settings/session';
 import { createSettingsAdapter } from './platform';
 import { setLanguage, t } from './core/i18n';
@@ -34,6 +34,7 @@ const accountPassword = ref('');
 const accountPermissions = ref<Permissions>({ download: true, upload: false, text: false });
 const groupName = ref('');
 const groupSlug = ref('');
+const groupPins = reactive<Record<string, string>>({});
 
 function update(mutator: (draft: typeof view.value) => void) {
   void session.update(mutator);
@@ -138,6 +139,47 @@ function addGroup() {
 
 function removeGroup(id: string) {
   void session.deleteGroup(id);
+}
+
+function setGroupProtection(group: { id: string; public: boolean; allowUpload: boolean; allowText: boolean }, event: Event) {
+  const protection = (event.target as HTMLSelectElement).value as Protection;
+  void session.updateGroupAccess(group.id, {
+    public: group.public,
+    protection,
+    allowUpload: group.allowUpload,
+    allowText: group.allowText
+  });
+}
+
+function setGroupPublic(group: { id: string; protection: Protection; allowUpload: boolean; allowText: boolean }, event: Event) {
+  const checked = (event.target as HTMLInputElement).checked;
+  void session.updateGroupAccess(group.id, {
+    public: checked,
+    protection: group.protection,
+    allowUpload: group.allowUpload,
+    allowText: group.allowText
+  });
+}
+
+function setGroupAllow(group: { id: string; public: boolean; protection: Protection; allowUpload: boolean; allowText: boolean }, key: 'allowUpload' | 'allowText', event: Event) {
+  const checked = (event.target as HTMLInputElement).checked;
+  void session.updateGroupAccess(group.id, {
+    public: group.public,
+    protection: group.protection,
+    allowUpload: key === 'allowUpload' ? checked : group.allowUpload,
+    allowText: key === 'allowText' ? checked : group.allowText
+  });
+}
+
+function saveGroupPin(group: { id: string }) {
+  const pin = (groupPins[group.id] ?? '').trim();
+  if (!/^\d{6}$/.test(pin)) return;
+  void session.setGroupPin(group.id, pin);
+  groupPins[group.id] = '';
+}
+
+function clearGroupPin(group: { id: string }) {
+  void session.setGroupPin(group.id, null);
 }
 
 function closeWindow() {
@@ -305,6 +347,32 @@ function closeWindow() {
                       <span class="settings-account-name"><strong>{{ group.name }}</strong><span class="settings-account-password">/g/{{ group.slug }}</span></span>
                       <button class="button button--quiet" @click="removeGroup(group.id)">{{ t('删除') }}</button>
                     </div>
+                    <div class="settings-row">
+                      <span>{{ t('访问保护') }}</span>
+                      <select :value="group.protection" @change="setGroupProtection(group, $event)">
+                        <option value="link">{{ t('链接访问') }}</option>
+                        <option value="pin">{{ t('链接 + PIN') }}</option>
+                        <option value="accounts">{{ t('账号登录') }}</option>
+                      </select>
+                    </div>
+                    <div v-if="group.protection === 'link'" class="settings-row settings-row--switch">
+                      <span>{{ t('允许公开访问') }}</span>
+                      <label class="switch"><input type="checkbox" :checked="group.public" @change="setGroupPublic(group, $event)" /><span class="switch-track" aria-hidden="true"><span /></span></label>
+                    </div>
+                    <div class="settings-row settings-row--switch">
+                      <span>{{ t('允许访客上传文件') }}</span>
+                      <label class="switch"><input type="checkbox" :checked="group.allowUpload" @change="setGroupAllow(group, 'allowUpload', $event)" /><span class="switch-track" aria-hidden="true"><span /></span></label>
+                    </div>
+                    <div class="settings-row settings-row--switch">
+                      <span>{{ t('允许访客发布文字') }}</span>
+                      <label class="switch"><input type="checkbox" :checked="group.allowText" @change="setGroupAllow(group, 'allowText', $event)" /><span class="switch-track" aria-hidden="true"><span /></span></label>
+                    </div>
+                    <div v-if="group.protection === 'pin'" class="settings-inline">
+                      <input v-model="groupPins[group.id]" class="settings-number" inputmode="numeric" maxlength="6" :placeholder="t('6 位数字')" />
+                      <button class="button" :disabled="!/^\d{6}$/.test(groupPins[group.id] ?? '')" @click="saveGroupPin(group)">{{ t('保存 PIN') }}</button>
+                      <button v-if="group.pinSet" class="button button--quiet" @click="clearGroupPin(group)">{{ t('清除') }}</button>
+                    </div>
+                    <p class="settings-hint">{{ group.pinSet ? t('已设置 PIN，修改后访客需要重新解锁。') : t('还没有设置 PIN。') }}</p>
                   </li>
                 </ul>
                 <p v-if="!view.share.groups.length" class="settings-hint">{{ t('还没有自定义分组，默认分组始终可用。') }}</p>

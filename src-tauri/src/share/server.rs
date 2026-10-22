@@ -45,6 +45,7 @@ static ZIP_SLOT: Semaphore = Semaphore::const_new(1);
 #[derive(Clone)]
 pub struct Context {
     pub base: String,
+    pub cookie_path: String,
     pub items: Arc<RwLock<Vec<SharedItem>>>,
     pub port: u16,
     pub events: broadcast::Sender<()>,
@@ -231,7 +232,7 @@ struct LoginBody {
 
 fn session_cookie(context: &Context, claims: &Claims) -> Response {
     let token = auth::sign_claims(&context.auth.key, claims);
-    let cookie = auth::cookie_header(&token, "/");
+    let cookie = auth::cookie_header(&token, &context.cookie_path);
     let mut response = Json(json!({ "ok": true })).into_response();
     if let Ok(value) = HeaderValue::from_str(&cookie) {
         response.headers_mut().insert(header::SET_COOKIE, value);
@@ -320,12 +321,12 @@ async fn login(
     )
 }
 
-async fn logout(State(_context): State<Context>, headers: HeaderMap) -> Response {
+async fn logout(State(context): State<Context>, headers: HeaderMap) -> Response {
     if !csrf_ok(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
     let mut response = Json(json!({ "ok": true })).into_response();
-    if let Ok(value) = HeaderValue::from_str(&auth::clear_cookie("/")) {
+    if let Ok(value) = HeaderValue::from_str(&auth::clear_cookie(&context.cookie_path)) {
         response.headers_mut().insert(header::SET_COOKIE, value);
     }
     response

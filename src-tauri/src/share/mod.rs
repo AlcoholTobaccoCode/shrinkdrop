@@ -66,6 +66,8 @@ pub struct GroupStatus {
     pub name: String,
     pub slug: String,
     pub url: String,
+    pub public: bool,
+    pub protection: Protection,
     pub items: Vec<SharedItemView>,
 }
 
@@ -91,6 +93,11 @@ pub struct GroupOptions {
     pub name: String,
     pub slug: String,
     pub upload_dir: PathBuf,
+    pub public: bool,
+    pub protection: Protection,
+    pub pin_hash: Option<String>,
+    pub allow_upload: bool,
+    pub allow_text: bool,
 }
 
 #[derive(Clone)]
@@ -111,6 +118,8 @@ struct RuntimeGroup {
     options: GroupOptions,
     base: String,
     url: String,
+    public: bool,
+    protection: Protection,
     items: Arc<RwLock<Vec<SharedItem>>>,
     next_id: Arc<AtomicU32>,
     events: broadcast::Sender<()>,
@@ -125,7 +134,6 @@ struct Running {
     active_group: String,
     shutdown: watch::Sender<bool>,
     task: Option<tokio::task::JoinHandle<()>>,
-    warning: Option<String>,
 }
 
 #[derive(Default)]
@@ -280,14 +288,6 @@ impl ShareManager {
             .unwrap_or_else(|| "127.0.0.1".to_string());
         let token = random_token();
         let temp_root = shared_temp_dir(&token);
-        let auth = Arc::new(AuthConfig::new(
-            options.protection,
-            options.public,
-            options.pin_hash.clone(),
-            options.accounts.clone(),
-            options.allow_upload,
-            options.allow_text,
-        ));
         let mut contexts = Vec::new();
         let mut groups = Vec::new();
         for group in options.groups.clone() {
@@ -303,20 +303,35 @@ impl ShareManager {
             ));
             let items = Arc::new(RwLock::new(items));
             let (events, _) = broadcast::channel(16);
+            let auth = Arc::new(AuthConfig::new(
+                group.protection,
+                group.public,
+                group.pin_hash.clone(),
+                options.accounts.clone(),
+                group.allow_upload,
+                group.allow_text,
+            ));
             contexts.push(server::Context {
                 base: base.clone(),
+                cookie_path: if base.is_empty() {
+                    "/".to_string()
+                } else {
+                    base.clone()
+                },
                 items: items.clone(),
                 port,
                 events: events.clone(),
                 zip_dir: temp_root.join(&group.id),
-                auth: auth.clone(),
+                auth,
                 next_id: next_id.clone(),
                 upload_dir: group.upload_dir.clone(),
                 language: self.language.clone(),
-                public: options.public,
+                public: group.public,
                 app: app.clone(),
             });
             groups.push(RuntimeGroup {
+                public: group.public,
+                protection: group.protection,
                 options: group,
                 base,
                 url,
@@ -358,13 +373,6 @@ impl ShareManager {
             }
         });
 
-        let warning = if addresses.is_empty() {
-            Some("没有检测到局域网地址，目前只能在本机访问".to_string())
-        } else if matches!(options.protection, Protection::Link) && !options.public {
-            Some("当前未开放访问：在设置里开启「允许公开访问」，或改用 PIN/账号保护".to_string())
-        } else {
-            None
-        };
         let active_group = if groups.iter().any(|group| group.options.id == active_group) {
             active_group
         } else {
@@ -379,7 +387,6 @@ impl ShareManager {
             active_group,
             shutdown,
             task: Some(task),
-            warning,
         };
         let status = status_from(&running);
         *self
@@ -529,10 +536,25 @@ fn status_from(running: &Running) -> ShareStatus {
                 name: group.options.name.clone(),
                 slug: group.options.slug.clone(),
                 url: group.url.clone(),
+                public: group.public,
+                protection: group.protection,
                 items: items_view(&items),
             }
         })
         .collect();
+    let warning = if running.addresses.is_empty() {
+        Some("没有检测到局域网地址，目前只能在本机访问".to_string())
+    } else if let Some(group) = active {
+        if matches!(group.protection, Protection::Link) && !group.public {
+            Some(
+                "当前分组未开放访问：在设置里开启「允许公开访问」，或改用 PIN/账号保护".to_string(),
+            )
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let (items, url) = match active {
         Some(group) => {
             let items = group
@@ -551,7 +573,7 @@ fn status_from(running: &Running) -> ShareStatus {
         items,
         addresses: running.addresses.clone(),
         ipv6_addresses: running.ipv6_addresses.clone(),
-        warning: running.warning.clone(),
+        warning,
         active_group: active
             .map(|group| group.options.id.clone())
             .unwrap_or_default(),
@@ -839,6 +861,11 @@ mod tests {
                 name: "默认分组".to_string(),
                 slug: String::new(),
                 upload_dir: upload_dir.clone(),
+                public: true,
+                protection: Protection::Link,
+                pin_hash: None,
+                allow_upload: false,
+                allow_text: false,
             }],
             upload_dir,
             language: Language::Auto,
@@ -897,6 +924,11 @@ mod tests {
             name: "Team".to_string(),
             slug: "team-a".to_string(),
             upload_dir: std::env::temp_dir().join("tinypng-share-test-team"),
+            public: true,
+            protection: Protection::Link,
+            pin_hash: None,
+            allow_upload: false,
+            allow_text: false,
         });
         let manager = ShareManager::default();
         manager
@@ -946,6 +978,83 @@ mod tests {
         assert!(!root_items.iter().any(|item| item["name"] == "group-b.txt"));
         assert!(team_items.iter().any(|item| item["name"] == "group-b.txt"));
         assert!(!team_items.iter().any(|item| item["name"] == "group-a.txt"));
+        manager.stop().await;
+    }
+
+    #[tokio::test]
+    async fn group_pin_is_scoped_to_that_group() {
+        let file = temp_file("group-pin.txt", b"pin");
+        let mut settings = options();
+        settings.groups.push(GroupOptions {
+            id: "team".to_string(),
+            name: "Team".to_string(),
+            slug: "team-pin".to_string(),
+            upload_dir: std::env::temp_dir().join("tinypng-share-test-team-pin"),
+            public: false,
+            protection: Protection::Pin,
+            pin_hash: Some(auth::hash_secret("246810").unwrap()),
+            allow_upload: false,
+            allow_text: false,
+        });
+        let manager = ShareManager::default();
+        manager
+            .start(vec![file.display().to_string()], settings, None)
+            .await
+            .unwrap();
+        let status = manager.status();
+        let root_url = status.url.clone().unwrap();
+        let team_url = status
+            .groups
+            .iter()
+            .find(|group| group.slug == "team-pin")
+            .map(|group| group.url.clone())
+            .unwrap();
+        let client = reqwest::Client::new();
+        assert_eq!(
+            client
+                .get(format!("{root_url}/api/items"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::OK
+        );
+        assert_eq!(
+            client
+                .get(format!("{team_url}/api/items"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::UNAUTHORIZED
+        );
+        let unlock = client
+            .post(format!("{team_url}/api/unlock"))
+            .header("x-share-csrf", "1")
+            .json(&serde_json::json!({ "pin": "246810" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(unlock.status(), reqwest::StatusCode::OK);
+        let cookie = unlock
+            .headers()
+            .get(reqwest::header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(cookie.contains("Path=/g/team-pin"), "{cookie}");
+        let cookie = cookie.split(';').next().unwrap().to_string();
+        assert_eq!(
+            client
+                .get(format!("{team_url}/api/items"))
+                .header(reqwest::header::COOKIE, cookie)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::OK
+        );
         manager.stop().await;
     }
 
@@ -1423,6 +1532,7 @@ mod tests {
             let next_id = Arc::new(AtomicU32::new(100));
             let context = server::Context {
                 base: String::new(),
+                cookie_path: "/".to_string(),
                 items: shared.clone(),
                 port,
                 events,

@@ -21,6 +21,18 @@ export interface GroupView {
   id: string;
   name: string;
   slug: string;
+  public: boolean;
+  protection: Protection;
+  pinSet: boolean;
+  allowUpload: boolean;
+  allowText: boolean;
+}
+
+export interface GroupAccessPatch {
+  public: boolean;
+  protection: Protection;
+  allowUpload: boolean;
+  allowText: boolean;
 }
 
 export interface SettingsView {
@@ -77,6 +89,8 @@ export interface SettingsAdapter {
   addGroup(name: string, slug: string | null): Promise<SettingsMutation>;
   updateGroup(id: string, name: string, slug: string): Promise<SettingsMutation>;
   deleteGroup(id: string): Promise<SettingsMutation>;
+  updateGroupAccess(id: string, patch: GroupAccessPatch): Promise<SettingsMutation>;
+  setGroupPin(id: string, pin: string | null): Promise<SettingsMutation>;
 }
 
 export function defaultSettings(): SettingsView {
