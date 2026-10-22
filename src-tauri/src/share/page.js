@@ -532,6 +532,7 @@
 
   let source = null;
   let wasDisconnected = false;
+  let openCount = 0;
 
   function connectEvents() {
     if (source) source.close();
@@ -549,8 +550,9 @@
     });
     source.onopen = () => {
       state.connected = true;
+      openCount += 1;
       renderConn();
-      if (wasDisconnected) {
+      if (openCount > 1 || wasDisconnected) {
         wasDisconnected = false;
         void refreshConfig();
       }

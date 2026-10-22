@@ -353,6 +353,11 @@ function clearGroupPin(group: { id: string }) {
                   </label>
                 </div>
               </div>
+              <div class="settings-row settings-row--switch">
+                <span>{{ t('上传后自动保存到下载目录') }}</span>
+                <label class="switch"><input type="checkbox" :checked="view.share.autoSaveUploads" @change="setAutoSaveUploads" /><span class="switch-track" aria-hidden="true"><span /></span></label>
+              </div>
+              <p class="settings-hint">{{ t('默认手动：访客上传的文件只在列表中高亮，由你选择保存；开启后会自动复制到系统下载目录。') }}</p>
               <div class="settings-block">
                 <span>{{ t('分组') }}</span>
                 <p class="settings-hint">{{ t('默认分组在根路径；自定义分组在 /g/路径，文件互不共享，可独立设置访问保护。') }}</p>
@@ -397,11 +402,6 @@ function clearGroupPin(group: { id: string }) {
                   <button class="button" :disabled="!groupName.trim()" @click="addGroup">{{ t('添加分组') }}</button>
                 </div>
               </div>
-              <div class="settings-row settings-row--switch">
-                <span>{{ t('上传后自动保存到下载目录') }}</span>
-                <label class="switch"><input type="checkbox" :checked="view.share.autoSaveUploads" @change="setAutoSaveUploads" /><span class="switch-track" aria-hidden="true"><span /></span></label>
-              </div>
-              <p class="settings-hint">{{ t('默认手动：访客上传的文件只在列表中高亮，由你选择保存；开启后会自动复制到系统下载目录。') }}</p>
               <p v-if="view.share.protection === 'link'" class="settings-hint">{{ t('未开启公开访问时，链接模式下的访客无法打开分享。') }}</p>
               <p class="settings-hint">{{ t('分享运行中修改端口或保护方式会自动重启服务，旧链接随即失效。') }}</p>
             </section>

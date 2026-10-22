@@ -143,10 +143,7 @@ impl AuthConfig {
     }
 
     pub fn authenticated(&self, claims: Option<&Claims>) -> bool {
-        match self.protection {
-            Protection::Link => true,
-            _ => self.permissions(claims).is_some(),
-        }
+        self.permissions(claims).is_some()
     }
 
     pub fn locked(&self, ip: IpAddr) -> bool {
