@@ -10,6 +10,9 @@
   const langBtn = document.getElementById('lang');
   const connEl = document.getElementById('conn');
   const downloadDirEl = document.getElementById('downloadDir');
+  const authEl = document.getElementById('auth');
+  const sessionEl = document.getElementById('session');
+  const toolbarEl = document.getElementById('toolbar');
 
   //#region 文案
   const DICT = {
@@ -32,7 +35,33 @@
       live: '实时更新',
       offline: '连接中断，正在重连',
       count: count => `${count} 项`,
-      langLabel: 'EN'
+      langLabel: 'EN',
+      upload: '上传文件',
+      sendText: '发文字',
+      logout: '退出',
+      loggedIn: '已登录',
+      unlockTitle: '需要 PIN',
+      unlockHint: '分享者设置了访问 PIN，输入后即可访问。',
+      pinPlaceholder: '6 位数字',
+      loginTitle: '登录后访问',
+      loginHint: '分享者要求使用账号访问。',
+      username: '用户名',
+      password: '密码',
+      submit: '继续',
+      authFailed: '口令不正确',
+      authLocked: '尝试次数过多，请 10 分钟后再试',
+      chooseFiles: '请先选择文件',
+      uploadFailed: '上传失败，请重试',
+      tooLarge: '文件超过 1GB，无法上传',
+      textPlaceholder: '输入要分享的文字',
+      send: '发布',
+      textEmpty: '文字不能为空',
+      sendFailed: '发布失败，请重试',
+      noDownload: '当前账号没有下载权限，可继续上传或发布文字。',
+      cancel: '取消',
+      copy: '复制',
+      copied: '已复制',
+      textItem: '文字'
     },
     en: {
       tagline: 'LAN sharing',
@@ -53,7 +82,33 @@
       live: 'Live',
       offline: 'Reconnecting…',
       count: count => `${count} item${count === 1 ? '' : 's'}`,
-      langLabel: '中文'
+      langLabel: '中文',
+      upload: 'Upload',
+      sendText: 'Send text',
+      logout: 'Sign out',
+      loggedIn: 'signed in',
+      unlockTitle: 'PIN required',
+      unlockHint: 'The host set an access PIN.',
+      pinPlaceholder: '6-digit PIN',
+      loginTitle: 'Sign in',
+      loginHint: 'The host requires an account.',
+      username: 'Username',
+      password: 'Password',
+      submit: 'Continue',
+      authFailed: 'Wrong credentials',
+      authLocked: 'Too many attempts. Try again in 10 minutes.',
+      chooseFiles: 'Choose files first',
+      uploadFailed: 'Upload failed. Try again.',
+      tooLarge: 'File exceeds 1 GB',
+      textPlaceholder: 'Write something to share',
+      send: 'Send',
+      textEmpty: 'Text is empty',
+      sendFailed: 'Failed to send. Try again.',
+      noDownload: 'This account cannot download. You can still upload or send text.',
+      cancel: 'Cancel',
+      copy: 'Copy',
+      copied: 'Copied',
+      textItem: 'Text'
     }
   };
 
@@ -75,7 +130,8 @@
     query: '',
     loading: true,
     error: '',
-    connected: false
+    connected: false,
+    auth: null
   };
 
   let loadSerial = 0;
@@ -205,7 +261,44 @@
     statusEl.textContent = t('count', currentEntries().length);
   }
 
+  function textRowFor(entry) {
+    const li = document.createElement('li');
+    li.className = 'row';
+    const card = document.createElement('div');
+    card.className = 'row-link row-link--text';
+    const icon = document.createElement('span');
+    icon.className = 'icon';
+    icon.innerHTML = ICONS.text;
+    const main = document.createElement('span');
+    main.className = 'row-main';
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = entry.text || entry.name || '';
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = [t('textItem'), formatDate(entry.modified)].filter(Boolean).join(' · ');
+    main.append(name, meta);
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'btn ghost';
+    copy.textContent = t('copy');
+    copy.addEventListener('click', async () => {
+      const value = entry.text || '';
+      try {
+        await navigator.clipboard.writeText(value);
+        copy.textContent = t('copied');
+        setTimeout(() => { copy.textContent = t('copy'); }, 1400);
+      } catch (error) {
+        copy.textContent = t('copy');
+      }
+    });
+    card.append(icon, main, copy);
+    li.append(card);
+    return li;
+  }
+
   function rowFor(entry, root) {
+    if (entry.kind === 'text') return textRowFor(entry);
     const li = document.createElement('li');
     li.className = 'row' + (entry.kind === 'dir' ? ' row--dir' : '');
 
@@ -327,8 +420,9 @@
   }
 
   function renderConn() {
-    connEl.hidden = !state.connected;
+    connEl.hidden = false;
     connEl.textContent = state.connected ? t('live') : t('offline');
+    connEl.classList.toggle('is-offline', !state.connected);
   }
 
   function renderAll() {
@@ -347,6 +441,7 @@
       name: item.name,
       size: item.size,
       modified: item.modified,
+      text: item.text || null,
       path: '',
       thumb: false
     };
@@ -463,8 +558,284 @@
 
   window.addEventListener('popstate', syncFromUrl);
 
+  //#region 鉴权与内容
+  function hideChrome(hidden) {
+    toolbarEl.hidden = hidden;
+    statusEl.hidden = hidden;
+    listEl.hidden = hidden;
+  }
+
+  function authMessage(status) {
+    if (status === 429) return t('authLocked');
+    return t('authFailed');
+  }
+
+  function postJSON(path, body) {
+    return fetch(BASE + path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-share-csrf': '1' },
+      body: JSON.stringify(body)
+    });
+  }
+
+  function showAuth(info) {
+    hideChrome(true);
+    authEl.hidden = false;
+    clear(authEl);
+    const card = document.createElement('form');
+    card.className = 'auth-card';
+    const title = document.createElement('h2');
+    const hint = document.createElement('p');
+    const error = document.createElement('p');
+    error.className = 'auth-error';
+    card.append(title, hint);
+    let submit;
+    if (info.protection === 'pin') {
+      title.textContent = t('unlockTitle');
+      hint.textContent = t('unlockHint');
+      const input = document.createElement('input');
+      input.type = 'password';
+      input.inputMode = 'numeric';
+      input.maxLength = 6;
+      input.placeholder = t('pinPlaceholder');
+      input.autocomplete = 'one-time-code';
+      card.append(input);
+      submit = async () => {
+        const response = await postJSON('/api/unlock', { pin: input.value.trim() });
+        if (!response.ok) {
+          error.textContent = authMessage(response.status);
+          return;
+        }
+        await boot();
+      };
+    } else {
+      title.textContent = t('loginTitle');
+      hint.textContent = t('loginHint');
+      const username = document.createElement('input');
+      username.placeholder = t('username');
+      username.autocomplete = 'username';
+      const password = document.createElement('input');
+      password.type = 'password';
+      password.placeholder = t('password');
+      password.autocomplete = 'current-password';
+      card.append(username, password);
+      submit = async () => {
+        const response = await postJSON('/api/login', {
+          username: username.value.trim(),
+          password: password.value
+        });
+        if (!response.ok) {
+          error.textContent = authMessage(response.status);
+          return;
+        }
+        await boot();
+      };
+    }
+    const button = document.createElement('button');
+    button.type = 'submit';
+    button.className = 'btn primary';
+    button.textContent = t('submit');
+    card.append(error, button);
+    card.addEventListener('submit', event => {
+      event.preventDefault();
+      void submit();
+    });
+    authEl.append(card);
+    const first = card.querySelector('input');
+    if (first) first.focus();
+  }
+
+  function hideAuth() {
+    authEl.hidden = true;
+    clear(authEl);
+    hideChrome(false);
+  }
+
+  function renderSession(info) {
+    clear(sessionEl);
+    const permissions = info.permissions || {};
+    const actions = [];
+    if (permissions.upload) actions.push([t('upload'), openUpload]);
+    if (permissions.text) actions.push([t('sendText'), openText]);
+    if (info.account) {
+      const name = document.createElement('span');
+      name.className = 'session-name';
+      name.textContent = info.account + ' · ' + t('loggedIn');
+      sessionEl.append(name);
+      actions.push([t('logout'), logout]);
+    }
+    actions.forEach(([label, handler]) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'btn';
+      button.textContent = label;
+      button.addEventListener('click', handler);
+      sessionEl.append(button);
+    });
+    sessionEl.hidden = actions.length === 0;
+  }
+
+  async function logout() {
+    await postJSON('/api/logout', {});
+    await boot();
+  }
+
+  function showNoDownload() {
+    hideChrome(true);
+    statusEl.hidden = false;
+    listEl.hidden = true;
+    statusEl.className = 'status';
+    statusEl.textContent = t('noDownload');
+  }
+
+  function applyServerLang(lang) {
+    if (localStorage.getItem('share:lang')) return;
+    if (lang === 'zh' || lang === 'en') {
+      state.lang = lang;
+      applyStatic();
+    }
+  }
+
+  async function boot() {
+    try {
+      const info = await getJSON(BASE + '/api/state');
+      state.auth = info;
+      if (!info.authenticated) {
+        sessionEl.hidden = true;
+        showAuth(info);
+        return;
+      }
+      hideAuth();
+      applyServerLang(info.lang);
+      renderSession(info);
+      if (info.permissions && info.permissions.download) {
+        syncFromUrl();
+        connectEvents();
+      } else {
+        showNoDownload();
+        connectEvents();
+      }
+    } catch (error) {
+      hideChrome(true);
+      statusEl.hidden = false;
+      statusEl.className = 'status is-error';
+      statusEl.textContent = t('loadError');
+    }
+  }
+
+  function openSheet(titleText) {
+    const overlay = document.createElement('div');
+    overlay.className = 'sheet-overlay';
+    const card = document.createElement('div');
+    card.className = 'sheet';
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-modal', 'true');
+    const title = document.createElement('h2');
+    title.textContent = titleText;
+    const error = document.createElement('p');
+    error.className = 'sheet-error';
+    const actions = document.createElement('div');
+    actions.className = 'sheet-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn ghost';
+    cancel.textContent = t('cancel');
+    cancel.addEventListener('click', () => overlay.remove());
+    actions.append(cancel);
+    card.append(title, error, actions);
+    overlay.append(card);
+    overlay.addEventListener('click', event => {
+      if (event.target === overlay) overlay.remove();
+    });
+    document.body.append(overlay);
+    return { overlay, card, error, actions };
+  }
+
+  function openUpload() {
+    const { overlay, card, error, actions } = openSheet(t('upload'));
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    const progress = document.createElement('div');
+    progress.className = 'progress';
+    const bar = document.createElement('span');
+    progress.append(bar);
+    const submit = document.createElement('button');
+    submit.type = 'button';
+    submit.className = 'btn primary';
+    submit.textContent = t('upload');
+    card.insertBefore(input, error);
+    card.insertBefore(progress, actions);
+    actions.append(submit);
+    submit.addEventListener('click', () => {
+      const files = Array.from(input.files || []);
+      if (!files.length) {
+        error.textContent = t('chooseFiles');
+        return;
+      }
+      const form = new FormData();
+      files.forEach(file => form.append('file', file, file.name));
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', BASE + '/api/upload');
+      xhr.setRequestHeader('x-share-csrf', '1');
+      xhr.upload.onprogress = event => {
+        if (event.lengthComputable) bar.style.width = Math.round((event.loaded / event.total) * 100) + '%';
+      };
+      xhr.onload = () => {
+        if (xhr.status === 200) {
+          overlay.remove();
+          load();
+          return;
+        }
+        error.textContent = xhr.status === 413
+          ? t('tooLarge')
+          : xhr.status === 401 || xhr.status === 403
+            ? t('authFailed')
+            : t('uploadFailed');
+        submit.disabled = false;
+      };
+      xhr.onerror = () => {
+        error.textContent = t('uploadFailed');
+        submit.disabled = false;
+      };
+      submit.disabled = true;
+      xhr.send(form);
+    });
+  }
+
+  function openText() {
+    const { overlay, card, error, actions } = openSheet(t('sendText'));
+    const textarea = document.createElement('textarea');
+    textarea.placeholder = t('textPlaceholder');
+    textarea.maxLength = 10000;
+    const submit = document.createElement('button');
+    submit.type = 'button';
+    submit.className = 'btn primary';
+    submit.textContent = t('send');
+    card.insertBefore(textarea, error);
+    actions.append(submit);
+    submit.addEventListener('click', async () => {
+      const value = textarea.value.trim();
+      if (!value) {
+        error.textContent = t('textEmpty');
+        return;
+      }
+      submit.disabled = true;
+      const response = await postJSON('/api/text', { text: value });
+      if (response.ok) {
+        overlay.remove();
+        load();
+        return;
+      }
+      submit.disabled = false;
+      error.textContent = response.status === 401 || response.status === 403
+        ? t('authFailed')
+        : t('sendFailed');
+    });
+  }
+  //#endregion
+
   applyStatic();
-  syncFromUrl();
-  connectEvents();
+  boot();
   //#endregion
 })();

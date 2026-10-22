@@ -159,9 +159,18 @@ pub async fn save_temp_file<R: tauri::Runtime>(
             "image/webp" => "webp",
             _ => "png",
         };
-        let Some(selected) = app
-            .dialog()
-            .file()
+        let save_dir = app
+            .state::<crate::settings::SettingsState>()
+            .get()
+            .compression
+            .save_dir
+            .filter(|value| !value.trim().is_empty());
+        let dialog = app.dialog().file();
+        let dialog = match save_dir {
+            Some(directory) => dialog.set_directory(std::path::PathBuf::from(directory)),
+            None => dialog,
+        };
+        let Some(selected) = dialog
             .set_file_name(&name)
             .add_filter("图片", &[extension])
             .blocking_save_file()
@@ -191,7 +200,18 @@ pub async fn save_results<R: tauri::Runtime>(
         });
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let Some(selected) = app.dialog().file().blocking_pick_folder() else {
+        let save_dir = app
+            .state::<crate::settings::SettingsState>()
+            .get()
+            .compression
+            .save_dir
+            .filter(|value| !value.trim().is_empty());
+        let dialog = app.dialog().file();
+        let dialog = match save_dir {
+            Some(directory) => dialog.set_directory(std::path::PathBuf::from(directory)),
+            None => dialog,
+        };
+        let Some(selected) = dialog.blocking_pick_folder() else {
             return Ok(BatchSaveResult {
                 saved: 0,
                 failed: Vec::new(),

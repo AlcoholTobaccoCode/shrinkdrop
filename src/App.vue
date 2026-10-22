@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import LiteIcon from './components/LiteIcon.vue';
+import SettingsDialog from './components/SettingsDialog.vue';
 import { createLiteSession } from './core/lite/session';
 import { formatBytes, sizeChange, statusLabel } from './core/lite/presentation';
 import { createShareSession } from './core/share/session';
-import { createLiteAdapter, createShareAdapter } from './platform';
+import { createSettingsSession } from './core/settings/session';
+import { createLiteAdapter, createSettingsAdapter, createShareAdapter } from './platform';
 import { connectDesktopEvents } from './platform/native';
 import { fromBrowserFiles } from './platform/web';
 
@@ -36,6 +38,12 @@ const compressTab = ref<HTMLButtonElement>();
 const shareTab = ref<HTMLButtonElement>();
 const shareAdapter = createShareAdapter();
 const share = createShareSession(shareAdapter);
+const settingsAdapter = createSettingsAdapter();
+const settings = createSettingsSession(settingsAdapter);
+const settingsOpen = ref(false);
+const booting = ref(true);
+watch(() => settings.state.view.compression.concurrency, value => session.setConcurrency(value));
+watch(() => settings.state.view.compression.autoCompress, value => session.setAutoCompress(value));
 const shareState = share.state;
 const shareRunning = share.running;
 const shareBusy = share.busy;
@@ -46,6 +54,7 @@ async function setFace(next: Face) {
   if (face.value === next) return;
   face.value = next;
   void shareAdapter.setTitle(TITLES[next]).catch(() => {});
+  void settings.touchFace(next);
   await nextTick();
   (next === 'compress' ? compressTab.value : shareTab.value)?.focus();
 }
@@ -71,6 +80,11 @@ let detached = () => {};
 let detachedShare = () => {};
 let unmounted = false;
 onMounted(async () => {
+  const loaded = await settings.load();
+  session.setConcurrency(loaded.compression.concurrency);
+  session.setAutoCompress(loaded.compression.autoCompress);
+  face.value = loaded.general.startFace === 'last' ? loaded.general.lastFace : loaded.general.startFace;
+  booting.value = false;
   void shareAdapter.setTitle(TITLES[face.value]).catch(() => {});
   void share.connect().then(stop => { if (unmounted) stop(); else detachedShare = stop; });
   if (!desktop) return;
@@ -91,7 +105,7 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); share.dis
 </script>
 
 <template>
-  <main class="app-shell" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop">
+  <main class="app-shell" :class="{ 'is-booting': booting }" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop">
     <header class="toolbar">
       <div class="brand">
         <span class="brand-mark"><img src="/app-icon.png" alt="" width="34" height="34" draggable="false" /></span>
@@ -144,6 +158,10 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); share.dis
             </button>
           </template>
         </div>
+
+        <button class="icon-button settings-button" aria-label="设置" title="设置" @click="settingsOpen = true">
+          <LiteIcon name="settings" />
+        </button>
       </div>
     </header>
 
@@ -281,8 +299,11 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); share.dis
                   <div class="share-files">
                     <ul class="share-list" aria-label="已分享内容">
                       <li v-for="item in shareState.items" :key="item.id" class="share-row">
-                        <span class="share-name" :title="item.name">{{ item.name }}</span>
-                        <span class="share-size">{{ item.kind === 'dir' ? '文件夹' : formatBytes(item.size) }}</span>
+                        <span class="share-name" :title="item.kind === 'text' ? item.text || item.name : item.name">
+                          <template v-if="item.kind === 'text'">“{{ item.text || item.name }}”</template>
+                          <template v-else>{{ item.name }}</template>
+                        </span>
+                        <span class="share-size">{{ item.kind === 'dir' ? '文件夹' : item.kind === 'text' ? '文字' : formatBytes(item.size) }}</span>
                         <button class="icon-button" :aria-label="`移除 ${item.name}`" :disabled="!desktop" @click="share.remove(item.id)"><LiteIcon name="close" /></button>
                       </li>
                     </ul>
@@ -322,4 +343,10 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); share.dis
       </div>
     </div>
   </main>
+
+  <SettingsDialog :session="settings" :open="settingsOpen" @close="settingsOpen = false" />
+  <div v-if="settings.state.toast" class="toast" role="status">
+    <span>{{ settings.state.toast }}</span>
+    <button class="icon-button" aria-label="关闭提示" @click="settings.dismissToast()"><LiteIcon name="close" /></button>
+  </div>
 </template>

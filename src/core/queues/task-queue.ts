@@ -14,11 +14,21 @@ export class TaskQueue {
   private readonly controllers = new Set<AbortController>();
   private readonly idleWaiters: Array<() => void> = [];
   private active = 0;
+  private maxConcurrency: number;
 
-  constructor(private readonly maxConcurrency = 3) {
+  constructor(maxConcurrency = 3) {
     if (!Number.isInteger(maxConcurrency) || maxConcurrency < 1) {
       throw new RangeError('maxConcurrency 必须是大于 0 的整数');
     }
+    this.maxConcurrency = maxConcurrency;
+  }
+
+  setConcurrency(maxConcurrency: number): void {
+    if (!Number.isInteger(maxConcurrency) || maxConcurrency < 1) {
+      throw new RangeError('maxConcurrency 必须是大于 0 的整数');
+    }
+    this.maxConcurrency = maxConcurrency;
+    this.drain();
   }
 
   add<T>(

@@ -1,6 +1,6 @@
 # File Share 设计（局域网分享面）
 
-日期：2026-10-21。状态：P0、P1、P2 已完成，P3 待开始。
+日期：2026-10-22。状态：P0~P3 已完成，P4 待开始。
 
 参考项目：[file-share](https://github.com/cky-thinker/file-share)（Electron/uTools + Express + Vue 访客页，MIT）。只借鉴能力与协议形状，服务端与访客页均重写。
 
@@ -72,17 +72,18 @@ Runtime   { running, url, port, candidates[], connections, transfer }
 
 ## 认证与权限
 
-- **token**：32 字节随机数的 base32/hex 表示，只在分享链接中出现一次；校验使用常量时间比较。停止服务即失效。
+- **token**：16 字节随机数的 32 位十六进制表示，只在分享链接中出现一次；校验使用常量时间比较。停止或重启服务即失效。
 - **PIN**：6 位数字，Argon2id 加盐哈希；每 IP 5 次失败锁 10 分钟；解锁后 cookie 有效期 12 小时。
 - **账号**：用户名 + Argon2id 口令；登录后 cookie 携带权限声明并签名（HMAC-SHA256，进程内随机密钥，重启失效）。
-- **权限**：`download` / `uploadFile` / `uploadText` 三个位；链接模式下由分享者用三个开关决定，账号模式下按账号配置。
+- **权限**：`download` / `upload` / `text` 三个位；链接和 PIN 模式下由分享者的「允许上传/发文字」开关决定，账号模式下按账号配置。
+- **会话**：HMAC-SHA256 签名 cookie，12 小时有效、HttpOnly、SameSite=Strict、路径限定到 `/s/<token>`；写操作要求 `X-Share-Csrf: 1`；每 IP 5 次失败锁 10 分钟。
 - 切换保护级别会让现有会话失效，访客需要重新进入；桌面端二次确认。
 
 ## 安全清单
 
 - 校验 Host 必须是 IP 字面量、`localhost` 或本机名，防 DNS rebinding；写操作校验 Origin/Sec-Fetch-Site，并要求 CSRF 头。
 - 路径必须 `canonicalize` 后落在允许根目录内；拒绝 `..`、软链接越界、隐藏文件；Windows 大小写不敏感比较。
-- 上传文件名去掉路径分隔符与控制字符，重名加序号；限制单文件大小、总配额与并发。
+- 上传文件名去掉路径分隔符与控制字符，重名加序号；单文件 1GB、单次 20 个，先写临时文件再原子改名。
 - 上传文件与下载响应统一 `Content-Disposition: attachment` + `X-Content-Type-Options: nosniff`，防止访客页被当 HTML 执行。
 - 访客页设置严格 CSP；不加载第三方资源。
 - 每 IP 连接数与请求速率限制；SSE 客户端上限；上传总大小上限。
@@ -118,6 +119,13 @@ stopped → starting → running { url, port } → stopping → stopped
 - 中英双语跟随 `Accept-Language`，可手动切换；亮/暗色跟随系统。
 - 无 JavaScript 时至少能列出文件和下载链接（渐进增强）。
 
+## 设置（S1/S2）
+
+- 存储：应用配置目录下的 `settings.json`，原子写；PIN 与账号口令只保存 Argon2id 哈希。
+- 入口：头部齿轮 + 居中弹窗，分「通用 / 压缩 / 分享 / 关于」四组；修改即时保存并生效。
+- 字段：通用（启动面、访客语言）、压缩（默认自动压缩、并发 1~5、保存目录）、分享（端口、上传目录、保护级别、PIN、账号与权限、允许上传/文字）、关于。
+- 联动：端口、保护级别、PIN、账号或访客语言变化时，若分享正在运行则自动重启并保留分享列表；前端 toast 提示旧链接失效，需要手动关闭。并发与默认自动压缩即时应用到会话；保存目录注入原生保存/选目录对话框。
+
 ## 分期
 
 | 阶段 | 内容 | 验收 |
@@ -151,6 +159,15 @@ stopped → starting → running { url, port } → stopping → stopped
 - 桌面端：空状态与运行态都支持追加文件/文件夹，分享行区分「文件夹」。
 - 验证：vitest 95 项、cargo test 54 项通过；Mac 实测分享 `docs/lite`：条目/子目录列表正确，zip 9 个条目、288KB，缩略图 200×156 JPEG；访客页 390/900 宽度截图正常，SSE 显示「实时更新」。
 - 未做：上传、文字、PIN、账号权限（P3）；压缩结果直连分享（P4）。
+
+## P3 结果（2026-10-22）
+
+- 设置：`settings_get/update/touch_face/pick_directory` 与 PIN/账号命令；JSON 持久化、即时保存、按影响范围自动重启分享。
+- 鉴权：链接 / PIN / 账号三级；PIN 与口令 Argon2id；HMAC 会话 cookie；失败锁定；写接口 CSRF 头。
+- 上传：multipart 流式写入上传目录（单文件 1GB、单次 20 个），文件名消毒、重名加序号、临时文件刷盘后原子改名；上传项登记进分享列表并触发 SSE。
+- 文字：`/api/text` 最长 1 万字，作为 text 项进入列表，访客页可复制。
+- 桌面：设置弹窗；并发与保存目录接入现有压缩流程；分享面显示文字与上传项。
+- 验证：cargo test 63 项、vitest 95 项通过；访客页 PIN/上传/文字界面通过浏览器预览核对。
 
 ## 测试
 

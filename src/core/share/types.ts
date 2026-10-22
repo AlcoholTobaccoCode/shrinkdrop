@@ -1,4 +1,4 @@
-export type ShareKind = 'file' | 'dir';
+export type ShareKind = 'file' | 'dir' | 'text';
 
 export interface ShareItem {
   id: number;
@@ -6,6 +6,7 @@ export interface ShareItem {
   name: string;
   size: number;
   modified: number | null;
+  text: string | null;
 }
 
 export interface ShareStatus {

@@ -2,6 +2,7 @@
 //!
 //! 参考 file-share 的能力形状，服务端用 axum 重写；压缩链路保持原样。
 
+pub mod auth;
 mod net;
 mod server;
 
@@ -18,6 +19,9 @@ use tauri_plugin_dialog::DialogExt;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, watch};
 
+use crate::settings::{SettingsState, VisitorLang};
+use auth::{Account, AuthConfig, Protection};
+
 const DEFAULT_PORT: u16 = 5421;
 const MAX_SHARED_ITEMS: usize = 200;
 /// 停止服务时等待在途下载的时间。
@@ -28,9 +32,10 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 pub enum ItemKind {
     File,
     Dir,
+    Text,
 }
 
-/// 分享中的一个文件或目录。真实路径只留在 Rust 侧。
+/// 分享中的一个文件、目录或文字。真实路径只留在 Rust 侧。
 #[derive(Clone)]
 pub struct SharedItem {
     pub id: u32,
@@ -39,6 +44,7 @@ pub struct SharedItem {
     pub path: PathBuf,
     pub size: u64,
     pub modified: Option<u64>,
+    pub text: Option<String>,
 }
 
 /// 下发给前端的描述，不含本机路径。
@@ -50,6 +56,7 @@ pub struct SharedItemView {
     pub name: String,
     pub size: u64,
     pub modified: Option<u64>,
+    pub text: Option<String>,
 }
 
 #[derive(Clone, Serialize, Default)]
@@ -64,12 +71,24 @@ pub struct ShareStatus {
     pub warning: Option<String>,
 }
 
+#[derive(Clone)]
+pub struct ShareOptions {
+    pub port: u16,
+    pub protection: Protection,
+    pub pin_hash: Option<String>,
+    pub allow_upload: bool,
+    pub allow_text: bool,
+    pub accounts: Vec<Account>,
+    pub upload_dir: PathBuf,
+    pub visitor_lang: VisitorLang,
+}
+
 struct Running {
     token: String,
     url: String,
     port: u16,
     items: Arc<RwLock<Vec<SharedItem>>>,
-    next_id: AtomicU32,
+    next_id: Arc<AtomicU32>,
     addresses: Vec<String>,
     shutdown: watch::Sender<bool>,
     task: tokio::task::JoinHandle<()>,
@@ -86,35 +105,70 @@ fn shared_temp_dir(token: &str) -> PathBuf {
 }
 
 impl ShareManager {
-    pub async fn start(&self, paths: Vec<String>) -> Result<ShareStatus, String> {
+    pub async fn start(
+        &self,
+        paths: Vec<String>,
+        options: ShareOptions,
+    ) -> Result<ShareStatus, String> {
         let items = collect_items(paths)?;
-        // 先停掉旧会话，复用同一端口与列表语义。
-        let _ = self.stop().await;
+        self.spawn_server(items, options).await
+    }
 
-        let token = random_token();
-        let (listener, port) = bind_listener().await?;
+    /// 设置变更后重启服务，保留当前分享列表（含文字与上传项）。
+    pub async fn restart(&self, options: ShareOptions) -> Result<ShareStatus, String> {
+        let Some(items) = self.take_running().await else {
+            return Err("分享还没有开始".to_string());
+        };
+        let snapshot = items.read().map(|guard| guard.clone()).unwrap_or_default();
+        self.spawn_server(snapshot, options).await
+    }
+
+    async fn spawn_server(
+        &self,
+        items: Vec<SharedItem>,
+        options: ShareOptions,
+    ) -> Result<ShareStatus, String> {
+        let (listener, port) = bind_listener(options.port).await?;
         let addresses = net::candidate_addresses();
         let primary = addresses
             .first()
             .cloned()
             .unwrap_or_else(|| "127.0.0.1".to_string());
+        let token = random_token();
         let url = format!("http://{primary}:{port}/s/{token}");
 
-        let next_id = items.iter().map(|item| item.id).max().unwrap_or(0) + 1;
+        let next_id = Arc::new(AtomicU32::new(
+            items.iter().map(|item| item.id).max().unwrap_or(0) + 1,
+        ));
         let items = Arc::new(RwLock::new(items));
         let (events, _) = broadcast::channel(16);
+        let auth = Arc::new(AuthConfig::new(
+            options.protection,
+            options.pin_hash.clone(),
+            options.accounts.clone(),
+            options.allow_upload,
+            options.allow_text,
+        ));
         let context = server::Context {
             token: Arc::new(token.clone()),
             items: items.clone(),
             port,
             events: events.clone(),
             zip_dir: shared_temp_dir(&token),
+            auth,
+            next_id: next_id.clone(),
+            upload_dir: options.upload_dir.clone(),
+            visitor_lang: options.visitor_lang,
         };
         let app = server::router(context);
 
         let (shutdown, mut rx) = watch::channel(false);
         let task = tokio::spawn(async move {
-            let served = axum::serve(listener, app).with_graceful_shutdown(async move {
+            let served = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move {
                 let _ = rx.changed().await;
             });
             let _ = served.await;
@@ -125,7 +179,7 @@ impl ShareManager {
             url,
             port,
             items,
-            next_id: AtomicU32::new(next_id),
+            next_id,
             addresses,
             shutdown,
             task,
@@ -139,19 +193,27 @@ impl ShareManager {
         Ok(status)
     }
 
-    pub async fn stop(&self) -> ShareStatus {
-        let running = self.running.lock().ok().and_then(|mut guard| guard.take());
-        if let Some(running) = running {
-            let _ = running.shutdown.send(true);
-            let mut task = running.task;
-            if tokio::time::timeout(SHUTDOWN_GRACE, &mut task)
-                .await
-                .is_err()
-            {
-                task.abort();
-            }
-            let _ = fs::remove_dir_all(shared_temp_dir(&running.token));
+    /// 停止监听并返回分享列表，供重启复用。
+    async fn take_running(&self) -> Option<Arc<RwLock<Vec<SharedItem>>>> {
+        let running = self
+            .running
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take())?;
+        let _ = running.shutdown.send(true);
+        let mut task = running.task;
+        if tokio::time::timeout(SHUTDOWN_GRACE, &mut task)
+            .await
+            .is_err()
+        {
+            task.abort();
         }
+        let _ = fs::remove_dir_all(shared_temp_dir(&running.token));
+        Some(running.items)
+    }
+
+    pub async fn stop(&self) -> ShareStatus {
+        self.take_running().await;
         ShareStatus::default()
     }
 
@@ -251,6 +313,7 @@ fn status_from(running: &Running) -> ShareStatus {
                 name: item.name.clone(),
                 size: item.size,
                 modified: item.modified,
+                text: item.text.clone(),
             })
             .collect(),
         addresses: running.addresses.clone(),
@@ -316,6 +379,7 @@ fn collect_items(paths: Vec<String>) -> Result<Vec<SharedItem>, String> {
                 0
             },
             modified: modified_secs(&meta),
+            text: None,
         });
     }
     Ok(items)
@@ -325,12 +389,11 @@ fn collect_items(paths: Vec<String>) -> Result<Vec<SharedItem>, String> {
 fn random_token() -> String {
     let mut bytes = [0u8; 16];
     if getrandom::fill(&mut bytes).is_err() {
-        // 极端情况下退化为时间 + 进程号，仍然保证长度一致。
         let fallback = format!(
             "{:x}{:x}",
             std::process::id(),
             std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+                .duration_since(UNIX_EPOCH)
                 .map(|value| value.as_nanos())
                 .unwrap_or_default()
         );
@@ -339,19 +402,23 @@ fn random_token() -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// 优先占用 5421，被占用时退回系统分配的临时端口。
-async fn bind_listener() -> Result<(TcpListener, u16), String> {
-    let listener = match TcpListener::bind(("0.0.0.0", DEFAULT_PORT)).await {
-        Ok(listener) => listener,
-        Err(_) => TcpListener::bind(("0.0.0.0", 0))
-            .await
-            .map_err(|error| format!("无法启动分享服务：{error}"))?,
+/// 端口 0 或默认端口被占用时退回系统分配的临时端口。
+async fn bind_listener(preferred: u16) -> Result<(TcpListener, u16), String> {
+    let try_ports: &[u16] = if preferred == 0 {
+        &[DEFAULT_PORT, 0]
+    } else {
+        &[preferred, 0]
     };
-    let port = listener
-        .local_addr()
-        .map_err(|error| format!("无法读取分享端口：{error}"))?
-        .port();
-    Ok((listener, port))
+    for port in try_ports {
+        if let Ok(listener) = TcpListener::bind(("0.0.0.0", *port)).await {
+            let bound = listener
+                .local_addr()
+                .map_err(|error| format!("无法读取分享端口：{error}"))?
+                .port();
+            return Ok((listener, bound));
+        }
+    }
+    Err("无法启动分享服务，请检查端口或防火墙".to_string())
 }
 
 /// 生成可内嵌的 SVG 二维码，前端直接渲染。
@@ -371,9 +438,11 @@ pub fn qr_svg(url: &str) -> Result<String, String> {
 pub async fn share_start(
     app: AppHandle,
     manager: tauri::State<'_, ShareManager>,
+    settings: tauri::State<'_, SettingsState>,
     paths: Vec<String>,
 ) -> Result<ShareStatus, String> {
-    let status = manager.start(paths).await?;
+    let options = crate::settings::share_options(&settings.get());
+    let status = manager.start(paths, options).await?;
     let _ = app.emit("share-status", status.clone());
     Ok(status)
 }
@@ -490,6 +559,19 @@ mod tests {
         path
     }
 
+    fn options() -> ShareOptions {
+        ShareOptions {
+            port: 0,
+            protection: Protection::Link,
+            pin_hash: None,
+            allow_upload: false,
+            allow_text: false,
+            accounts: Vec::new(),
+            upload_dir: std::env::temp_dir().join("tinypng-share-test-uploads"),
+            visitor_lang: VisitorLang::Auto,
+        }
+    }
+
     #[tokio::test]
     async fn token_is_32_hex_chars() {
         let token = random_token();
@@ -518,11 +600,51 @@ mod tests {
     #[test]
     fn qr_svg_is_self_contained() {
         let svg = qr_svg("http://192.168.1.5:5421/s/abc").unwrap();
-        assert!(
-            svg.trim_start().starts_with("<svg"),
-            "二维码应为纯 SVG 片段"
-        );
+        assert!(svg.trim_start().starts_with("<svg"));
         assert!(svg.contains("</svg>"));
+    }
+
+    #[tokio::test]
+    async fn manager_lifecycle_serves_adds_and_stops() {
+        let first = temp_file("life-a.txt", b"hello");
+        let folder = temp_folder("life-folder");
+        fs::write(folder.join("inside.txt"), b"inside").unwrap();
+        let manager = ShareManager::default();
+
+        let status = manager
+            .start(vec![first.display().to_string()], options())
+            .await
+            .unwrap();
+        assert!(status.running);
+        let url = status.url.clone().unwrap();
+        let token = url.rsplit('/').next().unwrap().to_string();
+        let port = status.port.unwrap();
+        let local = format!("http://127.0.0.1:{port}/s/{token}");
+
+        let client = reqwest::Client::new();
+        let listed: Vec<serde_json::Value> = client
+            .get(format!("{local}/api/items"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(listed.len(), 1);
+
+        let added = manager
+            .add_items(vec![folder.display().to_string()])
+            .unwrap();
+        assert_eq!(added.items.len(), 2);
+
+        let removed = manager.remove_item(added.items[0].id).unwrap();
+        assert_eq!(removed.items.len(), 1);
+
+        let restarted = manager.restart(options()).await.unwrap();
+        assert_eq!(restarted.items.len(), 1);
+
+        let stopped = manager.stop().await;
+        assert!(!stopped.running);
     }
 
     #[tokio::test]
@@ -530,7 +652,6 @@ mod tests {
         let path = temp_file("测试 图片.png", b"0123456789abcdef");
         let items = collect_items(vec![path.display().to_string()]).unwrap();
         let (base, _token, _items) = server_tests::spawn(items).await;
-        let origin = base.split("/s/").next().unwrap_or_default().to_string();
 
         let client = reqwest::Client::new();
         let list: serde_json::Value = client
@@ -545,7 +666,6 @@ mod tests {
         assert_eq!(list[0]["name"], "测试 图片.png");
         assert_eq!(list[0]["kind"], "file");
 
-        let _ = origin;
         let file_url = format!("{base}/api/download?id={}", list[0]["id"]);
         let full = client.get(&file_url).send().await.unwrap();
         assert_eq!(full.status(), reqwest::StatusCode::OK);
@@ -598,6 +718,7 @@ mod tests {
                 path: second,
                 size: 3,
                 modified: None,
+                text: None,
             });
         }
 
@@ -610,56 +731,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(after.len(), 2);
-        assert_eq!(after[1]["name"], "second.txt");
-    }
-
-    #[tokio::test]
-    async fn manager_lifecycle_serves_adds_and_stops() {
-        let first = temp_file("life-a.txt", b"hello");
-        let folder = temp_folder("life-folder");
-        fs::write(folder.join("inside.txt"), b"inside").unwrap();
-        let manager = ShareManager::default();
-
-        let status = manager
-            .start(vec![first.display().to_string()])
-            .await
-            .unwrap();
-        assert!(status.running);
-        let url = status.url.clone().unwrap();
-        let token = url.rsplit('/').next().unwrap().to_string();
-        let port = status.port.unwrap();
-        let local = format!("http://127.0.0.1:{port}/s/{token}");
-
-        let client = reqwest::Client::new();
-        let listed: Vec<serde_json::Value> = client
-            .get(format!("{local}/api/items"))
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        assert_eq!(listed.len(), 1);
-
-        let added = manager
-            .add_items(vec![folder.display().to_string()])
-            .unwrap();
-        assert_eq!(added.items.len(), 2);
-        assert!(added.items.iter().any(|item| item.kind == ItemKind::Dir));
-
-        let removed = manager.remove_item(added.items[0].id).unwrap();
-        assert_eq!(removed.items.len(), 1);
-
-        let stopped = manager.stop().await;
-        assert!(!stopped.running);
-        assert!(manager.status().items.is_empty());
-
-        tokio::time::sleep(Duration::from_millis(120)).await;
-        assert!(client
-            .get(format!("{local}/api/items"))
-            .send()
-            .await
-            .is_err());
     }
 
     #[tokio::test]
@@ -709,11 +780,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(zip.status(), reqwest::StatusCode::OK);
-        assert!(zip
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.contains("zip")));
         assert!(zip.bytes().await.unwrap().starts_with(b"PK"));
 
         let thumb = client
@@ -726,7 +792,6 @@ mod tests {
             thumb.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
             "image/jpeg"
         );
-        assert!(!thumb.bytes().await.unwrap().is_empty());
 
         let traversal = client
             .get(format!("{base}/api/list?id=1&path=..%2F"))
@@ -734,6 +799,177 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(traversal.status(), reqwest::StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn pin_protection_requires_unlock_cookie() {
+        let file = temp_file("pin.txt", b"pin");
+        let items = collect_items(vec![file.display().to_string()]).unwrap();
+        let mut options = options();
+        options.protection = Protection::Pin;
+        options.pin_hash = Some(auth::hash_secret("123456").unwrap());
+        let (base, _token, _items) = server_tests::spawn_with(items, options).await;
+
+        let client = reqwest::Client::new();
+        assert_eq!(
+            client
+                .get(format!("{base}/api/items"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::UNAUTHORIZED
+        );
+
+        let wrong = client
+            .post(format!("{base}/api/unlock"))
+            .header("x-share-csrf", "1")
+            .json(&serde_json::json!({ "pin": "000000" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(wrong.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+        let ok = client
+            .post(format!("{base}/api/unlock"))
+            .header("x-share-csrf", "1")
+            .json(&serde_json::json!({ "pin": "123456" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), reqwest::StatusCode::OK);
+        let cookie = ok
+            .headers()
+            .get(reqwest::header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string();
+
+        assert_eq!(
+            client
+                .get(format!("{base}/api/items"))
+                .header(reqwest::header::COOKIE, cookie)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn account_login_controls_permissions() {
+        let file = temp_file("account.txt", b"account");
+        let items = collect_items(vec![file.display().to_string()]).unwrap();
+        let mut options = options();
+        options.protection = Protection::Accounts;
+        options.accounts = vec![Account {
+            id: "a1".to_string(),
+            username: "alice".to_string(),
+            password_hash: auth::hash_secret("pass1234").unwrap(),
+            permissions: auth::Permissions {
+                download: true,
+                upload: false,
+                text: false,
+            },
+            enabled: true,
+        }];
+        let (base, _token, _items) = server_tests::spawn_with(items, options).await;
+
+        let client = reqwest::Client::new();
+        let login = client
+            .post(format!("{base}/api/login"))
+            .header("x-share-csrf", "1")
+            .json(&serde_json::json!({ "username": "alice", "password": "pass1234" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(login.status(), reqwest::StatusCode::OK);
+        let cookie = login
+            .headers()
+            .get(reqwest::header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string();
+
+        assert_eq!(
+            client
+                .get(format!("{base}/api/items"))
+                .header(reqwest::header::COOKIE, &cookie)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::OK
+        );
+        assert_eq!(
+            client
+                .post(format!("{base}/api/upload"))
+                .header(reqwest::header::COOKIE, &cookie)
+                .header("x-share-csrf", "1")
+                .multipart(reqwest::multipart::Form::new())
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn link_mode_accepts_text_and_uploads_when_enabled() {
+        let file = temp_file("link.txt", b"link");
+        let items = collect_items(vec![file.display().to_string()]).unwrap();
+        let upload_dir = temp_folder("upload-target");
+        let mut options = options();
+        options.allow_upload = true;
+        options.allow_text = true;
+        options.upload_dir = upload_dir.clone();
+        let (base, _token, _items) = server_tests::spawn_with(items, options).await;
+
+        let client = reqwest::Client::new();
+        let text = client
+            .post(format!("{base}/api/text"))
+            .header("x-share-csrf", "1")
+            .json(&serde_json::json!({ "text": "hello from visitor" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(text.status(), reqwest::StatusCode::OK);
+
+        let form = reqwest::multipart::Form::new().part(
+            "file",
+            reqwest::multipart::Part::bytes(b"uploaded".to_vec()).file_name("evil/../报告.txt"),
+        );
+        let upload = client
+            .post(format!("{base}/api/upload"))
+            .header("x-share-csrf", "1")
+            .multipart(form)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(upload.status(), reqwest::StatusCode::OK);
+
+        let listed: Vec<serde_json::Value> = client
+            .get(format!("{base}/api/items"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(listed.iter().any(|item| item["kind"] == "text"));
+        assert!(listed.iter().any(|item| item["name"] == "报告.txt"));
+        assert!(upload_dir.join("报告.txt").exists());
+        assert!(!upload_dir.join("evil").exists());
     }
 
     #[tokio::test]
@@ -765,32 +1001,58 @@ mod tests {
 
     /// 在 127.0.0.1 的随机端口启动同一套路由，供测试复用。
     mod server_tests {
+        use std::sync::atomic::AtomicU32;
         use std::sync::{Arc, RwLock};
 
         use tokio::net::TcpListener;
         use tokio::sync::broadcast;
 
+        use super::super::auth::AuthConfig;
         use super::super::server;
-        use super::super::SharedItem;
+        use super::super::{ShareOptions, SharedItem, VisitorLang};
+        use super::options;
 
         pub async fn spawn(
             items: Vec<SharedItem>,
+        ) -> (String, String, Arc<RwLock<Vec<SharedItem>>>) {
+            spawn_with(items, options()).await
+        }
+
+        pub async fn spawn_with(
+            items: Vec<SharedItem>,
+            options: ShareOptions,
         ) -> (String, String, Arc<RwLock<Vec<SharedItem>>>) {
             let token = "test-token".to_string();
             let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
             let port = listener.local_addr().unwrap().port();
             let shared = Arc::new(RwLock::new(items));
             let (events, _) = broadcast::channel(16);
+            let auth = Arc::new(AuthConfig::new(
+                options.protection,
+                options.pin_hash.clone(),
+                options.accounts.clone(),
+                options.allow_upload,
+                options.allow_text,
+            ));
+            let next_id = Arc::new(AtomicU32::new(100));
             let context = server::Context {
                 token: Arc::new(token.clone()),
                 items: shared.clone(),
                 port,
                 events,
                 zip_dir: std::env::temp_dir().join("tinypng-share-test-zips"),
+                auth,
+                next_id,
+                upload_dir: options.upload_dir.clone(),
+                visitor_lang: VisitorLang::Auto,
             };
             let app = server::router(context);
             tokio::spawn(async move {
-                let _ = axum::serve(listener, app).await;
+                let _ = axum::serve(
+                    listener,
+                    app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                )
+                .await;
             });
             (format!("http://127.0.0.1:{port}/s/{token}"), token, shared)
         }

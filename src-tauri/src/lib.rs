@@ -4,6 +4,7 @@ mod commands;
 mod compression;
 mod file_ops;
 mod overwrite;
+mod settings;
 mod share;
 
 pub fn run() {
@@ -12,6 +13,12 @@ pub fn run() {
         .manage(file_ops::FileState::default())
         .manage(compression::CompressionState::default())
         .manage(share::ShareManager::default())
+        .manage(settings::SettingsState::default())
+        .setup(|app| {
+            let loaded = settings::load(&app.handle());
+            app.state::<settings::SettingsState>().replace(loaded);
+            Ok(())
+        })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
                 let paths = paths.clone();
@@ -55,7 +62,15 @@ pub fn run() {
             share::share_pick_files,
             share::share_pick_directory,
             share::share_qr_svg,
-            share::share_set_title
+            share::share_set_title,
+            settings::settings_get,
+            settings::settings_update,
+            settings::settings_touch_face,
+            settings::settings_pick_directory,
+            settings::share_set_pin,
+            settings::share_add_account,
+            settings::share_update_account,
+            settings::share_delete_account
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

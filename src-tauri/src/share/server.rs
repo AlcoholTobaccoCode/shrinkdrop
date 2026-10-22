@@ -1,26 +1,33 @@
-//! 分享服务的 HTTP 路由、鉴权、目录浏览、zip 与缩略图。
+//! 分享服务的 HTTP 路由、鉴权、目录浏览、上传、zip 与缩略图。
 
 use std::fs;
 use std::io::Cursor;
+use std::net::SocketAddr;
 use std::path::{Path as FsPath, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::extract::{Path as UrlPath, Query, Request, State};
-use axum::http::{header, HeaderName, HeaderValue, StatusCode};
+use axum::extract::{
+    ConnectInfo, DefaultBodyLimit, Multipart, Path as UrlPath, Query, Request, State,
+};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
-use futures_util::Stream;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{broadcast, Semaphore};
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
+use super::auth::{self, AuthConfig, Claims, Permissions, Protection};
 use super::{ItemKind, SharedItem};
+use crate::settings::VisitorLang;
 
 const PAGE: &str = include_str!("page.html");
 const PAGE_CSS: &str = include_str!("page.css");
@@ -30,6 +37,9 @@ const THUMB_MAX_BYTES: u64 = 20_000_000;
 const ZIP_MAX_FILES: usize = 20_000;
 const ZIP_MAX_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const ZIP_TTL: Duration = Duration::from_secs(600);
+const MAX_UPLOAD_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_UPLOAD_FILES: usize = 20;
+const MAX_TEXT_CHARS: usize = 10_000;
 
 /// 同一时间只允许一个目录打包，避免访客并发触发高 IO。
 static ZIP_SLOT: Semaphore = Semaphore::const_new(1);
@@ -41,6 +51,10 @@ pub struct Context {
     pub port: u16,
     pub events: broadcast::Sender<()>,
     pub zip_dir: PathBuf,
+    pub auth: Arc<AuthConfig>,
+    pub next_id: Arc<AtomicU32>,
+    pub upload_dir: PathBuf,
+    pub visitor_lang: VisitorLang,
 }
 
 pub fn router(context: Context) -> Router {
@@ -48,11 +62,25 @@ pub fn router(context: Context) -> Router {
         .route("/s/{token}", get(page))
         .route("/s/{token}/assets/app.css", get(stylesheet))
         .route("/s/{token}/assets/app.js", get(script))
+        .route("/s/{token}/api/state", get(state))
+        .route("/s/{token}/api/unlock", post(unlock))
+        .route("/s/{token}/api/login", post(login))
+        .route("/s/{token}/api/logout", post(logout))
         .route("/s/{token}/api/items", get(list_items))
         .route("/s/{token}/api/list", get(list_dir))
         .route("/s/{token}/api/download", get(download))
         .route("/s/{token}/api/thumb", get(thumbnail))
         .route("/s/{token}/api/events", get(events))
+        .route(
+            "/s/{token}/api/upload",
+            post(upload).layer(DefaultBodyLimit::max(
+                (MAX_UPLOAD_BYTES + 1024 * 1024) as usize,
+            )),
+        )
+        .route(
+            "/s/{token}/api/text",
+            post(add_text).layer(DefaultBodyLimit::max(64 * 1024)),
+        )
         .with_state(context.clone())
         .layer(middleware::from_fn_with_state(context, guard))
 }
@@ -83,6 +111,8 @@ async fn guard(State(context): State<Context>, request: Request, next: Next) -> 
     );
     response
 }
+
+//#region 页面与静态资源
 
 async fn page(State(_context): State<Context>, UrlPath(token): UrlPath<String>) -> Response {
     let base = format!("/s/{token}");
@@ -121,6 +151,175 @@ async fn script() -> Response {
     )
         .into_response()
 }
+//#endregion
+
+//#region 访客状态与登录
+
+fn claims(context: &Context, headers: &HeaderMap) -> Option<Claims> {
+    let token = auth::cookie_token(headers)?;
+    auth::verify_claims(&context.auth.key, &token)
+}
+
+fn permissions(context: &Context, headers: &HeaderMap) -> Option<Permissions> {
+    let claims = claims(context, headers);
+    context.auth.permissions(claims.as_ref())
+}
+
+fn csrf_ok(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-share-csrf")
+        .and_then(|value| value.to_str().ok())
+        == Some("1")
+}
+
+fn state_payload(context: &Context, headers: &HeaderMap) -> serde_json::Value {
+    let claims = claims(context, headers);
+    let permissions = context.auth.permissions(claims.as_ref());
+    let account = claims
+        .as_ref()
+        .filter(|claims| claims.scope == "account")
+        .and_then(|claims| claims.account.clone())
+        .and_then(|id| {
+            context
+                .auth
+                .accounts
+                .iter()
+                .find(|account| account.id == id && account.enabled)
+                .map(|account| account.username.clone())
+        });
+    json!({
+        "protection": context.auth.protection,
+        "authenticated": context.auth.authenticated(claims.as_ref()),
+        "account": account,
+        "permissions": permissions,
+        "lang": context.visitor_lang,
+        "upload": permissions.as_ref().map(|value| value.upload).unwrap_or(false),
+        "text": permissions.as_ref().map(|value| value.text).unwrap_or(false),
+    })
+}
+
+async fn state(State(context): State<Context>, headers: HeaderMap) -> Json<serde_json::Value> {
+    Json(state_payload(&context, &headers))
+}
+
+#[derive(Deserialize)]
+struct UnlockBody {
+    pin: String,
+}
+
+#[derive(Deserialize)]
+struct LoginBody {
+    username: String,
+    password: String,
+}
+
+fn session_cookie(context: &Context, claims: &Claims) -> Response {
+    let token = auth::sign_claims(&context.auth.key, claims);
+    let path = format!("/s/{}", context.token);
+    let cookie = auth::cookie_header(&token, &path);
+    let mut response = Json(json!({ "ok": true })).into_response();
+    if let Ok(value) = HeaderValue::from_str(&cookie) {
+        response.headers_mut().insert(header::SET_COOKIE, value);
+    }
+    response
+}
+
+async fn unlock(
+    State(context): State<Context>,
+    ConnectInfo(address): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<UnlockBody>,
+) -> Response {
+    if context.auth.protection != Protection::Pin {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    if !csrf_ok(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let ip = address.ip();
+    if context.auth.locked(ip) {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
+    let Some(hash) = context.auth.pin_hash.as_deref() else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    if !auth::verify_secret(&body.pin, hash) {
+        let locked = context.auth.record_failure(ip);
+        return (if locked {
+            StatusCode::TOO_MANY_REQUESTS
+        } else {
+            StatusCode::UNAUTHORIZED
+        })
+        .into_response();
+    }
+    context.auth.clear_failures(ip);
+    session_cookie(
+        &context,
+        &Claims {
+            scope: "pin".to_string(),
+            account: None,
+            expires: auth::expires_at(),
+        },
+    )
+}
+
+async fn login(
+    State(context): State<Context>,
+    ConnectInfo(address): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<LoginBody>,
+) -> Response {
+    if context.auth.protection != Protection::Accounts {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    if !csrf_ok(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let ip = address.ip();
+    if context.auth.locked(ip) {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
+    let account = context
+        .auth
+        .accounts
+        .iter()
+        .find(|account| account.enabled && account.username == body.username.trim());
+    let valid =
+        account.is_some_and(|account| auth::verify_secret(&body.password, &account.password_hash));
+    let Some(account) = account.filter(|_| valid) else {
+        let locked = context.auth.record_failure(ip);
+        return (if locked {
+            StatusCode::TOO_MANY_REQUESTS
+        } else {
+            StatusCode::UNAUTHORIZED
+        })
+        .into_response();
+    };
+    context.auth.clear_failures(ip);
+    session_cookie(
+        &context,
+        &Claims {
+            scope: "account".to_string(),
+            account: Some(account.id.clone()),
+            expires: auth::expires_at(),
+        },
+    )
+}
+
+async fn logout(State(context): State<Context>, headers: HeaderMap) -> Response {
+    if !csrf_ok(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let path = format!("/s/{}", context.token);
+    let mut response = Json(json!({ "ok": true })).into_response();
+    if let Ok(value) = HeaderValue::from_str(&auth::clear_cookie(&path)) {
+        response.headers_mut().insert(header::SET_COOKIE, value);
+    }
+    response
+}
+//#endregion
+
+//#region 分享列表
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -130,21 +329,46 @@ struct ItemView {
     name: String,
     size: u64,
     modified: Option<u64>,
+    text: Option<String>,
 }
 
-async fn list_items(State(context): State<Context>) -> Json<Vec<ItemView>> {
-    let items = read_items(&context);
-    Json(items.iter().map(item_view).collect())
-}
-
-fn item_view(item: &SharedItem) -> ItemView {
-    ItemView {
-        id: item.id,
-        kind: item.kind,
-        name: item.name.clone(),
-        size: item.size,
-        modified: item.modified,
+async fn list_items(State(context): State<Context>, headers: HeaderMap) -> Response {
+    let Some(permissions) = permissions(&context, &headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if !permissions.download {
+        return StatusCode::FORBIDDEN.into_response();
     }
+    let items = read_items(&context);
+    Json(
+        items
+            .iter()
+            .map(|item| ItemView {
+                id: item.id,
+                kind: item.kind,
+                name: item.name.clone(),
+                size: item.size,
+                modified: item.modified,
+                text: item.text.clone(),
+            })
+            .collect::<Vec<_>>(),
+    )
+    .into_response()
+}
+
+fn read_items(context: &Context) -> Vec<SharedItem> {
+    context
+        .items
+        .read()
+        .map(|guard| guard.clone())
+        .unwrap_or_default()
+}
+
+fn find_item(context: &Context, id: u32) -> Result<SharedItem, StatusCode> {
+    read_items(context)
+        .into_iter()
+        .find(|item| item.id == id)
+        .ok_or(StatusCode::NOT_FOUND)
 }
 
 #[derive(Deserialize)]
@@ -161,7 +385,6 @@ struct EntryView {
     kind: ItemKind,
     size: u64,
     modified: Option<u64>,
-    /// 相对分享根目录的路径，使用 `/` 分隔。
     path: String,
     thumb: bool,
 }
@@ -171,24 +394,42 @@ struct EntryView {
 struct ListView {
     id: u32,
     name: String,
-    /// 当前目录相对根目录的路径段，用于面包屑。
     path: Vec<String>,
     entries: Vec<EntryView>,
 }
 
 async fn list_dir(
     State(context): State<Context>,
+    headers: HeaderMap,
     Query(query): Query<ItemQuery>,
-) -> Result<Json<ListView>, StatusCode> {
-    let root = find_item(&context, query.id)?;
-    let dir = resolve_path(&root, &query.path)?;
-    let meta = fs::metadata(&dir).map_err(|_| StatusCode::NOT_FOUND)?;
+) -> Response {
+    let Some(permissions) = permissions(&context, &headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if !permissions.download {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Ok(root) = find_item(&context, query.id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if root.kind == ItemKind::Text {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let dir = match resolve_path(&root, &query.path) {
+        Ok(dir) => dir,
+        Err(status) => return status.into_response(),
+    };
+    let Ok(meta) = fs::metadata(&dir) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
     if !meta.is_dir() {
-        return Err(StatusCode::BAD_REQUEST);
+        return StatusCode::BAD_REQUEST.into_response();
     }
 
     let mut entries = Vec::new();
-    let reader = fs::read_dir(&dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let Ok(reader) = fs::read_dir(&dir) else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
     for entry in reader.flatten() {
         let Ok(canonical) = entry.path().canonicalize() else {
             continue;
@@ -209,10 +450,8 @@ async fn list_dir(
         let Ok(relative) = canonical.strip_prefix(&root.path) else {
             continue;
         };
-        let path = relative.to_string_lossy().replace('\\', "/");
-        let name = entry.file_name().to_string_lossy().into_owned();
         entries.push(EntryView {
-            name,
+            name: entry.file_name().to_string_lossy().into_owned(),
             kind,
             size: if kind == ItemKind::File {
                 meta.len()
@@ -224,8 +463,8 @@ async fn list_dir(
                 .ok()
                 .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|duration| duration.as_secs()),
+            path: relative.to_string_lossy().replace('\\', "/"),
             thumb: kind == ItemKind::File && is_image(&canonical),
-            path,
         });
     }
     entries.sort_by(|left, right| {
@@ -236,25 +475,36 @@ async fn list_dir(
             .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
     });
 
-    let path = relative_segments(&root, &dir);
-    Ok(Json(ListView {
+    Json(ListView {
         id: root.id,
         name: root.name.clone(),
-        path,
+        path: relative_segments(&root, &dir),
         entries,
-    }))
+    })
+    .into_response()
 }
 
 async fn download(
     State(context): State<Context>,
+    headers: HeaderMap,
     Query(query): Query<ItemQuery>,
     request: Request,
 ) -> Response {
+    let Some(permissions) = permissions(&context, &headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if !permissions.download {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let Ok(root) = find_item(&context, query.id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let Ok(target) = resolve_path(&root, &query.path) else {
-        return StatusCode::NOT_FOUND.into_response();
+    if root.kind == ItemKind::Text {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let target = match resolve_path(&root, &query.path) {
+        Ok(target) => target,
+        Err(status) => return status.into_response(),
     };
     let Ok(meta) = fs::metadata(&target) else {
         return StatusCode::NOT_FOUND.into_response();
@@ -296,12 +546,23 @@ async fn serve_file(path: PathBuf, name: String, request: Request) -> Response {
     response
 }
 
-async fn thumbnail(State(context): State<Context>, Query(query): Query<ItemQuery>) -> Response {
+async fn thumbnail(
+    State(context): State<Context>,
+    headers: HeaderMap,
+    Query(query): Query<ItemQuery>,
+) -> Response {
+    let Some(permissions) = permissions(&context, &headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if !permissions.download {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let Ok(root) = find_item(&context, query.id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let Ok(target) = resolve_path(&root, &query.path) else {
-        return StatusCode::NOT_FOUND.into_response();
+    let target = match resolve_path(&root, &query.path) {
+        Ok(target) => target,
+        Err(status) => return status.into_response(),
     };
     let Ok(meta) = fs::metadata(&target) else {
         return StatusCode::NOT_FOUND.into_response();
@@ -346,42 +607,239 @@ fn render_thumb(path: &FsPath) -> Result<Vec<u8>, String> {
         .map_err(|_| "无法生成缩略图".to_string())?;
     Ok(buffer)
 }
+//#endregion
 
-async fn events(
+//#region 上传与文字
+
+#[derive(Serialize)]
+struct UploadedFile {
+    name: String,
+    size: u64,
+}
+
+async fn upload(
     State(context): State<Context>,
-) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
-    let receiver = context.events.subscribe();
-    let stream = futures_util::stream::unfold(receiver, |mut receiver| async move {
-        let event = match tokio::time::timeout(Duration::from_secs(15), receiver.recv()).await {
-            Ok(Ok(())) => Event::default().event("update").data("1"),
-            Ok(Err(broadcast::error::RecvError::Lagged(_))) => {
-                Event::default().event("update").data("1")
-            }
-            Ok(Err(broadcast::error::RecvError::Closed)) => return None,
-            Err(_) => Event::default().comment("ping"),
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> Response {
+    let Some(permissions) = permissions(&context, &headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if !permissions.upload {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if !csrf_ok(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if fs::create_dir_all(&context.upload_dir).is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    let mut uploaded: Vec<UploadedFile> = Vec::new();
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(_) => return StatusCode::BAD_REQUEST.into_response(),
         };
-        Some((Ok::<_, std::convert::Infallible>(event), receiver))
-    });
-    Sse::new(stream).keep_alive(KeepAlive::default())
+        let Some(raw_name) = field.file_name().map(|value| value.to_string()) else {
+            continue;
+        };
+        if uploaded.len() >= MAX_UPLOAD_FILES {
+            break;
+        }
+        let name = sanitize_filename(&raw_name);
+        let Ok(path) = unique_path(&context.upload_dir, &name).await else {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        };
+        let temp = context
+            .upload_dir
+            .join(format!(".{}.part", random_suffix()));
+        let mut file = match tokio::fs::File::create(&temp).await {
+            Ok(file) => file,
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+        let mut size = 0u64;
+        let mut field = field;
+        let mut failed = false;
+        while let Ok(Some(chunk)) = field.chunk().await {
+            size += chunk.len() as u64;
+            if size > MAX_UPLOAD_BYTES {
+                failed = true;
+                break;
+            }
+            if file.write_all(&chunk).await.is_err() {
+                failed = true;
+                break;
+            }
+        }
+        if failed || size == 0 {
+            let _ = tokio::fs::remove_file(&temp).await;
+            if size > MAX_UPLOAD_BYTES {
+                return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+            }
+            continue;
+        }
+        if file.sync_all().await.is_err() {
+            let _ = tokio::fs::remove_file(&temp).await;
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+        drop(file);
+        if tokio::fs::rename(&temp, &path).await.is_err() {
+            let _ = tokio::fs::remove_file(&temp).await;
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+        let modified = fs::metadata(&path).ok().and_then(|meta| {
+            meta.modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs())
+        });
+        let id = context.next_id.fetch_add(1, Ordering::SeqCst);
+        let display = path
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_else(|| name.clone());
+        push_item(
+            &context,
+            SharedItem {
+                id,
+                kind: ItemKind::File,
+                name: display.clone(),
+                path,
+                size,
+                modified,
+                text: None,
+            },
+        );
+        uploaded.push(UploadedFile {
+            name: display,
+            size,
+        });
+    }
+
+    Json(json!({ "uploaded": uploaded })).into_response()
 }
 
-fn read_items(context: &Context) -> Vec<SharedItem> {
-    context
-        .items
-        .read()
-        .map(|guard| guard.clone())
-        .unwrap_or_default()
+#[derive(Deserialize)]
+struct TextBody {
+    text: String,
 }
 
-fn find_item(context: &Context, id: u32) -> Result<SharedItem, StatusCode> {
-    read_items(context)
-        .into_iter()
-        .find(|item| item.id == id)
-        .ok_or(StatusCode::NOT_FOUND)
+async fn add_text(
+    State(context): State<Context>,
+    headers: HeaderMap,
+    Json(body): Json<TextBody>,
+) -> Response {
+    let Some(permissions) = permissions(&context, &headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if !permissions.text {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if !csrf_ok(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let text = body.text.trim().to_string();
+    if text.is_empty() {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    if text.chars().count() > MAX_TEXT_CHARS {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    }
+    let name: String = text.chars().take(32).collect();
+    let id = context.next_id.fetch_add(1, Ordering::SeqCst);
+    let modified = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_secs());
+    push_item(
+        &context,
+        SharedItem {
+            id,
+            kind: ItemKind::Text,
+            name,
+            path: PathBuf::new(),
+            size: 0,
+            modified,
+            text: Some(text),
+        },
+    );
+    Json(json!({ "ok": true, "id": id })).into_response()
 }
 
-/// 把访客给的相对路径限制在分享根目录内，拒绝 `..`、反斜杠与越界软链。
+fn push_item(context: &Context, item: SharedItem) {
+    if let Ok(mut items) = context.items.write() {
+        items.push(item);
+    }
+    let _ = context.events.send(());
+}
+
+fn sanitize_filename(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(name).to_string();
+    let cleaned: String = base.chars().filter(|value| !value.is_control()).collect();
+    let trimmed = cleaned.trim().trim_start_matches('.').trim();
+    let trimmed = trimmed.trim_end_matches(['.', ' ']);
+    if trimmed.is_empty() || trimmed == ".." {
+        return "file".to_string();
+    }
+    trimmed.chars().take(120).collect()
+}
+
+async fn unique_path(directory: &FsPath, name: &str) -> Result<PathBuf, ()> {
+    let path = directory.join(name);
+    if tokio::fs::metadata(&path).await.is_err() {
+        return Ok(path);
+    }
+    let (stem, extension) = match name.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() => (stem.to_string(), format!(".{extension}")),
+        _ => (name.to_string(), String::new()),
+    };
+    for index in 1..1000 {
+        let candidate = directory.join(format!("{stem} ({index}){extension}"));
+        if tokio::fs::metadata(&candidate).await.is_err() {
+            return Ok(candidate);
+        }
+    }
+    Err(())
+}
+//#endregion
+
+//#region SSE
+
+async fn events(State(context): State<Context>, headers: HeaderMap) -> Response {
+    let allowed = permissions(&context, &headers).is_some();
+    let receiver = context.events.subscribe();
+    let stream =
+        futures_util::stream::unfold((receiver, allowed), |(mut receiver, allowed)| async move {
+            if !allowed {
+                return None;
+            }
+            let event = match tokio::time::timeout(Duration::from_secs(15), receiver.recv()).await {
+                Ok(Ok(())) => Event::default().event("update").data("1"),
+                Ok(Err(broadcast::error::RecvError::Lagged(_))) => {
+                    Event::default().event("update").data("1")
+                }
+                Ok(Err(broadcast::error::RecvError::Closed)) => return None,
+                Err(_) => Event::default().comment("ping"),
+            };
+            Some((
+                Ok::<_, std::convert::Infallible>(event),
+                (receiver, allowed),
+            ))
+        });
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+//#endregion
+
+//#region 路径与安全工具
+
 fn resolve_path(root: &SharedItem, relative: &str) -> Result<PathBuf, StatusCode> {
+    if root.kind == ItemKind::Text {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     let mut path = root.path.clone();
     for segment in relative.split('/') {
         if segment.is_empty() || segment == "." {
@@ -408,6 +866,7 @@ fn resolve_path(root: &SharedItem, relative: &str) -> Result<PathBuf, StatusCode
                 Err(StatusCode::NOT_FOUND)
             }
         }
+        ItemKind::Text => Err(StatusCode::BAD_REQUEST),
     }
 }
 
@@ -427,8 +886,7 @@ fn relative_segments(root: &SharedItem, target: &FsPath) -> Vec<String> {
 async fn build_zip_for(context: &Context, dir: &FsPath) -> Result<PathBuf, ()> {
     let _permit = ZIP_SLOT.acquire().await.map_err(|_| ())?;
     fs::create_dir_all(&context.zip_dir).map_err(|_| ())?;
-    let name = random_suffix();
-    let destination = context.zip_dir.join(format!("{name}.zip"));
+    let destination = context.zip_dir.join(format!("{}.zip", random_suffix()));
     let source = dir.to_path_buf();
     let target = destination.clone();
     tauri::async_runtime::spawn_blocking(move || build_zip(&source, &target))
@@ -436,7 +894,6 @@ async fn build_zip_for(context: &Context, dir: &FsPath) -> Result<PathBuf, ()> {
         .map_err(|_| ())?
         .map_err(|_| ())?;
 
-    // 十分钟后清理临时包；下载已经建立的文件句柄不受影响。
     let cleanup = destination.clone();
     tokio::spawn(async move {
         tokio::time::sleep(ZIP_TTL).await;
@@ -478,8 +935,7 @@ fn build_zip(root: &FsPath, destination: &FsPath) -> Result<(), String> {
                 stack.push(path);
             } else if file_type.is_file() {
                 files += 1;
-                let length = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
-                total += length;
+                total += entry.metadata().map(|meta| meta.len()).unwrap_or(0);
                 if files > ZIP_MAX_FILES || total > ZIP_MAX_BYTES {
                     return Err("分享内容过大，暂时无法打包".to_string());
                 }
@@ -495,13 +951,6 @@ fn build_zip(root: &FsPath, destination: &FsPath) -> Result<(), String> {
     Ok(())
 }
 
-fn is_image(path: &FsPath) -> bool {
-    path.extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_ascii_lowercase())
-        .is_some_and(|value| matches!(value.as_str(), "png" | "jpg" | "jpeg" | "webp"))
-}
-
 fn random_suffix() -> String {
     let mut bytes = [0u8; 8];
     if getrandom::fill(&mut bytes).is_err() {
@@ -510,7 +959,13 @@ fn random_suffix() -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// 只接受 IP 字面量或 localhost，端口必须与服务端口一致，防止 DNS rebinding。
+fn is_image(path: &FsPath) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .is_some_and(|value| matches!(value.as_str(), "png" | "jpg" | "jpeg" | "webp"))
+}
+
 fn host_allowed(host: Option<&str>, port: u16) -> bool {
     let Some(host) = host else {
         return false;
@@ -555,7 +1010,6 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
         == 0
 }
 
-/// `Content-Disposition` 同时给出 ASCII 回退名和 RFC 5987 的 UTF-8 名。
 fn content_disposition(name: &str) -> String {
     let fallback: String = name
         .chars()
@@ -585,6 +1039,7 @@ fn percent_encode(value: &str) -> String {
     }
     output
 }
+//#endregion
 
 #[cfg(test)]
 mod tests {
@@ -646,6 +1101,7 @@ mod tests {
             path: root.clone(),
             size: 0,
             modified: None,
+            text: None,
         };
 
         assert!(resolve_path(&item, "").is_ok());
@@ -685,6 +1141,15 @@ mod tests {
             .collect();
         assert!(names.contains("photos/a.txt"));
         assert!(names.contains("photos/sub/b.txt"));
+    }
+
+    #[test]
+    fn sanitizes_uploaded_filenames() {
+        assert_eq!(sanitize_filename("../../etc/passwd"), "passwd");
+        assert_eq!(sanitize_filename("..\\..\\evil.exe"), "evil.exe");
+        assert_eq!(sanitize_filename("   ..  "), "file");
+        assert_eq!(sanitize_filename("正常 文件.txt"), "正常 文件.txt");
+        assert_eq!(sanitize_filename(".hidden"), "hidden");
     }
 
     #[test]

@@ -6,7 +6,7 @@ const runningStatus = (overrides: Partial<ShareStatus> = {}): ShareStatus => ({
   running: true,
   url: 'http://192.168.1.5:5421/s/token',
   port: null,
-  items: [{ id: 1, kind: 'file', name: 'a.png', size: 1024, modified: null }],
+  items: [{ id: 1, kind: 'file', name: 'a.png', size: 1024, modified: null, text: null }],
   addresses: ['192.168.1.5'],
   warning: null,
   ...overrides
@@ -27,8 +27,8 @@ function fixture() {
     stop: vi.fn(async () => stoppedStatus()),
     addItems: vi.fn(async () => runningStatus({
       items: [
-        { id: 1, kind: 'file', name: 'a.png', size: 1024, modified: null },
-        { id: 2, kind: 'dir', name: 'photos', size: 0, modified: null }
+        { id: 1, kind: 'file', name: 'a.png', size: 1024, modified: null, text: null },
+        { id: 2, kind: 'dir', name: 'photos', size: 0, modified: null, text: null }
       ]
     })),
     removeItem: vi.fn(async () => runningStatus({ items: [] })),

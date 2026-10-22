@@ -1,0 +1,79 @@
+export type StartFace = 'last' | 'compress' | 'share';
+export type Face = 'compress' | 'share';
+export type VisitorLang = 'auto' | 'zh' | 'en';
+export type Protection = 'link' | 'pin' | 'accounts';
+
+export interface Permissions {
+  download: boolean;
+  upload: boolean;
+  text: boolean;
+}
+
+export interface AccountView {
+  id: string;
+  username: string;
+  permissions: Permissions;
+  enabled: boolean;
+}
+
+export interface SettingsView {
+  general: { startFace: StartFace; lastFace: Face; visitorLang: VisitorLang };
+  compression: { autoCompress: boolean; concurrency: number; saveDir: string | null };
+  share: {
+    port: number;
+    uploadDir: string | null;
+    protection: Protection;
+    pinSet: boolean;
+    allowUpload: boolean;
+    allowText: boolean;
+    accounts: AccountView[];
+  };
+}
+
+export interface SettingsMutation {
+  settings: SettingsView;
+  shareRestarted: boolean;
+}
+
+export interface SettingsUpdatePayload {
+  general: SettingsView['general'];
+  compression: SettingsView['compression'];
+  share: {
+    port: number;
+    uploadDir: string | null;
+    protection: Protection;
+    allowUpload: boolean;
+    allowText: boolean;
+  };
+}
+
+export interface SettingsAdapter {
+  desktop: boolean;
+  get(): Promise<SettingsView>;
+  update(payload: SettingsUpdatePayload): Promise<SettingsMutation>;
+  touchFace(face: Face): Promise<void>;
+  pickDirectory(): Promise<string | null>;
+  setPin(pin: string | null): Promise<SettingsMutation>;
+  addAccount(username: string, password: string, permissions: Permissions): Promise<SettingsMutation>;
+  updateAccount(
+    id: string,
+    patch: { enabled?: boolean; permissions?: Permissions; password?: string }
+  ): Promise<SettingsMutation>;
+  deleteAccount(id: string): Promise<SettingsMutation>;
+}
+
+export function defaultSettings(): SettingsView {
+  return {
+    general: { startFace: 'last', lastFace: 'compress', visitorLang: 'auto' },
+    compression: { autoCompress: false, concurrency: 5, saveDir: null },
+    share: {
+      port: 5421,
+      uploadDir: null,
+      protection: 'link',
+      pinSet: false,
+      allowUpload: false,
+      allowText: false,
+      accounts: []
+    }
+  };
+}

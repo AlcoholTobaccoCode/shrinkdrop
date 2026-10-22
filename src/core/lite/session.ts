@@ -36,6 +36,7 @@ interface Attempt {
 }
 interface SessionOptions {
   sessionId?: string;
+  concurrency?: number;
   createObjectURL?: (blob: Blob) => string;
   revokeObjectURL?: (url: string) => void;
 }
@@ -47,12 +48,15 @@ export const MAX_FILE_BYTES = 20_000_000;
 const IMPORT_EMPTY_ERROR = '没有可导入的图片，请确认文件可读、格式为 PNG/JPG/WebP，单张不超过 20 MB';
 //#endregion
 
-export function createLiteSession(adapter: LiteAdapter, options: SessionOptions = {}) {
+export function createLiteSession(adapter: LiteAdapter, options: SessionOptions = { concurrency: 5 }) {
   //#region 会话与统计
   let sessionId = options.sessionId ?? createUUID();
   const createURL = options.createObjectURL ?? (blob => URL.createObjectURL(blob));
   const revokeURL = options.revokeObjectURL ?? (url => URL.revokeObjectURL(url));
-  const queue = new TaskQueue(5);
+  const queue = new TaskQueue(options.concurrency ?? 5);
+  function setConcurrency(value: number) {
+    queue.setConcurrency(Math.min(5, Math.max(1, Math.round(value))));
+  }
   const thumbnails = new TaskQueue(3);
   const attempts = new Map<string, Attempt>();
   const pendingSaves = new Set<Promise<void>>();
@@ -366,7 +370,7 @@ export function createLiteSession(adapter: LiteAdapter, options: SessionOptions 
   }
   //#endregion
 
-  return { state, summary, get sessionId() { return sessionId; }, importSources, choose, start, setAutoCompress, retry, cancel, updateProgress,
+  return { state, summary, setConcurrency, get sessionId() { return sessionId; }, importSources, choose, start, setAutoCompress, retry, cancel, updateProgress,
     save, saveAll, overwrite, overwriteAll, remove, clear, dispose, whenIdle: () => queue.onIdle(), notify };
 }
 

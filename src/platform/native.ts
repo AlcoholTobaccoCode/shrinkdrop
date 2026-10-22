@@ -1,6 +1,7 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import type { BulkOverwriteResult, BulkSaveResult, CompressionResult, LiteAdapter, ProgressEvent, SourceFile } from '../core/lite/types';
 import type { ShareAdapter, ShareStatus } from '../core/share/types';
+import type { Face, Permissions, SettingsAdapter, SettingsMutation, SettingsUpdatePayload, SettingsView } from '../core/settings/types';
 
 export type NativeInvoke = <T = unknown>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -61,6 +62,24 @@ export function createNativeShareAdapter(invoke: NativeInvoke = tauriInvoke): Sh
       return listen<ShareStatus>('share-status', event => handler(event.payload));
     },
     setTitle: title => invoke<void>('share_set_title', { title })
+  };
+}
+//#endregion
+
+//#region 设置接口
+export function createNativeSettingsAdapter(invoke: NativeInvoke = tauriInvoke): SettingsAdapter {
+  return {
+    desktop: true,
+    get: () => invoke<SettingsView>('settings_get'),
+    update: (payload: SettingsUpdatePayload) => invoke<SettingsMutation>('settings_update', { update: payload }),
+    touchFace: (face: Face) => invoke<void>('settings_touch_face', { face }),
+    pickDirectory: () => invoke<string | null>('settings_pick_directory'),
+    setPin: (pin: string | null) => invoke<SettingsMutation>('share_set_pin', { pin }),
+    addAccount: (username: string, password: string, permissions: Permissions) =>
+      invoke<SettingsMutation>('share_add_account', { username, password, permissions }),
+    updateAccount: (id: string, patch: { enabled?: boolean; permissions?: Permissions; password?: string }) =>
+      invoke<SettingsMutation>('share_update_account', { id, ...patch }),
+    deleteAccount: (id: string) => invoke<SettingsMutation>('share_delete_account', { id })
   };
 }
 //#endregion

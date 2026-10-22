@@ -1,5 +1,7 @@
 import type { LiteAdapter, SourceFile } from '../core/lite/types';
 import type { ShareAdapter } from '../core/share/types';
+import type { SettingsAdapter, SettingsMutation, SettingsUpdatePayload } from '../core/settings/types';
+import { defaultSettings } from '../core/settings/types';
 import { emptyShareStatus } from '../core/share/types';
 import { createUUID } from '../core/lite/id';
 
@@ -64,6 +66,72 @@ export function createBrowserShareAdapter(): ShareAdapter {
     qrSvg: desktopRequired,
     onStatus: async () => () => {},
     setTitle: async title => { if (typeof document !== 'undefined') document.title = title; }
+  };
+}
+//#endregion
+
+//#region 浏览器预览的设置占位
+export function createBrowserSettingsAdapter(): SettingsAdapter {
+  let current = defaultSettings();
+  const result = (): SettingsMutation => ({ settings: current, shareRestarted: false });
+  return {
+    desktop: false,
+    get: async () => current,
+    update: async (payload: SettingsUpdatePayload) => {
+      current = {
+        ...current,
+        general: payload.general,
+        compression: payload.compression,
+        share: { ...current.share, ...payload.share }
+      };
+      return result();
+    },
+    touchFace: async face => {
+      current = { ...current, general: { ...current.general, lastFace: face } };
+    },
+    pickDirectory: async () => null,
+    setPin: async pin => {
+      current = { ...current, share: { ...current.share, pinSet: Boolean(pin) } };
+      return result();
+    },
+    addAccount: async (username, _password, permissions) => {
+      current = {
+        ...current,
+        share: {
+          ...current.share,
+          accounts: [
+            ...current.share.accounts,
+            { id: `preview-${username}`, username, permissions, enabled: true }
+          ]
+        }
+      };
+      return result();
+    },
+    updateAccount: async (id, patch) => {
+      current = {
+        ...current,
+        share: {
+          ...current.share,
+          accounts: current.share.accounts.map(account =>
+            account.id === id
+              ? {
+                  ...account,
+                  enabled: patch.enabled ?? account.enabled,
+                  permissions: patch.permissions ?? account.permissions
+                }
+              : account
+          )
+        }
+      };
+      return result();
+    },
+    deleteAccount: async id => {
+      current = {
+        ...current,
+        share: { ...current.share, accounts: current.share.accounts.filter(account => account.id !== id) }
+      };
+      return result();
+    }
   };
 }
 //#endregion
