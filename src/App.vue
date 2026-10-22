@@ -53,6 +53,7 @@ const sharePort = share.port;
 const selectedShareIds = ref<number[]>([]);
 const downloadBusy = ref(false);
 const qrPinned = ref(false);
+const shareGroupsEl = ref<HTMLElement>();
 const downloadableItems = computed(() => shareState.items.filter(item => item.kind !== 'text'));
 const selectedShareCount = computed(() => selectedShareIds.value.length);
 
@@ -100,6 +101,14 @@ const portDraft = ref(0);
 function copyWithQr() {
   qrPinned.value = !qrPinned.value;
   void share.copy();
+}
+
+function onGroupsWheel(event: WheelEvent) {
+  const element = shareGroupsEl.value;
+  if (!element || element.scrollWidth <= element.clientWidth) return;
+  if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+  event.preventDefault();
+  element.scrollLeft += event.deltaY;
 }
 
 function toggleShare() {
@@ -386,16 +395,16 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
                     : t('手机与电脑连同一个 Wi-Fi，选择文件或文件夹后扫码下载') }}</p>
                 </div>
                 <div class="share-status-actions">
-                  <span v-if="shareRunning && sharePort" class="share-port">
-                    <template v-if="!editingPort">{{ t('端口') }} <button class="port-button" :title="t('端口修改后会重启分享')" @click="startEditPort">{{ sharePort }}</button></template>
-                    <input v-else v-model.number="portDraft" class="port-input" type="number" min="0" max="65535"
-                      :aria-label="t('端口')" @blur="savePort" @keydown.enter.prevent="savePort" @keydown.esc="editingPort = false" />
-                  </span>
                   <button class="share-toggle" :class="{ 'is-on': shareRunning }" role="switch" :aria-checked="shareRunning"
                     :disabled="!desktop || shareBusy" @click="toggleShare">
                     <span class="share-toggle-track" aria-hidden="true"><span /></span>
                     <span>{{ shareRunning ? t('分享中') : t('已停止') }}</span>
                   </button>
+                  <span v-if="shareRunning && sharePort" class="share-port">
+                    <template v-if="!editingPort">{{ t('端口') }} <button class="port-button" :title="t('端口修改后会重启分享')" @click="startEditPort">{{ sharePort }}</button></template>
+                    <input v-else v-model.number="portDraft" class="port-input" type="number" min="0" max="65535"
+                      :aria-label="t('端口')" @blur="savePort" @keydown.enter.prevent="savePort" @keydown.esc="editingPort = false" />
+                  </span>
                 </div>
               </div>
 
@@ -403,7 +412,7 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
               <p v-if="shareState.warning" class="notice" role="note">{{ t(shareState.warning) }}</p>
 
               <template v-if="shareRunning">
-                <div v-if="shareState.groups.length > 1" class="share-groups" role="tablist" :aria-label="t('分组')">
+                <div v-if="shareState.groups.length > 1" ref="shareGroupsEl" class="share-groups" role="tablist" :aria-label="t('分组')" @wheel="onGroupsWheel">
                   <button v-for="group in shareState.groups" :key="group.id" type="button" class="share-group-tab"
                     :aria-selected="shareState.activeGroup === group.id" @click="share.setGroup(group.id)">
                     {{ group.id === 'default' ? t('默认分组') : group.name }}<span>{{ group.slug ? `/g/${group.slug}` : t('根路径') }}</span>

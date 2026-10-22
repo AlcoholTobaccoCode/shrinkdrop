@@ -258,10 +258,12 @@ input[type="checkbox"]:focus-visible, input[type="radio"]:focus-visible, select:
 /*#endregion */
 
 /*#region 分享链接细节 */
-.share-groups { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
-.share-group-tab { display: inline-flex; align-items: baseline; gap: 6px; min-height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--muted); font-size: 12px; cursor: pointer; }
+.share-groups { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; margin: 0 0 10px; padding: 4px 2px 7px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.share-groups::-webkit-scrollbar { height: 6px; }
+.share-groups::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+.share-group-tab { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 3px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; transform-origin: center; transition: transform .16s ease, background .16s ease, border-color .16s ease; }
 .share-group-tab span { font-size: 10px; font-family: ui-monospace, Menlo, monospace; opacity: .8; }
-.share-group-tab[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.share-group-tab[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; transform: scale(1.06); }
 .port-button { border: 0; padding: 2px 7px; border-radius: 5px; background: var(--accent-soft); color: var(--accent); font: inherit; font-weight: 650; font-variant-numeric: tabular-nums; cursor: pointer; }
 .port-button:hover { background: var(--accent); color: #fff; }
 .port-input { width: 80px; height: 26px; padding: 0 6px; border: 1px solid var(--accent); border-radius: 5px; background: var(--bg); color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -288,7 +290,7 @@ button:not(:disabled), select, summary, [role="button"], .share-group-tab, .port
 button:disabled, input:disabled { cursor: not-allowed; }
 .settings-head { justify-content: flex-end; min-height: 46px; padding: 8px 14px; }
 .settings-window { height: 100vh; overflow: hidden; }
-.share-status-actions { display: flex; align-items: center; gap: 10px; }
+.share-status-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
 .share-toggle { display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--muted); font-size: 12px; }
 .share-toggle.is-on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .share-toggle-track { position: relative; width: 26px; height: 15px; border-radius: 999px; background: var(--muted); display: inline-block; transition: background .15s; }
