@@ -112,18 +112,59 @@ impl ShareManager {
         &self,
         paths: Vec<String>,
         options: ShareOptions,
+        app: Option<AppHandle>,
     ) -> Result<ShareStatus, String> {
         let items = collect_items(paths)?;
-        self.spawn_server(items, options).await
+        self.spawn_server(items, options, app).await
     }
 
     /// 设置变更后重启服务，保留当前分享列表（含文字与上传项）。
-    pub async fn restart(&self, options: ShareOptions) -> Result<ShareStatus, String> {
+    pub async fn restart(
+        &self,
+        options: ShareOptions,
+        app: Option<AppHandle>,
+    ) -> Result<ShareStatus, String> {
         let Some(items) = self.take_running().await else {
             return Err("分享还没有开始".to_string());
         };
         let snapshot = items.read().map(|guard| guard.clone()).unwrap_or_default();
-        self.spawn_server(snapshot, options).await
+        self.spawn_server(snapshot, options, app).await
+    }
+
+    pub fn add_text(&self, text: String) -> Result<(), String> {
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return Err("文字不能为空".to_string());
+        }
+        if text.chars().count() > 10_000 {
+            return Err("文字不能超过 1 万字".to_string());
+        }
+        let guard = self
+            .running
+            .lock()
+            .map_err(|_| "分享状态不可用".to_string())?;
+        let Some(running) = guard.as_ref() else {
+            return Err("分享还没有开始".to_string());
+        };
+        let name: String = text.chars().take(32).collect();
+        let id = running.next_id.fetch_add(1, Ordering::SeqCst);
+        let modified = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|duration| duration.as_secs());
+        if let Ok(mut items) = running.items.write() {
+            items.push(SharedItem {
+                id,
+                kind: ItemKind::Text,
+                name,
+                path: PathBuf::new(),
+                size: 0,
+                modified,
+                text: Some(text),
+            });
+        }
+        let _ = running.events.send(());
+        Ok(())
     }
 
     pub fn set_language(&self, language: Language) {
@@ -141,6 +182,7 @@ impl ShareManager {
         &self,
         items: Vec<SharedItem>,
         options: ShareOptions,
+        app: Option<AppHandle>,
     ) -> Result<ShareStatus, String> {
         let (listener, port) = bind_listener(options.port).await?;
         let addresses = net::candidate_addresses();
@@ -174,6 +216,7 @@ impl ShareManager {
             upload_dir: options.upload_dir.clone(),
             language: self.language.clone(),
             public: options.public,
+            app,
         };
         if let Ok(mut language) = self.language.write() {
             *language = options.language;
@@ -460,7 +503,7 @@ pub async fn share_start(
     paths: Vec<String>,
 ) -> Result<ShareStatus, String> {
     let options = crate::settings::share_options(&settings.get());
-    let status = manager.start(paths, options).await?;
+    let status = manager.start(paths, options, Some(app.clone())).await?;
     let _ = app.emit("share-status", status.clone());
     Ok(status)
 }
@@ -541,6 +584,17 @@ pub fn share_qr_svg(url: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+pub fn share_add_text(
+    app: AppHandle,
+    manager: tauri::State<'_, ShareManager>,
+    text: String,
+) -> Result<(), String> {
+    manager.add_text(text)?;
+    let _ = app.emit("share-refresh", ());
+    Ok(())
+}
+
+#[tauri::command]
 pub fn share_set_title(app: AppHandle, title: String) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
@@ -616,6 +670,23 @@ mod tests {
         assert_eq!(items[1].kind, ItemKind::Dir);
     }
 
+    #[tokio::test]
+    async fn manager_adds_text_live() {
+        let file = temp_file("live-text.txt", b"x");
+        let manager = ShareManager::default();
+        manager
+            .start(vec![file.display().to_string()], options(), None)
+            .await
+            .unwrap();
+        manager.add_text("hello from manager".to_string()).unwrap();
+        let status = manager.status();
+        assert!(status
+            .items
+            .iter()
+            .any(|item| item.name == "hello from manager"));
+        manager.stop().await;
+    }
+
     #[test]
     fn qr_svg_is_self_contained() {
         let svg = qr_svg("http://192.168.1.5:5421/s/abc").unwrap();
@@ -631,7 +702,7 @@ mod tests {
         let manager = ShareManager::default();
 
         let status = manager
-            .start(vec![first.display().to_string()], options())
+            .start(vec![first.display().to_string()], options(), None)
             .await
             .unwrap();
         assert!(status.running);
@@ -658,7 +729,7 @@ mod tests {
         let removed = manager.remove_item(added.items[0].id).unwrap();
         assert_eq!(removed.items.len(), 1);
 
-        let restarted = manager.restart(options()).await.unwrap();
+        let restarted = manager.restart(options(), None).await.unwrap();
         assert_eq!(restarted.items.len(), 1);
 
         let stopped = manager.stop().await;
@@ -1098,6 +1169,7 @@ mod tests {
                 upload_dir: options.upload_dir.clone(),
                 language: Arc::new(RwLock::new(Language::Auto)),
                 public: true,
+                app: None,
             };
             let app = server::router(context);
             tokio::spawn(async move {

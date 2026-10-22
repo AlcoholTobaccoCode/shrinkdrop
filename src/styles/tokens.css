@@ -257,6 +257,22 @@ input[type="checkbox"]:focus-visible, input[type="radio"]:focus-visible, select:
 .settings-section input[type="text"], .settings-section input:not([type]), .settings-section input[type="password"], .settings-section input[type="number"] { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; color: var(--text); }
 /*#endregion */
 
+/*#region 分享链接细节 */
+.port-button { border: 0; padding: 2px 7px; border-radius: 5px; background: var(--accent-soft); color: var(--accent); font: inherit; font-weight: 650; font-variant-numeric: tabular-nums; cursor: pointer; }
+.port-button:hover { background: var(--accent); color: #fff; }
+.port-input { width: 80px; height: 26px; padding: 0 6px; border: 1px solid var(--accent); border-radius: 5px; background: var(--bg); color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; }
+.share-copy-wrap { position: relative; display: inline-flex; }
+.share-copy-wrap .button { display: inline-flex; align-items: center; gap: 6px; }
+.share-qr-pop { position: absolute; right: 0; top: calc(100% + 10px); z-index: 40; padding: 10px; border-radius: 10px; background: #fff; box-shadow: 0 14px 36px #0004; opacity: 0; visibility: hidden; transform: translateY(-5px); transition: opacity .16s ease, transform .16s ease, visibility .16s; pointer-events: none; }
+.share-qr-pop::before { content: ""; position: absolute; right: 22px; top: -5px; width: 10px; height: 10px; background: #fff; transform: rotate(45deg); }
+.share-qr-pop svg { display: block; width: 168px; height: 168px; }
+.share-copy-wrap:hover .share-qr-pop, .share-copy-wrap:focus-within .share-qr-pop { opacity: 1; visibility: visible; transform: none; }
+.text-sheet { width: min(460px, 100%); display: flex; flex-direction: column; gap: 12px; padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: 0 24px 60px #0005; }
+.text-sheet h2 { margin: 0; font-size: 16px; }
+.text-sheet textarea { min-height: 140px; resize: vertical; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; font-size: 13px; }
+.text-sheet-actions { display: flex; justify-content: flex-end; gap: 8px; }
+/*#endregion */
+
 /*#region 窄窗口与减少动效 */
 @media (max-width: 740px) {
   .app-shell { padding: 0 18px; }

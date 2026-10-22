@@ -49,6 +49,38 @@ const shareRunning = share.running;
 const shareBusy = share.busy;
 const shareTotalSize = share.totalSize;
 const sharePort = share.port;
+const textOpen = ref(false);
+const textDraft = ref('');
+const textSending = ref(false);
+const editingPort = ref(false);
+const portDraft = ref(0);
+
+async function submitText() {
+  if (!textDraft.value.trim() || textSending.value) return;
+  textSending.value = true;
+  const ok = await share.addText(textDraft.value);
+  textSending.value = false;
+  if (ok) {
+    textDraft.value = '';
+    textOpen.value = false;
+  }
+}
+
+function startEditPort() {
+  portDraft.value = sharePort.value ?? 5421;
+  editingPort.value = true;
+}
+
+async function savePort() {
+  if (!editingPort.value) return;
+  const value = Number(portDraft.value);
+  editingPort.value = false;
+  if (!Number.isInteger(value) || value < 0 || value > 65535 || (value > 0 && value < 1024)) return;
+  if (value === sharePort.value) return;
+  await settings.update(draft => {
+    draft.share.port = value;
+  });
+}
 
 async function setFace(next: Face) {
   if (face.value === next) return;
@@ -157,6 +189,9 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
             <button class="button button--icon" :disabled="shareState.phase !== 'running' || shareState.adding"
               :aria-label="t('添加文件夹')" :title="t('添加文件夹')" @click="share.addFolder()">
               <LiteIcon name="folder" />
+            </button>
+            <button class="button" :disabled="shareState.phase !== 'running' || shareState.adding" @click="textOpen = true">
+              <LiteIcon name="plus" />{{ t('发文字') }}
             </button>
             <button class="button button--quiet" :disabled="shareState.phase === 'stopping'" @click="share.stop()">
               {{ shareState.phase === 'stopping' ? t('正在停止') : t('停止分享') }}
@@ -281,7 +316,11 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
                     ? t('已分享 {n} 项，手机扫码即可下载', { n: shareState.items.length })
                     : t('手机与电脑连同一个 Wi-Fi，选择文件或文件夹后扫码下载') }}</p>
                 </div>
-                <span v-if="shareRunning && sharePort" class="share-port">{{ t('端口 {port}', { port: sharePort }) }}</span>
+                <span v-if="shareRunning && sharePort" class="share-port">
+                  <template v-if="!editingPort">{{ t('端口') }} <button class="port-button" :title="t('端口修改后会重启分享')" @click="startEditPort">{{ sharePort }}</button></template>
+                  <input v-else v-model.number="portDraft" class="port-input" type="number" min="0" max="65535"
+                    :aria-label="t('端口')" @blur="savePort" @keydown.enter.prevent="savePort" @keydown.esc="editingPort = false" />
+                </span>
               </div>
 
               <p v-if="shareState.error" class="notice notice--error" role="alert">{{ shareState.error }}</p>
@@ -293,7 +332,10 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
                     <span class="share-label">{{ t('分享链接') }}</span>
                     <p class="share-url" :title="shareState.url">{{ shareState.url }}</p>
                   </div>
-                  <button class="button" @click="share.copy()">{{ shareState.copied ? t('已复制') : t('复制链接') }}</button>
+                  <span class="share-copy-wrap">
+                    <button class="button" @click="share.copy()"><LiteIcon name="link" />{{ shareState.copied ? t('已复制') : t('复制链接') }}</button>
+                    <span v-if="shareState.qr" class="share-qr-pop" aria-hidden="true"><span v-html="shareState.qr"></span></span>
+                  </span>
                 </div>
 
                 <div class="share-body">
@@ -347,6 +389,17 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
       </div>
     </div>
   </main>
+
+  <div v-if="textOpen" class="settings-overlay" @click.self="textOpen = false">
+    <div class="text-sheet" role="dialog" aria-modal="true" aria-labelledby="text-title">
+      <h2 id="text-title">{{ t('发文字') }}</h2>
+      <textarea v-model="textDraft" maxlength="10000" :placeholder="t('文字内容')" autofocus></textarea>
+      <div class="text-sheet-actions">
+        <button class="button" @click="textOpen = false">{{ t('取消') }}</button>
+        <button class="button button--primary" :disabled="!textDraft.trim() || textSending" @click="submitText">{{ t('发布') }}</button>
+      </div>
+    </div>
+  </div>
 
   <div v-if="settings.state.toast" class="toast" role="status">
     <span>{{ settings.state.toast }}</span>

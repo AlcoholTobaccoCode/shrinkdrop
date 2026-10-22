@@ -57,9 +57,21 @@ export function createNativeShareAdapter(invoke: NativeInvoke = tauriInvoke): Sh
     pickFiles: () => invoke<string[]>('share_pick_files'),
     pickDirectory: () => invoke<string[]>('share_pick_directory'),
     qrSvg: url => invoke<string>('share_qr_svg', { url }),
+    addText: (text: string) => invoke<void>('share_add_text', { text }),
     onStatus: async handler => {
       const { listen } = await import('@tauri-apps/api/event');
-      return listen<ShareStatus>('share-status', event => handler(event.payload));
+      const stopStatus = await listen<ShareStatus>('share-status', event => handler(event.payload));
+      const stopRefresh = await listen('share-refresh', async () => {
+        try {
+          handler(await invoke<ShareStatus>('share_status'));
+        } catch {
+          // 状态刷新失败时保留旧数据。
+        }
+      });
+      return () => {
+        stopStatus();
+        stopRefresh();
+      };
     },
     setTitle: title => invoke<void>('share_set_title', { title })
   };

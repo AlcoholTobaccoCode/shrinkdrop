@@ -324,7 +324,10 @@ async fn restart_if_running(app: &AppHandle, manager: &ShareManager, settings: &
     if !manager.status().running {
         return false;
     }
-    match manager.restart(share_options(settings)).await {
+    match manager
+        .restart(share_options(settings), Some(app.clone()))
+        .await
+    {
         Ok(status) => {
             let _ = app.emit("share-status", status);
             true

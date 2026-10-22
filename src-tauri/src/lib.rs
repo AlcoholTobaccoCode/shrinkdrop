@@ -69,6 +69,7 @@ pub fn run() {
             share::share_pick_directory,
             share::share_qr_svg,
             share::share_set_title,
+            share::share_add_text,
             settings::settings_get,
             settings::settings_update,
             settings::settings_touch_face,

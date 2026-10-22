@@ -61,6 +61,7 @@ export function createBrowserShareAdapter(): ShareAdapter {
     stop: async () => emptyShareStatus(),
     addItems: desktopRequired,
     removeItem: desktopRequired,
+    addText: desktopRequired,
     pickFiles: desktopRequired,
     pickDirectory: desktopRequired,
     qrSvg: desktopRequired,

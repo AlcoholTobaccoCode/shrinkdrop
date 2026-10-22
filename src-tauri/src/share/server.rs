@@ -53,6 +53,7 @@ pub struct Context {
     pub upload_dir: PathBuf,
     pub language: Arc<RwLock<Language>>,
     pub public: bool,
+    pub app: Option<tauri::AppHandle>,
 }
 
 pub fn router(context: Context) -> Router {
@@ -769,6 +770,10 @@ fn push_item(context: &Context, item: SharedItem) {
         items.push(item);
     }
     let _ = context.events.send(());
+    if let Some(app) = context.app.as_ref() {
+        use tauri::Emitter;
+        let _ = app.emit("share-refresh", ());
+    }
 }
 
 fn sanitize_filename(name: &str) -> String {

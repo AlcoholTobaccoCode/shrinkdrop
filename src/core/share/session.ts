@@ -146,6 +146,24 @@ export function createShareSession(adapter: ShareAdapter) {
     }
   }
 
+  async function addText(text: string): Promise<boolean> {
+    if (!adapter.desktop || !running.value || busy.value) return false;
+    const value = text.trim();
+    if (!value) return false;
+    state.error = '';
+    state.adding = true;
+    try {
+      await adapter.addText(value);
+      await refresh();
+      return true;
+    } catch (error) {
+      state.error = errorText(error, '发布文字失败，请重试');
+      return false;
+    } finally {
+      state.adding = false;
+    }
+  }
+
   async function stop() {
     if (!adapter.desktop || !running.value || busy.value) return;
     state.error = '';
@@ -198,5 +216,5 @@ export function createShareSession(adapter: ShareAdapter) {
     if (copiedTimer) clearTimeout(copiedTimer);
   }
 
-  return { state, running, busy, totalSize, port, connect, refresh, pickAndShare, pickAndShareFolder, addFiles, addFolder, remove, stop, copy, dispose };
+  return { state, running, busy, totalSize, port, connect, refresh, pickAndShare, pickAndShareFolder, addFiles, addFolder, addText, remove, stop, copy, dispose };
 }

@@ -25,6 +25,7 @@ export interface ShareAdapter {
   stop(): Promise<ShareStatus>;
   addItems(paths: string[]): Promise<ShareStatus>;
   removeItem(id: number): Promise<ShareStatus>;
+  addText(text: string): Promise<void>;
   pickFiles(): Promise<string[]>;
   pickDirectory(): Promise<string[]>;
   qrSvg(url: string): Promise<string>;

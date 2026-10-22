@@ -171,6 +171,10 @@ const en: Record<string, string> = {
   '允许公开访问': 'Allow public access',
   '未开启公开访问时，链接模式下的访客无法打开分享。':
     'With public access off, link-mode visitors cannot open the share.',
+  '发文字': 'Send text',
+  '文字内容': 'Message',
+  '发布': 'Post',
+  '端口修改后会重启分享': 'Saving a new port restarts sharing',
   '当前未开放访问：在设置里开启「允许公开访问」，或改用 PIN/账号保护':
     'Access is closed. Enable “Allow public access” in Settings, or use PIN/account protection.',
   '没有检测到局域网地址，目前只能在本机访问':
