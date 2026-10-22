@@ -479,7 +479,7 @@ pub async fn compress<R: tauri::Runtime>(
                         .path()
                         .temp_dir()
                         .unwrap_or_else(|_| std::env::temp_dir())
-                        .join(format!("tinypng-lite-{}", std::process::id()));
+                        .join(format!("shrinkdrop-lite-{}", std::process::id()));
                     let output_app = app.clone();
                     let output_task = task_id.clone();
                     let size = bytes.len() as u64;
@@ -778,7 +778,7 @@ mod tests {
     #[ignore = "仅人工指定执行一次真实合成图匿名上传"]
     async fn live_anonymous_synthetic_png() {
         let bytes =
-            std::fs::read("/private/tmp/tinypng-phase1-recovery-local/fixtures/sample-one.png")
+            std::fs::read("/private/tmp/shrinkdrop-phase1-recovery-local/fixtures/sample-one.png")
                 .unwrap();
         let input = validate_image(&bytes).unwrap();
         let result = tokio::time::timeout(
@@ -795,7 +795,7 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(validate_image(&result).unwrap(), input);
-        std::fs::write("/private/tmp/tinypng-lite-native-live.png", &result).unwrap();
+        std::fs::write("/private/tmp/shrinkdrop-lite-native-live.png", &result).unwrap();
         eprintln!(
             "native live PNG: {} -> {} bytes, {}x{}",
             bytes.len(),

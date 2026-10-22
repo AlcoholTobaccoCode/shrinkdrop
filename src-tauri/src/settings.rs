@@ -330,8 +330,8 @@ pub fn upload_dir(settings: &ShareSettings) -> PathBuf {
 fn default_upload_dir() -> PathBuf {
     let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"));
     home.map(PathBuf::from)
-        .map(|home| home.join("Downloads").join("TinyPNG Share"))
-        .unwrap_or_else(|| env::temp_dir().join("TinyPNG Share"))
+        .map(|home| home.join("Downloads").join("shrinkdrop Share"))
+        .unwrap_or_else(|| env::temp_dir().join("shrinkdrop Share"))
 }
 
 pub fn share_options(settings: &Settings) -> ShareOptions {
@@ -828,7 +828,7 @@ pub fn settings_open(app: AppHandle) -> Result<(), String> {
         return Ok(());
     }
     WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
-        .title("设置 · TinyPNG Lite")
+        .title("设置 · shrinkdrop")
         .inner_size(760.0, 680.0)
         .center()
         .resizable(false)

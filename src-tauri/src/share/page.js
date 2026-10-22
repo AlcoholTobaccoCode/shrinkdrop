@@ -18,7 +18,7 @@
   const DICT = {
     zh: {
       tagline: '局域网分享',
-      footer: '由 TinyPNG Lite 分享 · 文件只在你的设备与这台电脑之间传输',
+      footer: '由 shrinkdrop 分享 · 文件只在你的设备与这台电脑之间传输',
       subtitle: '同一局域网内，点击文件即可下载',
       search: '搜索当前文件夹',
       shared: '共享内容',
@@ -66,7 +66,7 @@
     },
     en: {
       tagline: 'LAN sharing',
-      footer: 'Shared by TinyPNG Lite · Files travel only between your device and this computer',
+      footer: 'Shared by shrinkdrop · Files travel only between your device and this computer',
       subtitle: 'Same network — tap a file to download',
       search: 'Search this folder',
       shared: 'Shared',

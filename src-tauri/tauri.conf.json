@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "TinyPNG Lite",
+  "productName": "shrinkdrop",
   "version": "0.1.0",
-  "identifier": "com.tinypng.lite",
+  "identifier": "com.shrinkdrop.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://127.0.0.1:5170",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "TinyPNG Lite",
+        "title": "shrinkdrop",
         "width": 820,
         "height": 640,
         "minWidth": 600,

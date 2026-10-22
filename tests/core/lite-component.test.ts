@@ -32,7 +32,7 @@ describe('browser preview screen', () => {
     expect(html).toContain('除非手动覆盖，原图不会被修改');
   });
   it('renders both faces with a tab switch and the share desktop requirement', () => {
-    expect(html).toContain('TinyPNG <span>Lite</span>');
+    expect(html).toContain('shrink<span>drop</span>');
     expect(html).toContain('role="tablist"');
     expect(html).toContain('id="face-tab-share"');
     expect(html).toContain('aria-controls="face-share"');

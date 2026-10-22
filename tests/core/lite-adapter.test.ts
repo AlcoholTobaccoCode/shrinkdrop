@@ -3,7 +3,7 @@ import { createNativeAdapter } from '../../src/platform/native';
 import { isTauriRuntime } from '../../src/platform';
 import type { NativeInvoke } from '../../src/platform/native';
 
-describe('TinyPNG Lite native boundary', () => {
+describe('shrinkdrop native boundary', () => {
   it('uses the Tauri protocol marker and rejects a browser with just a tauri-shaped global', () => {
     expect(isTauriRuntime({ __TAURI__: {} })).toBe(false);
     expect(isTauriRuntime({ __TAURI_INTERNALS__: {} })).toBe(true);

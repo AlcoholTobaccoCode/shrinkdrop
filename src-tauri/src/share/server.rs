@@ -1071,7 +1071,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let dir = std::env::temp_dir().join(format!(
-            "tinypng-share-server-test-{}-{stamp}",
+            "shrinkdrop-share-server-test-{}-{stamp}",
             std::process::id()
         ));
         fs::create_dir_all(&dir).unwrap();

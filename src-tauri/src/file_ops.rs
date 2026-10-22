@@ -214,7 +214,7 @@ pub fn write_result(
     }
     fs::create_dir_all(directory).map_err(|_| "无法准备临时保存位置".to_string())?;
     let id = state.new_id("temp");
-    let path = directory.join(format!(".tinypng-{task_id}-{id}.tmp"));
+    let path = directory.join(format!(".shrinkdrop-{task_id}-{id}.tmp"));
     let mut output = OpenOptions::new()
         .create_new(true)
         .write(true)
@@ -379,7 +379,7 @@ pub fn save_temp_to_path(
         return Err("目标文件已存在，请换一个文件名".into());
     }
     let scratch = resolved_parent.join(format!(
-        ".tinypng-{}-{}.tmp",
+        ".shrinkdrop-{}-{}.tmp",
         std::process::id(),
         state.new_id("save")
     ));
@@ -534,7 +534,7 @@ mod download_tests {
                 .unwrap()
                 .as_nanos();
             let path = std::env::temp_dir().join(format!(
-                "tinypng-save-test-{}-{stamp}-{}",
+                "shrinkdrop-save-test-{}-{stamp}-{}",
                 std::process::id(),
                 SERIAL.fetch_add(1, Ordering::Relaxed)
             ));

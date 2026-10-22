@@ -146,7 +146,7 @@ pub struct ShareManager {
 }
 
 fn shared_temp_dir(token: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("tinypng-share-{token}"))
+    std::env::temp_dir().join(format!("shrinkdrop-share-{token}"))
 }
 
 impl ShareManager {
@@ -1011,7 +1011,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let dir =
-            std::env::temp_dir().join(format!("tinypng-share-test-{}-{stamp}", std::process::id()));
+            std::env::temp_dir().join(format!("shrinkdrop-share-test-{}-{stamp}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         dir.join(name)
     }
@@ -1029,7 +1029,7 @@ mod tests {
     }
 
     fn options() -> ShareOptions {
-        let upload_dir = std::env::temp_dir().join("tinypng-share-test-uploads");
+        let upload_dir = std::env::temp_dir().join("shrinkdrop-share-test-uploads");
         ShareOptions {
             port: 0,
             protection: Protection::Link,
@@ -1118,7 +1118,7 @@ mod tests {
             id: "team".to_string(),
             name: "Team".to_string(),
             slug: "team-a".to_string(),
-            upload_dir: std::env::temp_dir().join("tinypng-share-test-team"),
+            upload_dir: std::env::temp_dir().join("shrinkdrop-share-test-team"),
             public: true,
             protection: Protection::Link,
             pin_hash: None,
@@ -1184,7 +1184,7 @@ mod tests {
             id: "team".to_string(),
             name: "Team".to_string(),
             slug: "team-pin".to_string(),
-            upload_dir: std::env::temp_dir().join("tinypng-share-test-team-pin"),
+            upload_dir: std::env::temp_dir().join("shrinkdrop-share-test-team-pin"),
             public: false,
             protection: Protection::Pin,
             pin_hash: Some(auth::hash_secret("246810").unwrap()),
@@ -1780,7 +1780,7 @@ mod tests {
                 items: shared.clone(),
                 port,
                 events,
-                zip_dir: std::env::temp_dir().join("tinypng-share-test-zips"),
+                zip_dir: std::env::temp_dir().join("shrinkdrop-share-test-zips"),
                 auth,
                 next_id,
                 upload_dir: options.upload_dir.clone(),

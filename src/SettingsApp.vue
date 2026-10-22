@@ -13,7 +13,7 @@ const view = computed(() => session.state.view);
 async function applyWindowTitle() {
   try {
     const { getCurrentWindow } = await import('@tauri-apps/api/window');
-    await getCurrentWindow().setTitle(`${t('设置')} · TinyPNG Lite`);
+    await getCurrentWindow().setTitle(`${t('设置')} · shrinkdrop`);
   } catch {
     // 浏览器预览没有窗口标题。
   }
@@ -274,7 +274,7 @@ function clearGroupPin(group: { id: string }) {
               <div class="settings-row">
                 <span>{{ t('接收上传的目录') }}</span>
                 <div class="settings-path-row">
-                  <span class="settings-path">{{ view.share.uploadDir || '~/Downloads/TinyPNG Share' }}</span>
+                  <span class="settings-path">{{ view.share.uploadDir || '~/Downloads/shrinkdrop Share' }}</span>
                   <button class="button" @click="session.pickDirectory('upload')">{{ t('选择') }}</button>
                   <button v-if="view.share.uploadDir" class="button button--quiet" @click="clearUploadDir">{{ t('清除') }}</button>
                 </div>
@@ -407,7 +407,7 @@ function clearGroupPin(group: { id: string }) {
             </section>
 
             <section v-else class="settings-section">
-              <p><strong>TinyPNG Lite / File Share</strong> 0.1.0</p>
+              <p><strong>shrinkdrop / File Share</strong> 0.1.0</p>
               <p class="settings-hint">{{ t('设置保存在应用配置目录；PIN 使用哈希，账号口令明文保存在本地。') }}</p>
               <p class="settings-hint">{{ t('压缩使用匿名 TinyPNG 接口；分享服务只在同一个 Tauri 进程内运行。') }}</p>
             </section>

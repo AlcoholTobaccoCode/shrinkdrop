@@ -156,7 +156,7 @@ fn replace_original(
         .parent()
         .ok_or_else(|| "原图已不存在或位置改变，请重新导入".to_string())?;
     let scratch_path = directory.join(format!(
-        ".tinypng-overwrite-{}-{}.tmp",
+        ".shrinkdrop-overwrite-{}-{}.tmp",
         std::process::id(),
         state.new_id("replace")
     ));
@@ -207,7 +207,7 @@ mod tests {
         fn new() -> Self {
             static SERIAL: AtomicUsize = AtomicUsize::new(0);
             let directory = std::env::temp_dir().join(format!(
-                "tinypng-overwrite-test-{}-{}-{}",
+                "shrinkdrop-overwrite-test-{}-{}-{}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)

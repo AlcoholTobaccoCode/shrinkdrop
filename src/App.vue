@@ -33,7 +33,7 @@ const totalChange = computed(() => {
 //#region 双面切换（压缩 / 分享）
 type Face = 'compress' | 'share';
 function titleFor(next: Face): string {
-  return next === 'compress' ? t('TinyPNG Lite · 图片压缩') : t('File Share · 局域网分享');
+  return next === 'compress' ? t('shrinkdrop · 图片压缩') : t('File Share · 局域网分享');
 }
 const face = ref<Face>('compress');
 const compressTab = ref<HTMLButtonElement>();
@@ -217,7 +217,7 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
     <header class="toolbar">
       <div class="brand">
         <span class="brand-mark"><img src="/app-icon.png" alt="" width="34" height="34" draggable="false" /></span>
-        <h1 v-if="face === 'compress'">TinyPNG <span>Lite</span></h1>
+        <h1 v-if="face === 'compress'">shrink<span>drop</span></h1>
         <h1 v-else>File <span>Share</span></h1>
       </div>
 

@@ -30,7 +30,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: TinyPNG Lite ${{ github.ref_name }}
+          releaseName: shrinkdrop ${{ github.ref_name }}
           releaseBody: See the assets below for installers.
           releaseDraft: true
           prerelease: false

@@ -43,7 +43,7 @@ function fixture(desktop = true) {
   return { session, adapter, requests, urls };
 }
 
-describe('TinyPNG Lite session', () => {
+describe('shrinkdrop session', () => {
   it('imports drafts and thumbnails without uploading', async () => {
     const { session, adapter } = fixture();
     await session.importSources([source('a')]);

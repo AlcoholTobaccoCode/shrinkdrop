@@ -94,7 +94,7 @@ const en: Record<string, string> = {
   '{n} 项': '{n} items',
   '同一 Wi-Fi 下可访问 · 停止后链接失效': 'Reachable on the same Wi-Fi · expires on stop',
   '选择内容后自动生成链接与二维码': 'Link and QR appear once you choose items',
-  'TinyPNG Lite · 图片压缩': 'TinyPNG Lite · Image Compression',
+  'shrinkdrop · 图片压缩': 'shrinkdrop · Image Compression',
   'File Share · 局域网分享': 'File Share · LAN Share',
   '关闭设置': 'Close settings',
   '设置分组': 'Settings sections',
