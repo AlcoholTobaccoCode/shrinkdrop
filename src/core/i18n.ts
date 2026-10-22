@@ -187,6 +187,7 @@ const en: Record<string, string> = {
   '默认分组': 'Default',
   '接收目录': 'Upload folder',
   '分享中': 'Sharing',
+  '开启服务': 'Start sharing',
   '打开分享开关开始，或先选择内容': 'Turn on sharing to start, or choose items first',
   '不选文件也可以直接开始分享，链接只在分享期间有效':
     'You can start sharing without picking a file; the link is only valid while sharing.',

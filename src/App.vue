@@ -52,7 +52,6 @@ const shareTotalSize = share.totalSize;
 const sharePort = share.port;
 const selectedShareIds = ref<number[]>([]);
 const downloadBusy = ref(false);
-const qrPinned = ref(false);
 const shareGroupsEl = ref<HTMLElement>();
 const downloadableItems = computed(() => shareState.items.filter(item => item.kind !== 'text'));
 const selectedShareCount = computed(() => selectedShareIds.value.length);
@@ -97,11 +96,6 @@ const textDraft = ref('');
 const textSending = ref(false);
 const editingPort = ref(false);
 const portDraft = ref(0);
-
-function copyWithQr() {
-  qrPinned.value = !qrPinned.value;
-  void share.copy();
-}
 
 function onGroupsWheel(event: WheelEvent) {
   const element = shareGroupsEl.value;
@@ -395,10 +389,10 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
                     : t('手机与电脑连同一个 Wi-Fi，选择文件或文件夹后扫码下载') }}</p>
                 </div>
                 <div class="share-status-actions">
-                  <button class="share-toggle" :class="{ 'is-on': shareRunning }" role="switch" :aria-checked="shareRunning"
+                  <button class="share-service-toggle" :class="{ 'is-on': shareRunning }" role="switch" :aria-checked="shareRunning"
                     :disabled="!desktop || shareBusy" @click="toggleShare">
-                    <span class="share-toggle-track" aria-hidden="true"><span /></span>
-                    <span>{{ shareRunning ? t('分享中') : t('已停止') }}</span>
+                    <span class="service-dot" aria-hidden="true"></span>
+                    <span>{{ shareRunning ? t('分享中') : t('开启服务') }}</span>
                   </button>
                   <span v-if="shareRunning && sharePort" class="share-port">
                     <template v-if="!editingPort">{{ t('端口') }} <button class="port-button" :title="t('端口修改后会重启分享')" @click="startEditPort">{{ sharePort }}</button></template>
@@ -425,8 +419,8 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
                   </div>
                   <div class="share-link-actions">
                     <span class="share-copy-wrap">
-                      <button class="button" @click="copyWithQr"><LiteIcon name="link" />{{ shareState.copied ? t('已复制') : t('复制链接') }}</button>
-                      <span class="share-qr-pop" :class="{ 'is-open': qrPinned }" aria-hidden="true">
+                      <button class="button" @click="share.copy()"><LiteIcon name="link" />{{ shareState.copied ? t('已复制') : t('复制链接') }}</button>
+                      <span class="share-qr-pop" aria-hidden="true">
                         <span v-if="shareState.qr" v-html="shareState.qr"></span>
                         <span v-else class="share-qr-hint">{{ shareState.qrError ? t('二维码生成失败，请用链接访问') : t('正在生成二维码…') }}</span>
                       </span>
@@ -440,8 +434,7 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
 
                 <div class="share-body">
                   <div class="share-files">
-                    <div class="share-list-head">
-                      <span>{{ t('已分享内容') }}</span>
+                    <div v-if="selectedShareCount || downloadableItems.length" class="share-list-head">
                       <div class="share-list-actions">
                         <button v-if="selectedShareCount" class="button button--quiet" :disabled="downloadBusy" @click="downloadSelected">
                           {{ t('下载所选') }} ({{ selectedShareCount }})
