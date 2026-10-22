@@ -248,6 +248,16 @@ export function createShareSession(adapter: ShareAdapter) {
     }
   }
 
+  async function openUploadFolder() {
+    if (!adapter.desktop || !running.value) return;
+    state.error = '';
+    try {
+      await adapter.openUploadDir();
+    } catch (error) {
+      state.error = errorText(error, '无法打开接收目录');
+    }
+  }
+
   async function copy() {
     if (!state.url) return;
     state.error = '';
@@ -264,5 +274,5 @@ export function createShareSession(adapter: ShareAdapter) {
     if (copiedTimer) clearTimeout(copiedTimer);
   }
 
-  return { state, running, busy, totalSize, port, connect, refresh, pickAndShare, pickAndShareFolder, addFiles, addFolder, addText, remove, stop, copy, setGroup, selectAddress, cycleAddress, toggleIpv6, dispose };
+  return { state, running, busy, totalSize, port, connect, refresh, pickAndShare, pickAndShareFolder, addFiles, addFolder, addText, remove, stop, copy, setGroup, openUploadFolder, selectAddress, cycleAddress, toggleIpv6, dispose };
 }

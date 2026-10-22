@@ -193,6 +193,9 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
             <button class="button" :disabled="shareState.phase !== 'running' || shareState.adding" @click="textOpen = true">
               <LiteIcon name="plus" />{{ t('发文字') }}
             </button>
+            <button class="button button--quiet" :disabled="shareState.phase !== 'running'" @click="share.openUploadFolder()">
+              <LiteIcon name="folder" />{{ t('接收目录') }}
+            </button>
             <button class="button button--quiet" :disabled="shareState.phase === 'stopping'" @click="share.stop()">
               {{ shareState.phase === 'stopping' ? t('正在停止') : t('停止分享') }}
             </button>

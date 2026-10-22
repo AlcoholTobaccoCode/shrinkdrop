@@ -84,7 +84,8 @@ pub fn run() {
             settings::share_group_delete,
             settings::share_group_access,
             settings::share_group_set_pin,
-            share::share_set_active_group
+            share::share_set_active_group,
+            share::share_open_upload_dir
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

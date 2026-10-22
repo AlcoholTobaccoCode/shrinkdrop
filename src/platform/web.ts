@@ -63,6 +63,7 @@ export function createBrowserShareAdapter(): ShareAdapter {
     removeItem: desktopRequired,
     addText: desktopRequired,
     setActiveGroup: desktopRequired,
+    openUploadDir: desktopRequired,
     pickFiles: desktopRequired,
     pickDirectory: desktopRequired,
     qrSvg: desktopRequired,

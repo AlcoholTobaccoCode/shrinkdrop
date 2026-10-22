@@ -59,6 +59,7 @@ export function createNativeShareAdapter(invoke: NativeInvoke = tauriInvoke): Sh
     qrSvg: url => invoke<string>('share_qr_svg', { url }),
     addText: (text: string) => invoke<void>('share_add_text', { text }),
     setActiveGroup: (id: string) => invoke<ShareStatus>('share_set_active_group', { groupId: id }),
+    openUploadDir: () => invoke<void>('share_open_upload_dir'),
     onStatus: async handler => {
       const { listen } = await import('@tauri-apps/api/event');
       const stopStatus = await listen<ShareStatus>('share-status', event => handler(event.payload));

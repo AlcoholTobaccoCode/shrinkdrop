@@ -38,6 +38,7 @@ export interface ShareAdapter {
   removeItem(id: number): Promise<ShareStatus>;
   addText(text: string): Promise<void>;
   setActiveGroup(id: string): Promise<ShareStatus>;
+  openUploadDir(): Promise<void>;
   pickFiles(): Promise<string[]>;
   pickDirectory(): Promise<string[]>;
   qrSvg(url: string): Promise<string>;

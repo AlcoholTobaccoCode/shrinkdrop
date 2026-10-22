@@ -340,7 +340,7 @@ function closeWindow() {
               </div>
               <div class="settings-block">
                 <span>{{ t('分组') }}</span>
-                <p class="settings-hint">{{ t('默认分组在根路径；自定义分组在 /g/路径，文件互不共享，共用当前访问保护。') }}</p>
+                <p class="settings-hint">{{ t('默认分组在根路径；自定义分组在 /g/路径，文件互不共享，可独立设置访问保护。') }}</p>
                 <ul class="settings-accounts">
                   <li v-for="group in view.share.groups" :key="group.id" class="settings-account">
                     <div class="settings-account-head">

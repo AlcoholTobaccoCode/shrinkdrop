@@ -195,6 +195,20 @@ impl ShareManager {
             .ok_or_else(|| "分享分组不可用".to_string())
     }
 
+    pub fn active_upload_dir(&self) -> Result<PathBuf, String> {
+        let guard = self
+            .running
+            .lock()
+            .map_err(|_| "分享状态不可用".to_string())?;
+        let Some(running) = guard.as_ref() else {
+            return Err("分享还没有开始".to_string());
+        };
+        let group = Self::active_group(running)?;
+        let dir = group.options.upload_dir.clone();
+        fs::create_dir_all(&dir).map_err(|_| "无法创建接收目录".to_string())?;
+        Ok(dir)
+    }
+
     pub fn set_active_group(&self, group_id: String) -> Result<ShareStatus, String> {
         let mut guard = self
             .running
@@ -785,6 +799,23 @@ pub async fn share_pick_directory(app: AppHandle) -> Result<Vec<String>, String>
 #[tauri::command]
 pub fn share_qr_svg(url: String) -> Result<String, String> {
     qr_svg(&url)
+}
+
+#[tauri::command]
+pub fn share_open_upload_dir(manager: tauri::State<'_, ShareManager>) -> Result<(), String> {
+    let dir = manager.active_upload_dir()?;
+    let program = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(target_os = "windows") {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(program)
+        .arg(&dir)
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| "无法打开接收目录".to_string())
 }
 
 #[tauri::command]
