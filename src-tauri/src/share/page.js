@@ -58,6 +58,7 @@
       textEmpty: '文字不能为空',
       sendFailed: '发布失败，请重试',
       noDownload: '当前账号没有下载权限，可继续上传或发布文字。',
+      notOpen: '分享者还没有开放访问，请让分享者在设置里开启「允许公开访问」。',
       cancel: '取消',
       copy: '复制',
       copied: '已复制',
@@ -105,6 +106,7 @@
       textEmpty: 'Text is empty',
       sendFailed: 'Failed to send. Try again.',
       noDownload: 'This account cannot download. You can still upload or send text.',
+      notOpen: 'The host has not opened access yet. Ask them to enable “Allow public access” in Settings.',
       cancel: 'Cancel',
       copy: 'Copy',
       copied: 'Copied',
@@ -686,6 +688,14 @@
     await boot();
   }
 
+  function showClosed() {
+    hideChrome(true);
+    statusEl.hidden = false;
+    listEl.hidden = true;
+    statusEl.className = 'status';
+    statusEl.textContent = t('notOpen');
+  }
+
   function showNoDownload() {
     hideChrome(true);
     statusEl.hidden = false;
@@ -710,6 +720,10 @@
       state.auth = info;
       if (!info.authenticated) {
         sessionEl.hidden = true;
+        if (info.protection === 'link' && !info.public) {
+          showClosed();
+          return;
+        }
         showAuth(info);
         return;
       }

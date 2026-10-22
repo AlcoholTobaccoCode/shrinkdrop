@@ -285,7 +285,7 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
               </div>
 
               <p v-if="shareState.error" class="notice notice--error" role="alert">{{ shareState.error }}</p>
-              <p v-if="shareState.warning" class="notice" role="note">{{ shareState.warning }}</p>
+              <p v-if="shareState.warning" class="notice" role="note">{{ t(shareState.warning) }}</p>
 
               <template v-if="shareRunning">
                 <div class="share-link-row">

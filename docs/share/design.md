@@ -52,27 +52,27 @@ Runtime   { running, url, port, candidates[], connections, transfer }
 
 ## HTTP API
 
-所有访客接口都在 `/s/{token}` 下，token 不在后续请求里重复出现，改由 HttpOnly cookie 维持会话。
+所有访客接口都在 `/` 下，token 不在后续请求里重复出现，改由 HttpOnly cookie 维持会话。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/s/{token}` | 访客页，首次访问下发会话 cookie |
-| GET | `/s/{token}/api/state` | 保护级别、权限、语言、是否需要 PIN/登录 |
-| POST | `/s/{token}/api/unlock` | 校验 PIN，成功后可访问 |
-| POST | `/s/{token}/api/login` | 账号登录（账号模式） |
-| GET | `/s/{token}/api/items` | 列出全部分享根（文件/目录） |
-| GET | `/s/{token}/api/list?id=&path=` | 列出目录内容，含面包屑路径 |
-| GET | `/s/{token}/api/download?id=&path=` | 单文件 Range 下载；目录现场打包 zip |
-| GET | `/s/{token}/api/thumb?id=&path=` | 图片缩略图（200px JPEG） |
-| POST | `/s/{token}/api/upload` | multipart 上传，写上传目录 |
-| POST | `/s/{token}/api/text` | 写入一条文本 |
-| GET | `/s/{token}/api/events` | SSE：列表与传输变化 |
+| GET | `/` | 访客页，首次访问下发会话 cookie |
+| GET | `/api/state` | 保护级别、权限、语言、是否需要 PIN/登录 |
+| POST | `/api/unlock` | 校验 PIN，成功后可访问 |
+| POST | `/api/login` | 账号登录（账号模式） |
+| GET | `/api/items` | 列出全部分享根（文件/目录） |
+| GET | `/api/list?id=&path=` | 列出目录内容，含面包屑路径 |
+| GET | `/api/download?id=&path=` | 单文件 Range 下载；目录现场打包 zip |
+| GET | `/api/thumb?id=&path=` | 图片缩略图（200px JPEG） |
+| POST | `/api/upload` | multipart 上传，写上传目录 |
+| POST | `/api/text` | 写入一条文本 |
+| GET | `/api/events` | SSE：列表与传输变化 |
 
 错误统一为 `{ code, message }`，不返回内部路径。鉴权失败一律 404/403，不回显 token 是否存在的细节。
 
 ## 认证与权限
 
-- **token**：16 字节随机数的 32 位十六进制表示，只在分享链接中出现一次；校验使用常量时间比较。停止或重启服务即失效。
+- **token**：16 字节随机数仍用于内部会话/临时目录；URL 不再携带 token，默认分组直接挂在根路径。停止或重启服务即失效。
 - **PIN**：6 位数字，Argon2id 加盐哈希；每 IP 5 次失败锁 10 分钟；解锁后 cookie 有效期 12 小时。
 - **账号**：用户名 + 明文口令（按用户要求保存以便设置页展示），登录比对使用常量时间比较；登录后 cookie 携带权限声明并签名（HMAC-SHA256，进程内随机密钥，重启失效）。
 - **权限**：`download` / `upload` / `text` 三个位；链接和 PIN 模式下由分享者的「允许上传/发文字」开关决定，账号模式下按账号配置。
@@ -123,7 +123,7 @@ stopped → starting → running { url, port } → stopping → stopped
 
 - 存储：应用配置目录下的 `settings.json`，原子写；PIN 保存 Argon2id 哈希，账号口令按展示需求明文保存。
 - 入口：头部齿轮打开独立单实例窗口（`settings.html`），分「通用 / 压缩 / 分享 / 关于」四组；修改即时保存并生效，主窗口通过事件同步。
-- 字段：通用（启动面、语言；Auto 跟随系统，桌面端与访客页实时切换）、压缩（默认自动压缩、并发 1~5、保存目录）、分享（端口、上传目录、保护级别、PIN、账号与权限、允许上传/文字）、关于。
+- 字段：通用（启动面、语言）、压缩（默认自动压缩、并发 1~5、保存目录）、分享（端口、上传目录、保护级别、公开访问开关、PIN、账号与权限、允许上传/文字）、关于。
 - 联动：端口、保护级别、PIN、账号或访客语言变化时，若分享正在运行则自动重启并保留分享列表；前端 toast 提示旧链接失效，需要手动关闭。并发与默认自动压缩即时应用到会话；保存目录注入原生保存/选目录对话框。
 
 ## 分期

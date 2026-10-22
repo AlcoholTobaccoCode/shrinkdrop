@@ -24,6 +24,7 @@ export interface SettingsView {
     port: number;
     uploadDir: string | null;
     protection: Protection;
+    public: boolean;
     pinSet: boolean;
     allowUpload: boolean;
     allowText: boolean;
@@ -43,6 +44,7 @@ export interface SettingsUpdatePayload {
     port: number;
     uploadDir: string | null;
     protection: Protection;
+    public: boolean;
     allowUpload: boolean;
     allowText: boolean;
   };
@@ -75,6 +77,7 @@ export function defaultSettings(): SettingsView {
       port: 5421,
       uploadDir: null,
       protection: 'link',
+      public: false,
       pinSet: false,
       allowUpload: false,
       allowText: false,

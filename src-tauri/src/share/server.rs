@@ -9,9 +9,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::extract::{
-    ConnectInfo, DefaultBodyLimit, Multipart, Path as UrlPath, Query, Request, State,
-};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Multipart, Query, Request, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -46,7 +44,6 @@ static ZIP_SLOT: Semaphore = Semaphore::const_new(1);
 
 #[derive(Clone)]
 pub struct Context {
-    pub token: Arc<String>,
     pub items: Arc<RwLock<Vec<SharedItem>>>,
     pub port: u16,
     pub events: broadcast::Sender<()>,
@@ -55,30 +52,31 @@ pub struct Context {
     pub next_id: Arc<AtomicU32>,
     pub upload_dir: PathBuf,
     pub language: Arc<RwLock<Language>>,
+    pub public: bool,
 }
 
 pub fn router(context: Context) -> Router {
     Router::new()
-        .route("/s/{token}", get(page))
-        .route("/s/{token}/assets/app.css", get(stylesheet))
-        .route("/s/{token}/assets/app.js", get(script))
-        .route("/s/{token}/api/state", get(state))
-        .route("/s/{token}/api/unlock", post(unlock))
-        .route("/s/{token}/api/login", post(login))
-        .route("/s/{token}/api/logout", post(logout))
-        .route("/s/{token}/api/items", get(list_items))
-        .route("/s/{token}/api/list", get(list_dir))
-        .route("/s/{token}/api/download", get(download))
-        .route("/s/{token}/api/thumb", get(thumbnail))
-        .route("/s/{token}/api/events", get(events))
+        .route("/", get(page))
+        .route("/assets/app.css", get(stylesheet))
+        .route("/assets/app.js", get(script))
+        .route("/api/state", get(state))
+        .route("/api/unlock", post(unlock))
+        .route("/api/login", post(login))
+        .route("/api/logout", post(logout))
+        .route("/api/items", get(list_items))
+        .route("/api/list", get(list_dir))
+        .route("/api/download", get(download))
+        .route("/api/thumb", get(thumbnail))
+        .route("/api/events", get(events))
         .route(
-            "/s/{token}/api/upload",
+            "/api/upload",
             post(upload).layer(DefaultBodyLimit::max(
                 (MAX_UPLOAD_BYTES + 1024 * 1024) as usize,
             )),
         )
         .route(
-            "/s/{token}/api/text",
+            "/api/text",
             post(add_text).layer(DefaultBodyLimit::max(64 * 1024)),
         )
         .with_state(context.clone())
@@ -93,9 +91,6 @@ async fn guard(State(context): State<Context>, request: Request, next: Next) -> 
         .and_then(|value| value.to_str().ok());
     if !host_allowed(host, context.port) {
         return StatusCode::FORBIDDEN.into_response();
-    }
-    if !token_matches(request.uri().path(), &context.token) {
-        return StatusCode::NOT_FOUND.into_response();
     }
 
     let mut response = next.run(request).await;
@@ -114,9 +109,8 @@ async fn guard(State(context): State<Context>, request: Request, next: Next) -> 
 
 //#region 页面与静态资源
 
-async fn page(State(_context): State<Context>, UrlPath(token): UrlPath<String>) -> Response {
-    let base = format!("/s/{token}");
-    let html = PAGE.replace("{{BASE}}", &base);
+async fn page(State(_context): State<Context>) -> Response {
+    let html = PAGE.replace("{{BASE}}", "");
     (
         [
             (
@@ -197,6 +191,7 @@ fn state_payload(context: &Context, headers: &HeaderMap) -> serde_json::Value {
             .read()
             .map(|language| language.effective())
             .unwrap_or("zh"),
+        "public": context.public,
         "upload": permissions.as_ref().map(|value| value.upload).unwrap_or(false),
         "text": permissions.as_ref().map(|value| value.text).unwrap_or(false),
     })
@@ -219,8 +214,7 @@ struct LoginBody {
 
 fn session_cookie(context: &Context, claims: &Claims) -> Response {
     let token = auth::sign_claims(&context.auth.key, claims);
-    let path = format!("/s/{}", context.token);
-    let cookie = auth::cookie_header(&token, &path);
+    let cookie = auth::cookie_header(&token, "/");
     let mut response = Json(json!({ "ok": true })).into_response();
     if let Ok(value) = HeaderValue::from_str(&cookie) {
         response.headers_mut().insert(header::SET_COOKIE, value);
@@ -309,13 +303,12 @@ async fn login(
     )
 }
 
-async fn logout(State(context): State<Context>, headers: HeaderMap) -> Response {
+async fn logout(State(_context): State<Context>, headers: HeaderMap) -> Response {
     if !csrf_ok(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let path = format!("/s/{}", context.token);
     let mut response = Json(json!({ "ok": true })).into_response();
-    if let Ok(value) = HeaderValue::from_str(&auth::clear_cookie(&path)) {
+    if let Ok(value) = HeaderValue::from_str(&auth::clear_cookie("/")) {
         response.headers_mut().insert(header::SET_COOKIE, value);
     }
     response
@@ -1001,26 +994,6 @@ fn host_allowed(host: Option<&str>, port: u16) -> bool {
     name.parse::<std::net::IpAddr>().is_ok() || name.eq_ignore_ascii_case("localhost")
 }
 
-fn token_matches(path: &str, token: &str) -> bool {
-    let Some(candidate) = path
-        .strip_prefix("/s/")
-        .and_then(|rest| rest.split('/').next())
-    else {
-        return false;
-    };
-    constant_time_eq(candidate.as_bytes(), token.as_bytes())
-}
-
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    if left.len() != right.len() {
-        return false;
-    }
-    left.iter()
-        .zip(right)
-        .fold(0u8, |accumulator, (a, b)| accumulator | (a ^ b))
-        == 0
-}
-
 fn content_disposition(name: &str) -> String {
     let fallback: String = name
         .chars()
@@ -1080,15 +1053,6 @@ mod tests {
         assert!(!host_allowed(Some("evil.example.com:5421"), 5421));
         assert!(!host_allowed(Some("192.168.1.5:6000"), 5421));
         assert!(!host_allowed(None, 5421));
-    }
-
-    #[test]
-    fn token_requires_exact_path_prefix() {
-        assert!(token_matches("/s/abc/f/1", "abc"));
-        assert!(token_matches("/s/abc", "abc"));
-        assert!(!token_matches("/s/abd/f/1", "abc"));
-        assert!(!token_matches("/s/abcx/f/1", "abc"));
-        assert!(!token_matches("/other/abc", "abc"));
     }
 
     #[test]

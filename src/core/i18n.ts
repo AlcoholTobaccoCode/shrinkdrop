@@ -167,7 +167,14 @@ const en: Record<string, string> = {
   '等待压缩': 'Queued',
   '已完成': 'Completed',
   '已取消': 'Canceled',
-  '压缩失败': 'Failed'
+  '压缩失败': 'Failed',
+  '允许公开访问': 'Allow public access',
+  '未开启公开访问时，链接模式下的访客无法打开分享。':
+    'With public access off, link-mode visitors cannot open the share.',
+  '当前未开放访问：在设置里开启「允许公开访问」，或改用 PIN/账号保护':
+    'Access is closed. Enable “Allow public access” in Settings, or use PIN/account protection.',
+  '没有检测到局域网地址，目前只能在本机访问':
+    'No LAN address detected; the share is only reachable on this machine.'
 };
 
 export const i18n = reactive({ lang: 'zh' as Lang });

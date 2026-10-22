@@ -21,6 +21,7 @@ function payload(settings: SettingsView): SettingsUpdatePayload {
       port: settings.share.port,
       uploadDir: settings.share.uploadDir,
       protection: settings.share.protection,
+      public: settings.share.public,
       allowUpload: settings.share.allowUpload,
       allowText: settings.share.allowText
     }

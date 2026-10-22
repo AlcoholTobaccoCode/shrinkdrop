@@ -110,6 +110,7 @@ pub struct ShareSettings {
     pub port: u16,
     pub upload_dir: Option<String>,
     pub protection: Protection,
+    pub public: bool,
     pub pin_hash: Option<String>,
     pub allow_upload: bool,
     pub allow_text: bool,
@@ -122,6 +123,7 @@ impl Default for ShareSettings {
             port: 5421,
             upload_dir: None,
             protection: Protection::Link,
+            public: false,
             pin_hash: None,
             allow_upload: false,
             allow_text: false,
@@ -181,6 +183,7 @@ pub struct ShareView {
     port: u16,
     upload_dir: Option<String>,
     protection: Protection,
+    public: bool,
     pin_set: bool,
     allow_upload: bool,
     allow_text: bool,
@@ -208,6 +211,7 @@ pub struct ShareUpdate {
     port: u16,
     upload_dir: Option<String>,
     protection: Protection,
+    public: bool,
     allow_upload: bool,
     allow_text: bool,
 }
@@ -228,6 +232,7 @@ pub fn view(settings: &Settings) -> SettingsView {
             port: settings.share.port,
             upload_dir: settings.share.upload_dir.clone(),
             protection: settings.share.protection,
+            public: settings.share.public,
             pin_set: settings.share.pin_hash.is_some(),
             allow_upload: settings.share.allow_upload,
             allow_text: settings.share.allow_text,
@@ -267,6 +272,7 @@ pub fn share_options(settings: &Settings) -> ShareOptions {
     ShareOptions {
         port: settings.share.port,
         protection: settings.share.protection,
+        public: settings.share.public,
         pin_hash: settings.share.pin_hash.clone(),
         allow_upload: settings.share.allow_upload,
         allow_text: settings.share.allow_text,
@@ -382,10 +388,12 @@ pub async fn settings_update(
         .upload_dir
         .filter(|path| !path.trim().is_empty());
     settings.share.protection = update.share.protection;
+    settings.share.public = update.share.public;
     settings.share.allow_upload = update.share.allow_upload;
     settings.share.allow_text = update.share.allow_text;
     let restart = current.share.port != settings.share.port
         || current.share.protection != settings.share.protection
+        || current.share.public != settings.share.public
         || current.share.allow_upload != settings.share.allow_upload
         || current.share.allow_text != settings.share.allow_text
         || current.share.upload_dir != settings.share.upload_dir;

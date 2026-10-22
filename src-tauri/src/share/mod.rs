@@ -75,6 +75,7 @@ pub struct ShareStatus {
 pub struct ShareOptions {
     pub port: u16,
     pub protection: Protection,
+    pub public: bool,
     pub pin_hash: Option<String>,
     pub allow_upload: bool,
     pub allow_text: bool,
@@ -93,6 +94,7 @@ struct Running {
     shutdown: watch::Sender<bool>,
     task: tokio::task::JoinHandle<()>,
     events: broadcast::Sender<()>,
+    warning: Option<String>,
 }
 
 #[derive(Default)]
@@ -147,7 +149,7 @@ impl ShareManager {
             .cloned()
             .unwrap_or_else(|| "127.0.0.1".to_string());
         let token = random_token();
-        let url = format!("http://{primary}:{port}/s/{token}");
+        let url = format!("http://{primary}:{port}");
 
         let next_id = Arc::new(AtomicU32::new(
             items.iter().map(|item| item.id).max().unwrap_or(0) + 1,
@@ -156,13 +158,13 @@ impl ShareManager {
         let (events, _) = broadcast::channel(16);
         let auth = Arc::new(AuthConfig::new(
             options.protection,
+            options.public,
             options.pin_hash.clone(),
             options.accounts.clone(),
             options.allow_upload,
             options.allow_text,
         ));
         let context = server::Context {
-            token: Arc::new(token.clone()),
             items: items.clone(),
             port,
             events: events.clone(),
@@ -171,6 +173,7 @@ impl ShareManager {
             next_id: next_id.clone(),
             upload_dir: options.upload_dir.clone(),
             language: self.language.clone(),
+            public: options.public,
         };
         if let Ok(mut language) = self.language.write() {
             *language = options.language;
@@ -189,6 +192,13 @@ impl ShareManager {
             let _ = served.await;
         });
 
+        let warning = if addresses.is_empty() {
+            Some("没有检测到局域网地址，目前只能在本机访问".to_string())
+        } else if matches!(options.protection, Protection::Link) && !options.public {
+            Some("当前未开放访问：在设置里开启「允许公开访问」，或改用 PIN/账号保护".to_string())
+        } else {
+            None
+        };
         let running = Running {
             token,
             url,
@@ -199,6 +209,7 @@ impl ShareManager {
             shutdown,
             task,
             events,
+            warning,
         };
         let status = status_from(&running);
         *self
@@ -332,15 +343,7 @@ fn status_from(running: &Running) -> ShareStatus {
             })
             .collect(),
         addresses: running.addresses.clone(),
-        warning: warning_for(&running.addresses),
-    }
-}
-
-fn warning_for(addresses: &[String]) -> Option<String> {
-    if addresses.is_empty() {
-        Some("没有检测到局域网地址，目前只能在本机访问".to_string())
-    } else {
-        None
+        warning: running.warning.clone(),
     }
 }
 
@@ -578,6 +581,7 @@ mod tests {
         ShareOptions {
             port: 0,
             protection: Protection::Link,
+            public: true,
             pin_hash: None,
             allow_upload: false,
             allow_text: false,
@@ -631,10 +635,9 @@ mod tests {
             .await
             .unwrap();
         assert!(status.running);
-        let url = status.url.clone().unwrap();
-        let token = url.rsplit('/').next().unwrap().to_string();
+        assert!(!status.url.as_deref().unwrap_or_default().contains("/s/"));
         let port = status.port.unwrap();
-        let local = format!("http://127.0.0.1:{port}/s/{token}");
+        let local = format!("http://127.0.0.1:{port}");
 
         let client = reqwest::Client::new();
         let listed: Vec<serde_json::Value> = client
@@ -817,6 +820,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn root_page_and_assets_are_tokenless() {
+        let file = temp_file("root.txt", b"root");
+        let items = collect_items(vec![file.display().to_string()]).unwrap();
+        let (base, _token, _items) = server_tests::spawn(items).await;
+        let client = reqwest::Client::new();
+
+        let page = client.get(format!("{base}/")).send().await.unwrap();
+        assert_eq!(page.status(), reqwest::StatusCode::OK);
+        let html = page.text().await.unwrap();
+        assert!(html.contains("/assets/app.css"));
+        assert!(!html.contains("/s/"));
+
+        assert_eq!(
+            client
+                .get(format!("{base}/assets/app.js"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::OK
+        );
+
+        let state: serde_json::Value = client
+            .get(format!("{base}/api/state"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(state["public"], true);
+        assert_eq!(state["protection"], "link");
+    }
+
+    #[tokio::test]
     async fn pin_protection_requires_unlock_cookie() {
         let file = temp_file("pin.txt", b"pin");
         let items = collect_items(vec![file.display().to_string()]).unwrap();
@@ -988,16 +1026,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_wrong_token_and_foreign_host() {
+    async fn rejects_old_token_paths_and_foreign_host() {
         let path = temp_file("a.txt", b"hello");
         let items = collect_items(vec![path.display().to_string()]).unwrap();
-        let (base, token, _items) = server_tests::spawn(items).await;
+        let (base, _token, _items) = server_tests::spawn(items).await;
 
         let client = reqwest::Client::new();
-        let wrong = base.replace(&token, "deadbeef");
         assert_eq!(
             client
-                .get(format!("{wrong}/api/items"))
+                .get(format!("{base}/s/deadbeef/api/items"))
                 .send()
                 .await
                 .unwrap()
@@ -1044,6 +1081,7 @@ mod tests {
             let (events, _) = broadcast::channel(16);
             let auth = Arc::new(AuthConfig::new(
                 options.protection,
+                options.public,
                 options.pin_hash.clone(),
                 options.accounts.clone(),
                 options.allow_upload,
@@ -1051,7 +1089,6 @@ mod tests {
             ));
             let next_id = Arc::new(AtomicU32::new(100));
             let context = server::Context {
-                token: Arc::new(token.clone()),
                 items: shared.clone(),
                 port,
                 events,
@@ -1060,6 +1097,7 @@ mod tests {
                 next_id,
                 upload_dir: options.upload_dir.clone(),
                 language: Arc::new(RwLock::new(Language::Auto)),
+                public: true,
             };
             let app = server::router(context);
             tokio::spawn(async move {
@@ -1069,7 +1107,7 @@ mod tests {
                 )
                 .await;
             });
-            (format!("http://127.0.0.1:{port}/s/{token}"), token, shared)
+            (format!("http://127.0.0.1:{port}"), token, shared)
         }
     }
 }

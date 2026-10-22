@@ -83,6 +83,7 @@ struct Attempt {
 
 pub struct AuthConfig {
     pub protection: Protection,
+    pub public: bool,
     pub pin_hash: Option<String>,
     pub accounts: Vec<Account>,
     pub allow_upload: bool,
@@ -94,6 +95,7 @@ pub struct AuthConfig {
 impl AuthConfig {
     pub fn new(
         protection: Protection,
+        public: bool,
         pin_hash: Option<String>,
         accounts: Vec<Account>,
         allow_upload: bool,
@@ -101,6 +103,7 @@ impl AuthConfig {
     ) -> Self {
         Self {
             protection,
+            public,
             pin_hash,
             accounts,
             allow_upload,
@@ -112,11 +115,12 @@ impl AuthConfig {
 
     pub fn permissions(&self, claims: Option<&Claims>) -> Option<Permissions> {
         match self.protection {
-            Protection::Link => Some(Permissions {
+            Protection::Link if self.public => Some(Permissions {
                 download: true,
                 upload: self.allow_upload,
                 text: self.allow_text,
             }),
+            Protection::Link => None,
             Protection::Pin => claims
                 .filter(|claims| claims.scope == "pin")
                 .map(|_| Permissions {
@@ -333,7 +337,14 @@ mod tests {
             },
             enabled: true,
         };
-        let config = AuthConfig::new(Protection::Accounts, None, vec![account], false, false);
+        let config = AuthConfig::new(
+            Protection::Accounts,
+            true,
+            None,
+            vec![account],
+            false,
+            false,
+        );
         assert!(config.permissions(None).is_none());
         let claims = Claims {
             scope: "account".to_string(),
@@ -347,7 +358,7 @@ mod tests {
 
     #[test]
     fn locks_after_five_failures() {
-        let config = AuthConfig::new(Protection::Pin, None, Vec::new(), false, false);
+        let config = AuthConfig::new(Protection::Pin, true, None, Vec::new(), false, false);
         let ip: IpAddr = "10.0.0.2".parse().unwrap();
         for _ in 0..4 {
             assert!(!config.record_failure(ip));

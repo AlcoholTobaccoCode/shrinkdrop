@@ -68,6 +68,11 @@ function setProtection(value: Protection) {
   update(draft => { draft.share.protection = value; });
 }
 
+function setPublic(event: Event) {
+  const checked = (event.target as HTMLInputElement).checked;
+  update(draft => { draft.share.public = checked; });
+}
+
 function setAllowUpload(event: Event) {
   const checked = (event.target as HTMLInputElement).checked;
   update(draft => { draft.share.allowUpload = checked; });
@@ -256,6 +261,13 @@ function closeWindow() {
               </div>
 
               <div v-if="view.share.protection !== 'accounts'" class="settings-block">
+                <div v-if="view.share.protection === 'link'" class="settings-row settings-row--switch">
+                  <span>{{ t('允许公开访问') }}</span>
+                  <label class="switch">
+                    <input type="checkbox" :checked="view.share.public" @change="setPublic" />
+                    <span class="switch-track" aria-hidden="true"><span /></span>
+                  </label>
+                </div>
                 <div class="settings-row settings-row--switch">
                   <span>{{ t('允许访客上传文件') }}</span>
                   <label class="switch">
@@ -271,6 +283,7 @@ function closeWindow() {
                   </label>
                 </div>
               </div>
+              <p v-if="view.share.protection === 'link'" class="settings-hint">{{ t('未开启公开访问时，链接模式下的访客无法打开分享。') }}</p>
               <p class="settings-hint">{{ t('分享运行中修改端口或保护方式会自动重启服务，旧链接随即失效。') }}</p>
             </section>
 
