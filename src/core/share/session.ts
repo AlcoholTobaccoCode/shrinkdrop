@@ -13,6 +13,7 @@ export function createShareSession(adapter: ShareAdapter) {
     items: [] as ShareItem[],
     url: '',
     addresses: [] as string[],
+    ipv6Addresses: [] as string[],
     warning: '',
     error: '',
     qr: '',
@@ -25,7 +26,7 @@ export function createShareSession(adapter: ShareAdapter) {
   const busy = computed(() => state.phase === 'starting' || state.phase === 'stopping');
   const totalSize = computed(() => state.items.reduce((total, item) => total + (item.kind === 'file' ? item.size : 0), 0));
   const port = computed(() => {
-    const matched = state.url.match(/:(\d+)\/s\//);
+    const matched = state.url.match(/:(\d+)(?:\/|$)/);
     return matched ? Number(matched[1]) : null;
   });
 
@@ -56,6 +57,7 @@ export function createShareSession(adapter: ShareAdapter) {
     state.items = status.items ?? [];
     state.url = status.url ?? '';
     state.addresses = status.addresses ?? [];
+    state.ipv6Addresses = status.ipv6Addresses ?? [];
     state.warning = status.warning ?? '';
     state.phase = status.running ? 'running' : 'idle';
     if (!status.running) {
@@ -200,6 +202,39 @@ export function createShareSession(adapter: ShareAdapter) {
     }
   }
 
+  function selectAddress(url: string) {
+    if (!url || url === state.url) return;
+    state.url = url;
+    state.copied = false;
+    state.qr = '';
+    state.qrError = false;
+    qrFor = '';
+    void loadQr(url);
+  }
+
+  function urlFor(host: string): string {
+    const value = port.value ?? 5421;
+    return `http://${host}:${value}`;
+  }
+
+  function cycleAddress() {
+    if (!state.addresses.length) return;
+    const current = state.addresses.find(address => state.url.includes(`//${address}:`)) ?? state.addresses[0]!;
+    const index = state.addresses.indexOf(current);
+    const next = state.addresses[(index + 1) % state.addresses.length]!;
+    selectAddress(urlFor(next));
+  }
+
+  function toggleIpv6() {
+    if (!state.ipv6Addresses.length) return;
+    const onV6 = state.ipv6Addresses.some(address => state.url.includes(`//${address}:`));
+    if (onV6) {
+      selectAddress(urlFor(state.addresses[0] ?? '127.0.0.1'));
+    } else {
+      selectAddress(urlFor(state.ipv6Addresses[0]!));
+    }
+  }
+
   async function copy() {
     if (!state.url) return;
     state.error = '';
@@ -216,5 +251,5 @@ export function createShareSession(adapter: ShareAdapter) {
     if (copiedTimer) clearTimeout(copiedTimer);
   }
 
-  return { state, running, busy, totalSize, port, connect, refresh, pickAndShare, pickAndShareFolder, addFiles, addFolder, addText, remove, stop, copy, dispose };
+  return { state, running, busy, totalSize, port, connect, refresh, pickAndShare, pickAndShareFolder, addFiles, addFolder, addText, remove, stop, copy, selectAddress, cycleAddress, toggleIpv6, dispose };
 }

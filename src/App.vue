@@ -332,10 +332,14 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
                     <span class="share-label">{{ t('分享链接') }}</span>
                     <p class="share-url" :title="shareState.url">{{ shareState.url }}</p>
                   </div>
-                  <span class="share-copy-wrap">
-                    <button class="button" @click="share.copy()"><LiteIcon name="link" />{{ shareState.copied ? t('已复制') : t('复制链接') }}</button>
-                    <span v-if="shareState.qr" class="share-qr-pop" aria-hidden="true"><span v-html="shareState.qr"></span></span>
-                  </span>
+                  <div class="share-link-actions">
+                    <span class="share-copy-wrap">
+                      <button class="button" @click="share.copy()"><LiteIcon name="link" />{{ shareState.copied ? t('已复制') : t('复制链接') }}</button>
+                      <span v-if="shareState.qr" class="share-qr-pop" aria-hidden="true"><span v-html="shareState.qr"></span></span>
+                    </span>
+                    <button class="button button--quiet" :disabled="shareState.addresses.length < 2" @click="share.cycleAddress()">{{ t('切换网卡') }}</button>
+                    <button class="button button--quiet" :disabled="!shareState.ipv6Addresses.length" @click="share.toggleIpv6()">IPv6</button>
+                  </div>
                 </div>
 
                 <div class="share-body">

@@ -15,6 +15,7 @@ export interface ShareStatus {
   port: number | null;
   items: ShareItem[];
   addresses: string[];
+  ipv6Addresses: string[];
   warning: string | null;
 }
 
@@ -34,5 +35,5 @@ export interface ShareAdapter {
 }
 
 export function emptyShareStatus(): ShareStatus {
-  return { running: false, url: null, port: null, items: [], addresses: [], warning: null };
+  return { running: false, url: null, port: null, items: [], addresses: [], ipv6Addresses: [], warning: null };
 }

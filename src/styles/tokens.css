@@ -261,6 +261,7 @@ input[type="checkbox"]:focus-visible, input[type="radio"]:focus-visible, select:
 .port-button { border: 0; padding: 2px 7px; border-radius: 5px; background: var(--accent-soft); color: var(--accent); font: inherit; font-weight: 650; font-variant-numeric: tabular-nums; cursor: pointer; }
 .port-button:hover { background: var(--accent); color: #fff; }
 .port-input { width: 80px; height: 26px; padding: 0 6px; border: 1px solid var(--accent); border-radius: 5px; background: var(--bg); color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; }
+.share-link-actions { display: flex; align-items: center; gap: 6px; }
 .share-copy-wrap { position: relative; display: inline-flex; }
 .share-copy-wrap .button { display: inline-flex; align-items: center; gap: 6px; }
 .share-qr-pop { position: absolute; right: 0; top: calc(100% + 10px); z-index: 40; padding: 10px; border-radius: 10px; background: #fff; box-shadow: 0 14px 36px #0004; opacity: 0; visibility: hidden; transform: translateY(-5px); transition: opacity .16s ease, transform .16s ease, visibility .16s; pointer-events: none; }

@@ -68,6 +68,8 @@ pub struct ShareStatus {
     pub items: Vec<SharedItemView>,
     /// 所有候选局域网地址，前端用于切换网卡。
     pub addresses: Vec<String>,
+    /// 可用时返回 IPv6 候选地址，已带方括号。
+    pub ipv6_addresses: Vec<String>,
     pub warning: Option<String>,
 }
 
@@ -91,6 +93,7 @@ struct Running {
     items: Arc<RwLock<Vec<SharedItem>>>,
     next_id: Arc<AtomicU32>,
     addresses: Vec<String>,
+    ipv6_addresses: Vec<String>,
     shutdown: watch::Sender<bool>,
     task: tokio::task::JoinHandle<()>,
     events: broadcast::Sender<()>,
@@ -185,7 +188,13 @@ impl ShareManager {
         app: Option<AppHandle>,
     ) -> Result<ShareStatus, String> {
         let (listener, port) = bind_listener(options.port).await?;
+        let listener6 = bind_listener_v6(port);
         let addresses = net::candidate_addresses();
+        let ipv6_addresses = if listener6.is_some() {
+            net::candidate_addresses_v6()
+        } else {
+            Vec::new()
+        };
         let primary = addresses
             .first()
             .cloned()
@@ -223,16 +232,32 @@ impl ShareManager {
         }
         let app = server::router(context);
 
-        let (shutdown, mut rx) = watch::channel(false);
+        let (shutdown, mut rx4) = watch::channel(false);
+        let mut rx6 = rx4.clone();
+        let app6 = app.clone();
         let task = tokio::spawn(async move {
             let served = axum::serve(
                 listener,
                 app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
             )
             .with_graceful_shutdown(async move {
-                let _ = rx.changed().await;
+                let _ = rx4.changed().await;
             });
-            let _ = served.await;
+            match listener6 {
+                Some(listener6) => {
+                    let served6 = axum::serve(
+                        listener6,
+                        app6.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                    )
+                    .with_graceful_shutdown(async move {
+                        let _ = rx6.changed().await;
+                    });
+                    let _ = tokio::join!(served, served6);
+                }
+                None => {
+                    let _ = served.await;
+                }
+            }
         });
 
         let warning = if addresses.is_empty() {
@@ -249,6 +274,7 @@ impl ShareManager {
             items,
             next_id,
             addresses,
+            ipv6_addresses,
             shutdown,
             task,
             events,
@@ -386,6 +412,7 @@ fn status_from(running: &Running) -> ShareStatus {
             })
             .collect(),
         addresses: running.addresses.clone(),
+        ipv6_addresses: running.ipv6_addresses.clone(),
         warning: running.warning.clone(),
     }
 }
@@ -464,6 +491,19 @@ fn random_token() -> String {
 }
 
 /// 端口 0 或默认端口被占用时退回系统分配的临时端口。
+fn bind_listener_v6(port: u16) -> Option<TcpListener> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    let socket = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP)).ok()?;
+    socket.set_only_v6(true).ok()?;
+    socket.set_reuse_address(true).ok()?;
+    let address: std::net::SocketAddr = format!("[::]:{port}").parse().ok()?;
+    socket.bind(&address.into()).ok()?;
+    socket.listen(1024).ok()?;
+    socket.set_nonblocking(true).ok()?;
+    let std_listener: std::net::TcpListener = socket.into();
+    TcpListener::from_std(std_listener).ok()
+}
+
 async fn bind_listener(preferred: u16) -> Result<(TcpListener, u16), String> {
     let try_ports: &[u16] = if preferred == 0 {
         &[DEFAULT_PORT, 0]
