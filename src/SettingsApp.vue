@@ -1,22 +1,22 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
-import type { SettingsSession } from '../core/settings/session';
-import type { Permissions, Protection, StartFace, VisitorLang } from '../core/settings/types';
+import { computed, onMounted, ref } from 'vue';
+import { createSettingsSession } from './core/settings/session';
+import { createSettingsAdapter } from './platform';
+import type { Permissions, Protection, StartFace, VisitorLang } from './core/settings/types';
 
-const props = defineProps<{ session: SettingsSession; open: boolean }>();
-const emit = defineEmits<{ close: [] }>();
+const session = createSettingsSession(createSettingsAdapter());
+onMounted(() => { void session.load(); });
 
 type Section = 'general' | 'compression' | 'share' | 'about';
 const section = ref<Section>('general');
-const view = computed(() => props.session.state.view);
-const closeButton = ref<HTMLButtonElement>();
+const view = computed(() => session.state.view);
 const pinInput = ref('');
 const accountName = ref('');
 const accountPassword = ref('');
 const accountPermissions = ref<Permissions>({ download: true, upload: false, text: false });
 
 function update(mutator: (draft: typeof view.value) => void) {
-  void props.session.update(mutator as never);
+  void session.update(mutator);
 }
 
 function setStartFace(event: Event) {
@@ -71,17 +71,17 @@ function clearUploadDir() {
 function savePin() {
   const pin = pinInput.value.trim();
   if (!/^\d{6}$/.test(pin)) return;
-  void props.session.setPin(pin);
+  void session.setPin(pin);
   pinInput.value = '';
 }
 
 function clearPin() {
-  void props.session.setPin(null);
+  void session.setPin(null);
 }
 
 function addAccount() {
   if (!accountName.value.trim() || accountPassword.value.length < 4) return;
-  void props.session.addAccount(accountName.value, accountPassword.value, accountPermissions.value);
+  void session.addAccount(accountName.value, accountPassword.value, accountPermissions.value);
   accountName.value = '';
   accountPassword.value = '';
   accountPermissions.value = { download: true, upload: false, text: false };
@@ -91,55 +91,31 @@ function togglePermission(id: string, key: keyof Permissions, event: Event) {
   const checked = (event.target as HTMLInputElement).checked;
   const account = view.value.share.accounts.find(item => item.id === id);
   if (!account) return;
-  void props.session.updateAccount(id, {
+  void session.updateAccount(id, {
     permissions: { ...account.permissions, [key]: checked }
   });
 }
 
 function toggleEnabled(id: string, event: Event) {
-  void props.session.updateAccount(id, { enabled: (event.target as HTMLInputElement).checked });
+  void session.updateAccount(id, { enabled: (event.target as HTMLInputElement).checked });
 }
 
 function removeAccount(id: string) {
-  void props.session.deleteAccount(id);
+  void session.deleteAccount(id);
 }
 
-function close() {
-  emit('close');
+function closeWindow() {
+  import('@tauri-apps/api/window')
+    .then(({ getCurrentWindow }) => getCurrentWindow().close())
+    .catch(() => window.close());
 }
-
-function onKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape') close();
-}
-
-watch(
-  () => props.open,
-  async open => {
-    if (typeof window === 'undefined') return;
-    if (open) {
-      section.value = 'general';
-      window.addEventListener('keydown', onKeydown);
-      await nextTick();
-      closeButton.value?.focus();
-    } else {
-      window.removeEventListener('keydown', onKeydown);
-    }
-  },
-  { immediate: true }
-);
-
-onBeforeUnmount(() => {
-  if (typeof window !== 'undefined') window.removeEventListener('keydown', onKeydown);
-});
 </script>
 
 <template>
-  <Teleport to="body">
-    <div v-if="open" class="settings-overlay" @click.self="close">
-      <div class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+  <div class="settings-window">
         <header class="settings-head">
           <h2 id="settings-title">设置</h2>
-          <button ref="closeButton" class="icon-button" aria-label="关闭设置" @click="close">✕</button>
+          <button class="icon-button" aria-label="关闭设置" @click="closeWindow">✕</button>
         </header>
 
         <div class="settings-main">
@@ -157,7 +133,7 @@ onBeforeUnmount(() => {
               <label class="settings-row">
                 <span>启动时显示</span>
                 <select :value="view.general.startFace" @change="setStartFace">
-                  <option value="last">上次使用的面</option>
+                  <option value="last">上次使用</option>
                   <option value="compress">压缩</option>
                   <option value="share">分享</option>
                 </select>
@@ -174,10 +150,13 @@ onBeforeUnmount(() => {
             </section>
 
             <section v-else-if="section === 'compression'" class="settings-section">
-              <label class="settings-row settings-row--switch">
+              <div class="settings-row settings-row--switch">
                 <span>默认开启「上传自动压缩」</span>
-                <input type="checkbox" :checked="view.compression.autoCompress" @change="setAutoCompress" />
-              </label>
+                <label class="switch">
+                  <input type="checkbox" :checked="view.compression.autoCompress" @change="setAutoCompress" />
+                  <span class="switch-track" aria-hidden="true"><span /></span>
+                </label>
+              </div>
               <label class="settings-row">
                 <span>同时处理图片数</span>
                 <input class="settings-number" type="number" min="1" max="5" :value="view.compression.concurrency" @change="setConcurrency" />
@@ -230,7 +209,10 @@ onBeforeUnmount(() => {
                 <ul class="settings-accounts">
                   <li v-for="account in view.share.accounts" :key="account.id" class="settings-account">
                     <div class="settings-account-head">
-                      <strong>{{ account.username }}</strong>
+                      <span class="settings-account-name">
+                        <strong>{{ account.username }}</strong>
+                        <span class="settings-account-password">{{ account.password }}</span>
+                      </span>
                       <label class="settings-mini"><input type="checkbox" :checked="account.enabled" @change="toggleEnabled(account.id, $event)" />启用</label>
                       <button class="button button--quiet" @click="removeAccount(account.id)">删除</button>
                     </div>
@@ -256,14 +238,20 @@ onBeforeUnmount(() => {
               </div>
 
               <div v-if="view.share.protection !== 'accounts'" class="settings-block">
-                <label class="settings-row settings-row--switch">
+                <div class="settings-row settings-row--switch">
                   <span>允许访客上传文件</span>
-                  <input type="checkbox" :checked="view.share.allowUpload" @change="setAllowUpload" />
-                </label>
-                <label class="settings-row settings-row--switch">
+                  <label class="switch">
+                    <input type="checkbox" :checked="view.share.allowUpload" @change="setAllowUpload" />
+                    <span class="switch-track" aria-hidden="true"><span /></span>
+                  </label>
+                </div>
+                <div class="settings-row settings-row--switch">
                   <span>允许访客发布文字</span>
-                  <input type="checkbox" :checked="view.share.allowText" @change="setAllowText" />
-                </label>
+                  <label class="switch">
+                    <input type="checkbox" :checked="view.share.allowText" @change="setAllowText" />
+                    <span class="switch-track" aria-hidden="true"><span /></span>
+                  </label>
+                </div>
               </div>
               <p class="settings-hint">分享运行中修改端口或保护方式会自动重启服务，旧链接随即失效。</p>
             </section>
@@ -278,9 +266,7 @@ onBeforeUnmount(() => {
 
         <footer class="settings-foot">
           <span class="settings-hint">{{ session.state.saving ? '正在保存…' : '修改后立即生效' }}</span>
-          <button class="button button--primary" @click="close">完成</button>
-        </footer>
-      </div>
-    </div>
-  </Teleport>
+          <button class="button button--primary" @click="closeWindow">完成</button>
+    </footer>
+  </div>
 </template>

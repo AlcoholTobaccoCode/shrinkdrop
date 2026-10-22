@@ -47,6 +47,10 @@ export function createSettingsSession(adapter: SettingsAdapter) {
     state.error = error instanceof Error && error.message ? error.message : fallback;
   }
 
+  function open() {
+    return adapter.open();
+  }
+
   async function load() {
     if (!adapter.desktop) {
       state.loaded = true;
@@ -63,7 +67,6 @@ export function createSettingsSession(adapter: SettingsAdapter) {
   }
 
   async function save(draft: SettingsView) {
-    if (!adapter.desktop) return;
     state.saving = true;
     state.error = '';
     try {
@@ -85,7 +88,6 @@ export function createSettingsSession(adapter: SettingsAdapter) {
 
   async function touchFace(face: Face) {
     state.view.general.lastFace = face;
-    if (!adapter.desktop) return;
     try {
       await adapter.touchFace(face);
     } catch {
@@ -94,7 +96,6 @@ export function createSettingsSession(adapter: SettingsAdapter) {
   }
 
   async function pickDirectory(kind: 'save' | 'upload') {
-    if (!adapter.desktop) return;
     try {
       const path = await adapter.pickDirectory();
       if (!path) return;
@@ -108,7 +109,6 @@ export function createSettingsSession(adapter: SettingsAdapter) {
   }
 
   async function mutate(action: () => Promise<SettingsMutation>, fallback: string) {
-    if (!adapter.desktop) return;
     state.saving = true;
     state.error = '';
     try {
@@ -146,6 +146,7 @@ export function createSettingsSession(adapter: SettingsAdapter) {
   return {
     adapter,
     state,
+    open,
     load,
     update,
     touchFace,

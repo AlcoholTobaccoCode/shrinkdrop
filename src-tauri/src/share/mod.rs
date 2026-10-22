@@ -870,7 +870,7 @@ mod tests {
         options.accounts = vec![Account {
             id: "a1".to_string(),
             username: "alice".to_string(),
-            password_hash: auth::hash_secret("pass1234").unwrap(),
+            password: "pass1234".to_string(),
             permissions: auth::Permissions {
                 download: true,
                 upload: false,

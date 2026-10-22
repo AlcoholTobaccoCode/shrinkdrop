@@ -284,8 +284,7 @@ async fn login(
         .accounts
         .iter()
         .find(|account| account.enabled && account.username == body.username.trim());
-    let valid =
-        account.is_some_and(|account| auth::verify_secret(&body.password, &account.password_hash));
+    let valid = account.is_some_and(|account| auth::secret_eq(&body.password, &account.password));
     let Some(account) = account.filter(|_| valid) else {
         let locked = context.auth.record_failure(ip);
         return (if locked {

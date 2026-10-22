@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import LiteIcon from './components/LiteIcon.vue';
-import SettingsDialog from './components/SettingsDialog.vue';
 import { createLiteSession } from './core/lite/session';
 import { formatBytes, sizeChange, statusLabel } from './core/lite/presentation';
 import { createShareSession } from './core/share/session';
@@ -40,7 +39,6 @@ const shareAdapter = createShareAdapter();
 const share = createShareSession(shareAdapter);
 const settingsAdapter = createSettingsAdapter();
 const settings = createSettingsSession(settingsAdapter);
-const settingsOpen = ref(false);
 const booting = ref(true);
 watch(() => settings.state.view.compression.concurrency, value => session.setConcurrency(value));
 watch(() => settings.state.view.compression.autoCompress, value => session.setAutoCompress(value));
@@ -78,6 +76,7 @@ async function onDrop(event: DragEvent) {
 
 let detached = () => {};
 let detachedShare = () => {};
+let detachedSettings = () => {};
 let unmounted = false;
 onMounted(async () => {
   const loaded = await settings.load();
@@ -85,6 +84,12 @@ onMounted(async () => {
   session.setAutoCompress(loaded.compression.autoCompress);
   face.value = loaded.general.startFace === 'last' ? loaded.general.lastFace : loaded.general.startFace;
   booting.value = false;
+  if (settings.adapter.desktop) {
+    void settings.adapter.onEvent((event, payload) => {
+      if (event === 'changed') void settings.load();
+      if (event === 'toast' && payload) settings.state.toast = payload;
+    }).then(stop => { if (unmounted) stop(); else detachedSettings = stop; });
+  }
   void shareAdapter.setTitle(TITLES[face.value]).catch(() => {});
   void share.connect().then(stop => { if (unmounted) stop(); else detachedShare = stop; });
   if (!desktop) return;
@@ -100,7 +105,7 @@ onMounted(async () => {
     if (unmounted) stop(); else detached = stop;
   } catch { session.notify('拖放暂时不可用，请使用「添加图片」选择文件。', 'error'); }
 });
-onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); share.dispose(); void session.dispose(); });
+onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedSettings(); share.dispose(); void session.dispose(); });
 //#endregion
 </script>
 
@@ -159,7 +164,7 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); share.dis
           </template>
         </div>
 
-        <button class="icon-button settings-button" aria-label="设置" title="设置" @click="settingsOpen = true">
+        <button class="icon-button settings-button" aria-label="设置" title="设置" @click="settings.open()">
           <LiteIcon name="settings" />
         </button>
       </div>
@@ -344,7 +349,6 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); share.dis
     </div>
   </main>
 
-  <SettingsDialog :session="settings" :open="settingsOpen" @close="settingsOpen = false" />
   <div v-if="settings.state.toast" class="toast" role="status">
     <span>{{ settings.state.toast }}</span>
     <button class="icon-button" aria-label="关闭提示" @click="settings.dismissToast()"><LiteIcon name="close" /></button>

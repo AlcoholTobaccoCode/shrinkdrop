@@ -20,6 +20,9 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
                 let paths = paths.clone();
                 let app = window.app_handle().clone();
@@ -41,6 +44,9 @@ pub fn run() {
                 window.state::<compression::CompressionState>().cancel_all();
                 let _ = file_ops::cleanup_all(&window.state::<file_ops::FileState>());
                 window.state::<share::ShareManager>().shutdown_now();
+                if let Some(settings) = window.app_handle().get_webview_window("settings") {
+                    let _ = settings.close();
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -67,6 +73,7 @@ pub fn run() {
             settings::settings_update,
             settings::settings_touch_face,
             settings::settings_pick_directory,
+            settings::settings_open,
             settings::share_set_pin,
             settings::share_add_account,
             settings::share_update_account,

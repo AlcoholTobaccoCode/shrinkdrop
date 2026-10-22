@@ -12,6 +12,7 @@ export interface Permissions {
 export interface AccountView {
   id: string;
   username: string;
+  password: string;
   permissions: Permissions;
   enabled: boolean;
 }
@@ -47,8 +48,12 @@ export interface SettingsUpdatePayload {
   };
 }
 
+export type SettingsEvent = 'changed' | 'toast';
+
 export interface SettingsAdapter {
   desktop: boolean;
+  open(): Promise<void>;
+  onEvent(handler: (event: SettingsEvent, payload?: string) => void): Promise<() => void>;
   get(): Promise<SettingsView>;
   update(payload: SettingsUpdatePayload): Promise<SettingsMutation>;
   touchFace(face: Face): Promise<void>;

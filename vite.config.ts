@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 
@@ -9,6 +10,12 @@ export default defineConfig({
     strictPort: true
   },
   build: {
-    target: 'es2020'
+    target: 'es2020',
+    rollupOptions: {
+      input: {
+        main: resolve(process.cwd(), 'index.html'),
+        settings: resolve(process.cwd(), 'settings.html')
+      }
+    }
   }
 });

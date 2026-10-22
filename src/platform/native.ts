@@ -70,6 +70,15 @@ export function createNativeShareAdapter(invoke: NativeInvoke = tauriInvoke): Sh
 export function createNativeSettingsAdapter(invoke: NativeInvoke = tauriInvoke): SettingsAdapter {
   return {
     desktop: true,
+    open: () => invoke<void>('settings_open'),
+    onEvent: async handler => {
+      const { listen } = await import('@tauri-apps/api/event');
+      const stops = [
+        await listen('settings-changed', () => handler('changed')),
+        await listen<string>('settings-toast', event => handler('toast', event.payload))
+      ];
+      return () => stops.forEach(stop => stop());
+    },
     get: () => invoke<SettingsView>('settings_get'),
     update: (payload: SettingsUpdatePayload) => invoke<SettingsMutation>('settings_update', { update: payload }),
     touchFace: (face: Face) => invoke<void>('settings_touch_face', { face }),

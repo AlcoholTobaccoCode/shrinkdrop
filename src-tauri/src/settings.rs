@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::share::auth::{self, Account, Permissions, Protection};
@@ -154,6 +154,7 @@ impl SettingsState {
 pub struct AccountView {
     id: String,
     username: String,
+    password: String,
     permissions: Permissions,
     enabled: bool,
 }
@@ -221,6 +222,7 @@ pub fn view(settings: &Settings) -> SettingsView {
                 .map(|account| AccountView {
                     id: account.id.clone(),
                     username: account.username.clone(),
+                    password: account.password.clone(),
                     permissions: account.permissions.clone(),
                     enabled: account.enabled,
                 })
@@ -331,6 +333,12 @@ async fn commit(
     } else {
         false
     };
+    if restarted {
+        let _ = app.emit(
+            "settings-toast",
+            "分享已按新设置重启，旧链接已失效，请重新扫码。".to_string(),
+        );
+    }
     let _ = app.emit("settings-changed", view(&settings));
     Ok(mutation(&settings, restarted))
 }
@@ -442,7 +450,7 @@ pub async fn share_add_account(
     settings.share.accounts.push(Account {
         id: auth::new_account_id(),
         username,
-        password_hash: auth::hash_secret(&password)?,
+        password,
         permissions,
         enabled: true,
     });
@@ -478,7 +486,7 @@ pub async fn share_update_account(
         if password.chars().count() < 4 {
             return Err("密码至少 4 个字符".to_string());
         }
-        account.password_hash = auth::hash_secret(&password)?;
+        account.password = password;
     }
     commit(&app, &state, &manager, settings, true).await
 }
@@ -493,4 +501,21 @@ pub async fn share_delete_account(
     let mut settings = state.get();
     settings.share.accounts.retain(|account| account.id != id);
     commit(&app, &state, &manager, settings, true).await
+}
+
+#[tauri::command]
+pub fn settings_open(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
+        .title("设置 · TinyPNG Lite")
+        .inner_size(780.0, 640.0)
+        .min_inner_size(600.0, 440.0)
+        .resizable(true)
+        .build()
+        .map(|_| ())
+        .map_err(|_| "无法打开设置窗口".to_string())
 }

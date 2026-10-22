@@ -1,6 +1,6 @@
 import type { LiteAdapter, SourceFile } from '../core/lite/types';
 import type { ShareAdapter } from '../core/share/types';
-import type { SettingsAdapter, SettingsMutation, SettingsUpdatePayload } from '../core/settings/types';
+import type { SettingsAdapter, SettingsEvent, SettingsMutation, SettingsUpdatePayload } from '../core/settings/types';
 import { defaultSettings } from '../core/settings/types';
 import { emptyShareStatus } from '../core/share/types';
 import { createUUID } from '../core/lite/id';
@@ -76,6 +76,10 @@ export function createBrowserSettingsAdapter(): SettingsAdapter {
   const result = (): SettingsMutation => ({ settings: current, shareRestarted: false });
   return {
     desktop: false,
+    open: async () => {
+      if (typeof window !== 'undefined') window.open('/settings.html', 'settings', 'width=780,height=640');
+    },
+    onEvent: async (_handler: (event: SettingsEvent, payload?: string) => void) => () => {},
     get: async () => current,
     update: async (payload: SettingsUpdatePayload) => {
       current = {
@@ -94,14 +98,14 @@ export function createBrowserSettingsAdapter(): SettingsAdapter {
       current = { ...current, share: { ...current.share, pinSet: Boolean(pin) } };
       return result();
     },
-    addAccount: async (username, _password, permissions) => {
+    addAccount: async (username, password, permissions) => {
       current = {
         ...current,
         share: {
           ...current.share,
           accounts: [
             ...current.share.accounts,
-            { id: `preview-${username}`, username, permissions, enabled: true }
+            { id: `preview-${username}`, username, password, permissions, enabled: true }
           ]
         }
       };

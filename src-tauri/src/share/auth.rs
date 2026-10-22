@@ -49,9 +49,22 @@ impl Default for Permissions {
 pub struct Account {
     pub id: String,
     pub username: String,
-    pub password_hash: String,
+    /// 明文保存，仅用于设置页展示与登录比对；按用户要求不做哈希/加密。
+    pub password: String,
     pub permissions: Permissions,
     pub enabled: bool,
+}
+
+pub fn secret_eq(left: &str, right: &str) -> bool {
+    let left = left.as_bytes();
+    let right = right.as_bytes();
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right)
+        .fold(0u8, |accumulator, (a, b)| accumulator | (a ^ b))
+        == 0
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -312,7 +325,7 @@ mod tests {
         let account = Account {
             id: "a1".to_string(),
             username: "alice".to_string(),
-            password_hash: String::new(),
+            password: "secret".to_string(),
             permissions: Permissions {
                 download: true,
                 upload: true,
