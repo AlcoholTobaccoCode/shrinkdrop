@@ -78,7 +78,11 @@ pub fn run() {
             settings::share_set_pin,
             settings::share_add_account,
             settings::share_update_account,
-            settings::share_delete_account
+            settings::share_delete_account,
+            settings::share_group_add,
+            settings::share_group_update,
+            settings::share_group_delete,
+            share::share_set_active_group
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

@@ -1,5 +1,6 @@
 //! 应用设置：持久化、校验与分享服务联动。
 
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -10,7 +11,7 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder
 use tauri_plugin_dialog::DialogExt;
 
 use crate::share::auth::{self, Account, Permissions, Protection};
-use crate::share::{ShareManager, ShareOptions};
+use crate::share::{GroupOptions, ShareManager, ShareOptions};
 
 const SETTINGS_FILE: &str = "settings.json";
 const MAX_CONCURRENCY: u8 = 5;
@@ -109,6 +110,8 @@ pub struct ShareSettings {
     /// 0 表示自动：优先 5421，被占用时退回随机端口。
     pub port: u16,
     pub upload_dir: Option<String>,
+    #[serde(default)]
+    pub groups: Vec<GroupSettings>,
     pub protection: Protection,
     pub public: bool,
     pub pin_hash: Option<String>,
@@ -122,12 +125,31 @@ impl Default for ShareSettings {
         Self {
             port: 5421,
             upload_dir: None,
+            groups: Vec::new(),
             protection: Protection::Link,
             public: false,
             pin_hash: None,
             allow_upload: false,
             allow_text: false,
             accounts: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct GroupSettings {
+    pub id: String,
+    pub name: String,
+    pub slug: String,
+}
+
+impl Default for GroupSettings {
+    fn default() -> Self {
+        Self {
+            id: random_slug(),
+            name: "分组".to_string(),
+            slug: random_slug(),
         }
     }
 }
@@ -188,6 +210,15 @@ pub struct ShareView {
     allow_upload: bool,
     allow_text: bool,
     accounts: Vec<AccountView>,
+    groups: Vec<GroupView>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupView {
+    id: String,
+    name: String,
+    slug: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -236,19 +267,28 @@ pub fn view(settings: &Settings) -> SettingsView {
             pin_set: settings.share.pin_hash.is_some(),
             allow_upload: settings.share.allow_upload,
             allow_text: settings.share.allow_text,
-            accounts: settings
+            accounts: settings.share.accounts.iter().map(account_view).collect(),
+            groups: settings
                 .share
-                .accounts
+                .groups
                 .iter()
-                .map(|account| AccountView {
-                    id: account.id.clone(),
-                    username: account.username.clone(),
-                    password: account.password.clone(),
-                    permissions: account.permissions.clone(),
-                    enabled: account.enabled,
+                .map(|group| GroupView {
+                    id: group.id.clone(),
+                    name: group.name.clone(),
+                    slug: group.slug.clone(),
                 })
                 .collect(),
         },
+    }
+}
+
+fn account_view(account: &Account) -> AccountView {
+    AccountView {
+        id: account.id.clone(),
+        username: account.username.clone(),
+        password: account.password.clone(),
+        permissions: account.permissions.clone(),
+        enabled: account.enabled,
     }
 }
 
@@ -269,6 +309,21 @@ fn default_upload_dir() -> PathBuf {
 }
 
 pub fn share_options(settings: &Settings) -> ShareOptions {
+    let root = upload_dir(&settings.share);
+    let mut groups = vec![GroupOptions {
+        id: "default".to_string(),
+        name: "默认分组".to_string(),
+        slug: String::new(),
+        upload_dir: root.clone(),
+    }];
+    for group in &settings.share.groups {
+        groups.push(GroupOptions {
+            id: group.id.clone(),
+            name: group.name.clone(),
+            slug: group.slug.clone(),
+            upload_dir: root.join("groups").join(&group.slug),
+        });
+    }
     ShareOptions {
         port: settings.share.port,
         protection: settings.share.protection,
@@ -277,9 +332,26 @@ pub fn share_options(settings: &Settings) -> ShareOptions {
         allow_upload: settings.share.allow_upload,
         allow_text: settings.share.allow_text,
         accounts: settings.share.accounts.clone(),
-        upload_dir: upload_dir(&settings.share),
+        upload_dir: root,
         language: settings.general.language,
+        groups,
     }
+}
+
+fn random_slug() -> String {
+    let mut bytes = [0u8; 5];
+    if getrandom::fill(&mut bytes).is_err() {
+        return "group".to_string();
+    }
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn valid_slug(slug: &str) -> bool {
+    (2..=32).contains(&slug.len())
+        && slug
+            .chars()
+            .all(|value| value.is_ascii_lowercase() || value.is_ascii_digit() || value == '-')
+        && slug != "default"
 }
 
 fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -316,6 +388,15 @@ fn validate(settings: &Settings) -> Result<(), String> {
     }
     if settings.share.port != 0 && settings.share.port < 1024 {
         return Err("端口需要大于等于 1024，或填 0 使用自动端口".to_string());
+    }
+    let mut slugs = HashSet::new();
+    for group in &settings.share.groups {
+        if !valid_slug(&group.slug) {
+            return Err("分组路径只能使用 2~32 位小写字母、数字或短横线".to_string());
+        }
+        if !slugs.insert(group.slug.clone()) {
+            return Err("分组路径不能重复".to_string());
+        }
     }
     Ok(())
 }
@@ -445,6 +526,112 @@ pub async fn share_set_pin(
             settings.share.pin_hash = Some(auth::hash_secret(&pin)?);
         }
         None => settings.share.pin_hash = None,
+    }
+    commit(&app, &state, &manager, settings, true).await
+}
+
+#[tauri::command]
+pub async fn share_group_add(
+    app: AppHandle,
+    state: State<'_, SettingsState>,
+    manager: State<'_, ShareManager>,
+    name: String,
+    slug: Option<String>,
+) -> Result<SettingsMutation, String> {
+    let name = name.trim().to_string();
+    if name.is_empty() || name.chars().count() > 32 {
+        return Err("分组名称需要 1 到 32 个字符".to_string());
+    }
+    let mut settings = state.get();
+    let mut slug = slug
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
+    if let Some(value) = slug.as_ref() {
+        if !valid_slug(value) {
+            return Err("分组路径只能使用 2~32 位小写字母、数字或短横线".to_string());
+        }
+        if settings
+            .share
+            .groups
+            .iter()
+            .any(|group| &group.slug == value)
+        {
+            return Err("分组路径已存在".to_string());
+        }
+    } else {
+        for _ in 0..20 {
+            let candidate = random_slug();
+            if !settings
+                .share
+                .groups
+                .iter()
+                .any(|group| group.slug == candidate)
+            {
+                slug = Some(candidate);
+                break;
+            }
+        }
+    }
+    let slug = slug.ok_or_else(|| "无法生成分组路径".to_string())?;
+    settings.share.groups.push(GroupSettings {
+        id: random_slug(),
+        name,
+        slug,
+    });
+    commit(&app, &state, &manager, settings, true).await
+}
+
+#[tauri::command]
+pub async fn share_group_update(
+    app: AppHandle,
+    state: State<'_, SettingsState>,
+    manager: State<'_, ShareManager>,
+    id: String,
+    name: String,
+    slug: String,
+) -> Result<SettingsMutation, String> {
+    let name = name.trim().to_string();
+    if name.is_empty() || name.chars().count() > 32 {
+        return Err("分组名称需要 1 到 32 个字符".to_string());
+    }
+    let slug = slug.trim().to_ascii_lowercase();
+    if !valid_slug(&slug) {
+        return Err("分组路径只能使用 2~32 位小写字母、数字或短横线".to_string());
+    }
+    let mut settings = state.get();
+    if settings
+        .share
+        .groups
+        .iter()
+        .any(|group| group.slug == slug && group.id != id)
+    {
+        return Err("分组路径已存在".to_string());
+    }
+    let Some(group) = settings
+        .share
+        .groups
+        .iter_mut()
+        .find(|group| group.id == id)
+    else {
+        return Err("分组不存在".to_string());
+    };
+    group.name = name;
+    group.slug = slug;
+    commit(&app, &state, &manager, settings, true).await
+}
+
+#[tauri::command]
+pub async fn share_group_delete(
+    app: AppHandle,
+    state: State<'_, SettingsState>,
+    manager: State<'_, ShareManager>,
+    id: String,
+) -> Result<SettingsMutation, String> {
+    let mut settings = state.get();
+    let before = settings.share.groups.len();
+    settings.share.groups.retain(|group| group.id != id);
+    if settings.share.groups.len() == before {
+        return Err("分组不存在".to_string());
     }
     commit(&app, &state, &manager, settings, true).await
 }

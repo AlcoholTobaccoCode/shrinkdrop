@@ -1,5 +1,5 @@
 import { computed, reactive } from 'vue';
-import type { ShareAdapter, ShareItem, ShareStatus } from './types';
+import type { ShareAdapter, ShareGroup, ShareItem, ShareStatus } from './types';
 
 export type SharePhase = 'idle' | 'starting' | 'running' | 'stopping';
 
@@ -14,6 +14,8 @@ export function createShareSession(adapter: ShareAdapter) {
     url: '',
     addresses: [] as string[],
     ipv6Addresses: [] as string[],
+    activeGroup: '',
+    groups: [] as ShareGroup[],
     warning: '',
     error: '',
     qr: '',
@@ -58,6 +60,8 @@ export function createShareSession(adapter: ShareAdapter) {
     state.url = status.url ?? '';
     state.addresses = status.addresses ?? [];
     state.ipv6Addresses = status.ipv6Addresses ?? [];
+    state.activeGroup = status.activeGroup ?? '';
+    state.groups = status.groups ?? [];
     state.warning = status.warning ?? '';
     state.phase = status.running ? 'running' : 'idle';
     if (!status.running) {
@@ -235,6 +239,15 @@ export function createShareSession(adapter: ShareAdapter) {
     }
   }
 
+  async function setGroup(id: string) {
+    if (!adapter.desktop || busy.value || state.activeGroup === id) return;
+    try {
+      apply(await adapter.setActiveGroup(id));
+    } catch (error) {
+      state.error = errorText(error, '切换分组失败');
+    }
+  }
+
   async function copy() {
     if (!state.url) return;
     state.error = '';
@@ -251,5 +264,5 @@ export function createShareSession(adapter: ShareAdapter) {
     if (copiedTimer) clearTimeout(copiedTimer);
   }
 
-  return { state, running, busy, totalSize, port, connect, refresh, pickAndShare, pickAndShareFolder, addFiles, addFolder, addText, remove, stop, copy, selectAddress, cycleAddress, toggleIpv6, dispose };
+  return { state, running, busy, totalSize, port, connect, refresh, pickAndShare, pickAndShareFolder, addFiles, addFolder, addText, remove, stop, copy, setGroup, selectAddress, cycleAddress, toggleIpv6, dispose };
 }

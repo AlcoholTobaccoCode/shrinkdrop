@@ -62,6 +62,7 @@ export function createBrowserShareAdapter(): ShareAdapter {
     addItems: desktopRequired,
     removeItem: desktopRequired,
     addText: desktopRequired,
+    setActiveGroup: desktopRequired,
     pickFiles: desktopRequired,
     pickDirectory: desktopRequired,
     qrSvg: desktopRequired,
@@ -134,6 +135,38 @@ export function createBrowserSettingsAdapter(): SettingsAdapter {
       current = {
         ...current,
         share: { ...current.share, accounts: current.share.accounts.filter(account => account.id !== id) }
+      };
+      return result();
+    },
+    addGroup: async (name, slug) => {
+      current = {
+        ...current,
+        share: {
+          ...current.share,
+          groups: [
+            ...current.share.groups,
+            { id: `group-${name}`, name, slug: slug ?? `g-${name}` }
+          ]
+        }
+      };
+      return result();
+    },
+    updateGroup: async (id, name, slug) => {
+      current = {
+        ...current,
+        share: {
+          ...current.share,
+          groups: current.share.groups.map(group =>
+            group.id === id ? { ...group, name, slug } : group
+          )
+        }
+      };
+      return result();
+    },
+    deleteGroup: async id => {
+      current = {
+        ...current,
+        share: { ...current.share, groups: current.share.groups.filter(group => group.id !== id) }
       };
       return result();
     }

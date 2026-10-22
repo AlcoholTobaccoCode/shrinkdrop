@@ -140,6 +140,18 @@ export function createSettingsSession(adapter: SettingsAdapter) {
     return mutate(() => adapter.deleteAccount(id), '删除账号失败');
   }
 
+  function addGroup(name: string, slug: string | null) {
+    return mutate(() => adapter.addGroup(name, slug), '添加分组失败');
+  }
+
+  function updateGroup(id: string, name: string, slug: string) {
+    return mutate(() => adapter.updateGroup(id, name, slug), '更新分组失败');
+  }
+
+  function deleteGroup(id: string) {
+    return mutate(() => adapter.deleteGroup(id), '删除分组失败');
+  }
+
   function dismissToast() {
     state.toast = '';
   }
@@ -156,6 +168,9 @@ export function createSettingsSession(adapter: SettingsAdapter) {
     addAccount,
     updateAccount,
     deleteAccount,
+    addGroup,
+    updateGroup,
+    deleteGroup,
     dismissToast
   };
 }

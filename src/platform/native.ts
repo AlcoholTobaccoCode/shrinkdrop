@@ -58,6 +58,7 @@ export function createNativeShareAdapter(invoke: NativeInvoke = tauriInvoke): Sh
     pickDirectory: () => invoke<string[]>('share_pick_directory'),
     qrSvg: url => invoke<string>('share_qr_svg', { url }),
     addText: (text: string) => invoke<void>('share_add_text', { text }),
+    setActiveGroup: (id: string) => invoke<ShareStatus>('share_set_active_group', { groupId: id }),
     onStatus: async handler => {
       const { listen } = await import('@tauri-apps/api/event');
       const stopStatus = await listen<ShareStatus>('share-status', event => handler(event.payload));
@@ -100,7 +101,10 @@ export function createNativeSettingsAdapter(invoke: NativeInvoke = tauriInvoke):
       invoke<SettingsMutation>('share_add_account', { username, password, permissions }),
     updateAccount: (id: string, patch: { enabled?: boolean; permissions?: Permissions; password?: string }) =>
       invoke<SettingsMutation>('share_update_account', { id, ...patch }),
-    deleteAccount: (id: string) => invoke<SettingsMutation>('share_delete_account', { id })
+    deleteAccount: (id: string) => invoke<SettingsMutation>('share_delete_account', { id }),
+    addGroup: (name: string, slug: string | null) => invoke<SettingsMutation>('share_group_add', { name, slug }),
+    updateGroup: (id: string, name: string, slug: string) => invoke<SettingsMutation>('share_group_update', { id, name, slug }),
+    deleteGroup: (id: string) => invoke<SettingsMutation>('share_group_delete', { id })
   };
 }
 //#endregion

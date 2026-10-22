@@ -32,6 +32,8 @@ const pinInput = ref('');
 const accountName = ref('');
 const accountPassword = ref('');
 const accountPermissions = ref<Permissions>({ download: true, upload: false, text: false });
+const groupName = ref('');
+const groupSlug = ref('');
 
 function update(mutator: (draft: typeof view.value) => void) {
   void session.update(mutator);
@@ -125,6 +127,17 @@ function toggleEnabled(id: string, event: Event) {
 
 function removeAccount(id: string) {
   void session.deleteAccount(id);
+}
+
+function addGroup() {
+  if (!groupName.value.trim()) return;
+  void session.addGroup(groupName.value.trim(), groupSlug.value.trim() || null);
+  groupName.value = '';
+  groupSlug.value = '';
+}
+
+function removeGroup(id: string) {
+  void session.deleteGroup(id);
 }
 
 function closeWindow() {
@@ -281,6 +294,24 @@ function closeWindow() {
                     <input type="checkbox" :checked="view.share.allowText" @change="setAllowText" />
                     <span class="switch-track" aria-hidden="true"><span /></span>
                   </label>
+                </div>
+              </div>
+              <div class="settings-block">
+                <span>{{ t('分组') }}</span>
+                <p class="settings-hint">{{ t('默认分组在根路径；自定义分组在 /g/路径，文件互不共享，共用当前访问保护。') }}</p>
+                <ul class="settings-accounts">
+                  <li v-for="group in view.share.groups" :key="group.id" class="settings-account">
+                    <div class="settings-account-head">
+                      <span class="settings-account-name"><strong>{{ group.name }}</strong><span class="settings-account-password">/g/{{ group.slug }}</span></span>
+                      <button class="button button--quiet" @click="removeGroup(group.id)">{{ t('删除') }}</button>
+                    </div>
+                  </li>
+                </ul>
+                <p v-if="!view.share.groups.length" class="settings-hint">{{ t('还没有自定义分组，默认分组始终可用。') }}</p>
+                <div class="settings-account-add">
+                  <input v-model="groupName" :placeholder="t('分组名称')" maxlength="32" />
+                  <input v-model="groupSlug" :placeholder="t('路径（留空随机）')" maxlength="32" />
+                  <button class="button" :disabled="!groupName.trim()" @click="addGroup">{{ t('添加分组') }}</button>
                 </div>
               </div>
               <p v-if="view.share.protection === 'link'" class="settings-hint">{{ t('未开启公开访问时，链接模式下的访客无法打开分享。') }}</p>

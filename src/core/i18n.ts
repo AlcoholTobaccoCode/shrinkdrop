@@ -176,6 +176,15 @@ const en: Record<string, string> = {
   '发布': 'Post',
   '端口修改后会重启分享': 'Saving a new port restarts sharing',
   '切换网卡': 'Switch interface',
+  '分组': 'Groups',
+  '默认分组在根路径；自定义分组在 /g/路径，文件互不共享，共用当前访问保护。':
+    'The default group lives at the root; custom groups live under /g/ with isolated files and share the current access protection.',
+  '还没有自定义分组，默认分组始终可用。': 'No custom groups yet; the default group is always available.',
+  '分组名称': 'Group name',
+  '路径（留空随机）': 'Path (blank = random)',
+  '添加分组': 'Add group',
+  '根路径': 'Root',
+  '默认分组': 'Default',
   '当前未开放访问：在设置里开启「允许公开访问」，或改用 PIN/账号保护':
     'Access is closed. Enable “Allow public access” in Settings, or use PIN/account protection.',
   '没有检测到局域网地址，目前只能在本机访问':

@@ -258,6 +258,10 @@ input[type="checkbox"]:focus-visible, input[type="radio"]:focus-visible, select:
 /*#endregion */
 
 /*#region 分享链接细节 */
+.share-groups { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
+.share-group-tab { display: inline-flex; align-items: baseline; gap: 6px; min-height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--muted); font-size: 12px; cursor: pointer; }
+.share-group-tab span { font-size: 10px; font-family: ui-monospace, Menlo, monospace; opacity: .8; }
+.share-group-tab[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .port-button { border: 0; padding: 2px 7px; border-radius: 5px; background: var(--accent-soft); color: var(--accent); font: inherit; font-weight: 650; font-variant-numeric: tabular-nums; cursor: pointer; }
 .port-button:hover { background: var(--accent); color: #fff; }
 .port-input { width: 80px; height: 26px; padding: 0 6px; border: 1px solid var(--accent); border-radius: 5px; background: var(--bg); color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; }

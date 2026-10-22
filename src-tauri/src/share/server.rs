@@ -44,6 +44,7 @@ static ZIP_SLOT: Semaphore = Semaphore::const_new(1);
 
 #[derive(Clone)]
 pub struct Context {
+    pub base: String,
     pub items: Arc<RwLock<Vec<SharedItem>>>,
     pub port: u16,
     pub events: broadcast::Sender<()>,
@@ -56,7 +57,24 @@ pub struct Context {
     pub app: Option<tauri::AppHandle>,
 }
 
-pub fn router(context: Context) -> Router {
+pub fn router(contexts: Vec<Context>) -> Router {
+    let mut app = Router::new();
+    for context in contexts {
+        let base = context.base.clone();
+        let state = context.clone();
+        let routes = route_table()
+            .with_state(context)
+            .layer(middleware::from_fn_with_state(state, guard));
+        if base.is_empty() {
+            app = app.merge(routes);
+        } else {
+            app = app.nest(&base, routes);
+        }
+    }
+    app
+}
+
+fn route_table() -> Router<Context> {
     Router::new()
         .route("/", get(page))
         .route("/assets/app.css", get(stylesheet))
@@ -80,8 +98,6 @@ pub fn router(context: Context) -> Router {
             "/api/text",
             post(add_text).layer(DefaultBodyLimit::max(64 * 1024)),
         )
-        .with_state(context.clone())
-        .layer(middleware::from_fn_with_state(context, guard))
 }
 
 /// 统一入口校验：Host 必须是 IP/localhost，路径 token 必须匹配。
@@ -110,8 +126,8 @@ async fn guard(State(context): State<Context>, request: Request, next: Next) -> 
 
 //#region 页面与静态资源
 
-async fn page(State(_context): State<Context>) -> Response {
-    let html = PAGE.replace("{{BASE}}", "");
+async fn page(State(context): State<Context>) -> Response {
+    let html = PAGE.replace("{{BASE}}", &context.base);
     (
         [
             (

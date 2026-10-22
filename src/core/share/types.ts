@@ -9,6 +9,14 @@ export interface ShareItem {
   text: string | null;
 }
 
+export interface ShareGroup {
+  id: string;
+  name: string;
+  slug: string;
+  url: string;
+  items: ShareItem[];
+}
+
 export interface ShareStatus {
   running: boolean;
   url: string | null;
@@ -17,6 +25,8 @@ export interface ShareStatus {
   addresses: string[];
   ipv6Addresses: string[];
   warning: string | null;
+  activeGroup: string;
+  groups: ShareGroup[];
 }
 
 export interface ShareAdapter {
@@ -27,6 +37,7 @@ export interface ShareAdapter {
   addItems(paths: string[]): Promise<ShareStatus>;
   removeItem(id: number): Promise<ShareStatus>;
   addText(text: string): Promise<void>;
+  setActiveGroup(id: string): Promise<ShareStatus>;
   pickFiles(): Promise<string[]>;
   pickDirectory(): Promise<string[]>;
   qrSvg(url: string): Promise<string>;
@@ -35,5 +46,5 @@ export interface ShareAdapter {
 }
 
 export function emptyShareStatus(): ShareStatus {
-  return { running: false, url: null, port: null, items: [], addresses: [], ipv6Addresses: [], warning: null };
+  return { running: false, url: null, port: null, items: [], addresses: [], ipv6Addresses: [], warning: null, activeGroup: '', groups: [] };
 }

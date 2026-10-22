@@ -6,7 +6,7 @@ pub mod auth;
 mod net;
 mod server;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -59,6 +59,16 @@ pub struct SharedItemView {
     pub text: Option<String>,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupStatus {
+    pub id: String,
+    pub name: String,
+    pub slug: String,
+    pub url: String,
+    pub items: Vec<SharedItemView>,
+}
+
 #[derive(Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ShareStatus {
@@ -71,6 +81,16 @@ pub struct ShareStatus {
     /// 可用时返回 IPv6 候选地址，已带方括号。
     pub ipv6_addresses: Vec<String>,
     pub warning: Option<String>,
+    pub active_group: String,
+    pub groups: Vec<GroupStatus>,
+}
+
+#[derive(Clone)]
+pub struct GroupOptions {
+    pub id: String,
+    pub name: String,
+    pub slug: String,
+    pub upload_dir: PathBuf,
 }
 
 #[derive(Clone)]
@@ -84,19 +104,27 @@ pub struct ShareOptions {
     pub accounts: Vec<Account>,
     pub upload_dir: PathBuf,
     pub language: Language,
+    pub groups: Vec<GroupOptions>,
+}
+
+struct RuntimeGroup {
+    options: GroupOptions,
+    base: String,
+    url: String,
+    items: Arc<RwLock<Vec<SharedItem>>>,
+    next_id: Arc<AtomicU32>,
+    events: broadcast::Sender<()>,
 }
 
 struct Running {
     token: String,
-    url: String,
     port: u16,
-    items: Arc<RwLock<Vec<SharedItem>>>,
-    next_id: Arc<AtomicU32>,
     addresses: Vec<String>,
     ipv6_addresses: Vec<String>,
+    groups: Vec<RuntimeGroup>,
+    active_group: String,
     shutdown: watch::Sender<bool>,
-    task: tokio::task::JoinHandle<()>,
-    events: broadcast::Sender<()>,
+    task: Option<tokio::task::JoinHandle<()>>,
     warning: Option<String>,
 }
 
@@ -118,20 +146,64 @@ impl ShareManager {
         app: Option<AppHandle>,
     ) -> Result<ShareStatus, String> {
         let items = collect_items(paths)?;
-        self.spawn_server(items, options, app).await
+        let active = options
+            .groups
+            .first()
+            .map(|group| group.id.clone())
+            .ok_or_else(|| "至少需要一个分享分组".to_string())?;
+        let mut initial = HashMap::new();
+        initial.insert(active.clone(), items);
+        self.spawn_server(initial, options, active, app).await
     }
 
-    /// 设置变更后重启服务，保留当前分享列表（含文字与上传项）。
+    /// 设置变更后重启服务，保留各分组的分享列表（含文字与上传项）。
     pub async fn restart(
         &self,
         options: ShareOptions,
         app: Option<AppHandle>,
     ) -> Result<ShareStatus, String> {
-        let Some(items) = self.take_running().await else {
+        let Some(previous) = self.take_running().await else {
             return Err("分享还没有开始".to_string());
         };
-        let snapshot = items.read().map(|guard| guard.clone()).unwrap_or_default();
-        self.spawn_server(snapshot, options, app).await
+        let active = previous.active_group.clone();
+        let mut snapshots = HashMap::new();
+        for group in &previous.groups {
+            let items = group
+                .items
+                .read()
+                .map(|guard| guard.clone())
+                .unwrap_or_default();
+            snapshots.insert(group.options.id.clone(), items);
+        }
+        self.spawn_server(snapshots, options, active, app).await
+    }
+
+    fn active_group<'a>(running: &'a Running) -> Result<&'a RuntimeGroup, String> {
+        running
+            .groups
+            .iter()
+            .find(|group| group.options.id == running.active_group)
+            .or_else(|| running.groups.first())
+            .ok_or_else(|| "分享分组不可用".to_string())
+    }
+
+    pub fn set_active_group(&self, group_id: String) -> Result<ShareStatus, String> {
+        let mut guard = self
+            .running
+            .lock()
+            .map_err(|_| "分享状态不可用".to_string())?;
+        let Some(running) = guard.as_mut() else {
+            return Err("分享还没有开始".to_string());
+        };
+        if !running
+            .groups
+            .iter()
+            .any(|group| group.options.id == group_id)
+        {
+            return Err("分组不存在".to_string());
+        }
+        running.active_group = group_id;
+        Ok(status_from(running))
     }
 
     pub fn add_text(&self, text: String) -> Result<(), String> {
@@ -149,13 +221,14 @@ impl ShareManager {
         let Some(running) = guard.as_ref() else {
             return Err("分享还没有开始".to_string());
         };
+        let group = Self::active_group(running)?;
         let name: String = text.chars().take(32).collect();
-        let id = running.next_id.fetch_add(1, Ordering::SeqCst);
+        let id = group.next_id.fetch_add(1, Ordering::SeqCst);
         let modified = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
             .map(|duration| duration.as_secs());
-        if let Ok(mut items) = running.items.write() {
+        if let Ok(mut items) = group.items.write() {
             items.push(SharedItem {
                 id,
                 kind: ItemKind::Text,
@@ -166,7 +239,7 @@ impl ShareManager {
                 text: Some(text),
             });
         }
-        let _ = running.events.send(());
+        let _ = group.events.send(());
         Ok(())
     }
 
@@ -176,17 +249,23 @@ impl ShareManager {
         }
         if let Ok(guard) = self.running.lock() {
             if let Some(running) = guard.as_ref() {
-                let _ = running.events.send(());
+                for group in &running.groups {
+                    let _ = group.events.send(());
+                }
             }
         }
     }
 
     async fn spawn_server(
         &self,
-        items: Vec<SharedItem>,
+        snapshots: HashMap<String, Vec<SharedItem>>,
         options: ShareOptions,
+        active_group: String,
         app: Option<AppHandle>,
     ) -> Result<ShareStatus, String> {
+        if options.groups.is_empty() {
+            return Err("至少需要一个分享分组".to_string());
+        }
         let (listener, port) = bind_listener(options.port).await?;
         let listener6 = bind_listener_v6(port);
         let addresses = net::candidate_addresses();
@@ -200,13 +279,7 @@ impl ShareManager {
             .cloned()
             .unwrap_or_else(|| "127.0.0.1".to_string());
         let token = random_token();
-        let url = format!("http://{primary}:{port}");
-
-        let next_id = Arc::new(AtomicU32::new(
-            items.iter().map(|item| item.id).max().unwrap_or(0) + 1,
-        ));
-        let items = Arc::new(RwLock::new(items));
-        let (events, _) = broadcast::channel(16);
+        let temp_root = shared_temp_dir(&token);
         let auth = Arc::new(AuthConfig::new(
             options.protection,
             options.public,
@@ -215,30 +288,55 @@ impl ShareManager {
             options.allow_upload,
             options.allow_text,
         ));
-        let context = server::Context {
-            items: items.clone(),
-            port,
-            events: events.clone(),
-            zip_dir: shared_temp_dir(&token),
-            auth,
-            next_id: next_id.clone(),
-            upload_dir: options.upload_dir.clone(),
-            language: self.language.clone(),
-            public: options.public,
-            app,
-        };
+        let mut contexts = Vec::new();
+        let mut groups = Vec::new();
+        for group in options.groups.clone() {
+            let base = if group.slug.is_empty() {
+                String::new()
+            } else {
+                format!("/g/{}", group.slug)
+            };
+            let url = format!("http://{primary}:{port}{base}");
+            let items = snapshots.get(&group.id).cloned().unwrap_or_default();
+            let next_id = Arc::new(AtomicU32::new(
+                items.iter().map(|item| item.id).max().unwrap_or(0) + 1,
+            ));
+            let items = Arc::new(RwLock::new(items));
+            let (events, _) = broadcast::channel(16);
+            contexts.push(server::Context {
+                base: base.clone(),
+                items: items.clone(),
+                port,
+                events: events.clone(),
+                zip_dir: temp_root.join(&group.id),
+                auth: auth.clone(),
+                next_id: next_id.clone(),
+                upload_dir: group.upload_dir.clone(),
+                language: self.language.clone(),
+                public: options.public,
+                app: app.clone(),
+            });
+            groups.push(RuntimeGroup {
+                options: group,
+                base,
+                url,
+                items,
+                next_id,
+                events,
+            });
+        }
         if let Ok(mut language) = self.language.write() {
             *language = options.language;
         }
-        let app = server::router(context);
+        let router = server::router(contexts);
 
         let (shutdown, mut rx4) = watch::channel(false);
         let mut rx6 = rx4.clone();
-        let app6 = app.clone();
+        let router6 = router.clone();
         let task = tokio::spawn(async move {
             let served = axum::serve(
                 listener,
-                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
             )
             .with_graceful_shutdown(async move {
                 let _ = rx4.changed().await;
@@ -247,7 +345,7 @@ impl ShareManager {
                 Some(listener6) => {
                     let served6 = axum::serve(
                         listener6,
-                        app6.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                        router6.into_make_service_with_connect_info::<std::net::SocketAddr>(),
                     )
                     .with_graceful_shutdown(async move {
                         let _ = rx6.changed().await;
@@ -267,17 +365,20 @@ impl ShareManager {
         } else {
             None
         };
+        let active_group = if groups.iter().any(|group| group.options.id == active_group) {
+            active_group
+        } else {
+            groups[0].options.id.clone()
+        };
         let running = Running {
             token,
-            url,
             port,
-            items,
-            next_id,
             addresses,
             ipv6_addresses,
+            groups,
+            active_group,
             shutdown,
-            task,
-            events,
+            task: Some(task),
             warning,
         };
         let status = status_from(&running);
@@ -288,23 +389,24 @@ impl ShareManager {
         Ok(status)
     }
 
-    /// 停止监听并返回分享列表，供重启复用。
-    async fn take_running(&self) -> Option<Arc<RwLock<Vec<SharedItem>>>> {
-        let running = self
+    /// 停止监听并返回运行数据，供重启复用。
+    async fn take_running(&self) -> Option<Running> {
+        let mut running = self
             .running
             .lock()
             .ok()
             .and_then(|mut guard| guard.take())?;
         let _ = running.shutdown.send(true);
-        let mut task = running.task;
-        if tokio::time::timeout(SHUTDOWN_GRACE, &mut task)
-            .await
-            .is_err()
-        {
-            task.abort();
+        if let Some(mut task) = running.task.take() {
+            if tokio::time::timeout(SHUTDOWN_GRACE, &mut task)
+                .await
+                .is_err()
+            {
+                task.abort();
+            }
         }
         let _ = fs::remove_dir_all(shared_temp_dir(&running.token));
-        Some(running.items)
+        Some(running)
     }
 
     pub async fn stop(&self) -> ShareStatus {
@@ -312,7 +414,7 @@ impl ShareManager {
         ShareStatus::default()
     }
 
-    /// 服务运行中追加文件或目录；重复路径会被忽略。
+    /// 服务运行中向当前分组追加文件或目录；重复路径会被忽略。
     pub fn add_items(&self, paths: Vec<String>) -> Result<ShareStatus, String> {
         let guard = self
             .running
@@ -321,10 +423,10 @@ impl ShareManager {
         let Some(running) = guard.as_ref() else {
             return Err("分享还没有开始".to_string());
         };
-
+        let group = Self::active_group(running)?;
         let candidates = collect_items(paths)?;
         {
-            let mut items = running
+            let mut items = group
                 .items
                 .write()
                 .map_err(|_| "分享列表不可用，请重试".to_string())?;
@@ -336,12 +438,12 @@ impl ShareManager {
                 if items.iter().any(|item| item.path == candidate.path) {
                     continue;
                 }
-                let id = running.next_id.fetch_add(1, Ordering::SeqCst);
+                let id = group.next_id.fetch_add(1, Ordering::SeqCst);
                 items.push(SharedItem { id, ..candidate });
                 changed = true;
             }
             if changed {
-                let _ = running.events.send(());
+                let _ = group.events.send(());
             }
         }
         Ok(status_from(running))
@@ -355,15 +457,16 @@ impl ShareManager {
         let Some(running) = guard.as_ref() else {
             return Err("分享还没有开始".to_string());
         };
+        let group = Self::active_group(running)?;
         {
-            let mut items = running
+            let mut items = group
                 .items
                 .write()
                 .map_err(|_| "分享列表不可用，请重试".to_string())?;
             let before = items.len();
             items.retain(|item| item.id != id);
             if items.len() != before {
-                let _ = running.events.send(());
+                let _ = group.events.send(());
             }
         }
         Ok(status_from(running))
@@ -371,9 +474,11 @@ impl ShareManager {
 
     /// 关窗或退出时使用：只发信号并中止任务，不阻塞 UI。
     pub fn shutdown_now(&self) {
-        if let Some(running) = self.running.lock().ok().and_then(|mut guard| guard.take()) {
+        if let Some(mut running) = self.running.lock().ok().and_then(|mut guard| guard.take()) {
             let _ = running.shutdown.send(true);
-            running.task.abort();
+            if let Some(task) = running.task.take() {
+                task.abort();
+            }
             let _ = fs::remove_dir_all(shared_temp_dir(&running.token));
         }
     }
@@ -390,30 +495,67 @@ impl ShareManager {
     }
 }
 
+fn items_view(items: &[SharedItem]) -> Vec<SharedItemView> {
+    items
+        .iter()
+        .map(|item| SharedItemView {
+            id: item.id,
+            kind: item.kind,
+            name: item.name.clone(),
+            size: item.size,
+            modified: item.modified,
+            text: item.text.clone(),
+        })
+        .collect()
+}
+
 fn status_from(running: &Running) -> ShareStatus {
-    let items = running
-        .items
-        .read()
-        .map(|guard| guard.clone())
-        .unwrap_or_default();
+    let active = running
+        .groups
+        .iter()
+        .find(|group| group.options.id == running.active_group)
+        .or_else(|| running.groups.first());
+    let groups = running
+        .groups
+        .iter()
+        .map(|group| {
+            let items = group
+                .items
+                .read()
+                .map(|guard| guard.clone())
+                .unwrap_or_default();
+            GroupStatus {
+                id: group.options.id.clone(),
+                name: group.options.name.clone(),
+                slug: group.options.slug.clone(),
+                url: group.url.clone(),
+                items: items_view(&items),
+            }
+        })
+        .collect();
+    let (items, url) = match active {
+        Some(group) => {
+            let items = group
+                .items
+                .read()
+                .map(|guard| guard.clone())
+                .unwrap_or_default();
+            (items_view(&items), Some(group.url.clone()))
+        }
+        None => (Vec::new(), None),
+    };
     ShareStatus {
         running: true,
-        url: Some(running.url.clone()),
+        url,
         port: Some(running.port),
-        items: items
-            .iter()
-            .map(|item| SharedItemView {
-                id: item.id,
-                kind: item.kind,
-                name: item.name.clone(),
-                size: item.size,
-                modified: item.modified,
-                text: item.text.clone(),
-            })
-            .collect(),
+        items,
         addresses: running.addresses.clone(),
         ipv6_addresses: running.ipv6_addresses.clone(),
         warning: running.warning.clone(),
+        active_group: active
+            .map(|group| group.options.id.clone())
+            .unwrap_or_default(),
+        groups,
     }
 }
 
@@ -624,6 +766,17 @@ pub fn share_qr_svg(url: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+pub fn share_set_active_group(
+    app: AppHandle,
+    manager: tauri::State<'_, ShareManager>,
+    group_id: String,
+) -> Result<ShareStatus, String> {
+    let status = manager.set_active_group(group_id)?;
+    let _ = app.emit("share-status", status.clone());
+    Ok(status)
+}
+
+#[tauri::command]
 pub fn share_add_text(
     app: AppHandle,
     manager: tauri::State<'_, ShareManager>,
@@ -672,6 +825,7 @@ mod tests {
     }
 
     fn options() -> ShareOptions {
+        let upload_dir = std::env::temp_dir().join("tinypng-share-test-uploads");
         ShareOptions {
             port: 0,
             protection: Protection::Link,
@@ -680,7 +834,13 @@ mod tests {
             allow_upload: false,
             allow_text: false,
             accounts: Vec::new(),
-            upload_dir: std::env::temp_dir().join("tinypng-share-test-uploads"),
+            groups: vec![GroupOptions {
+                id: "default".to_string(),
+                name: "默认分组".to_string(),
+                slug: String::new(),
+                upload_dir: upload_dir.clone(),
+            }],
+            upload_dir,
             language: Language::Auto,
         }
     }
@@ -724,6 +884,68 @@ mod tests {
             .items
             .iter()
             .any(|item| item.name == "hello from manager"));
+        manager.stop().await;
+    }
+
+    #[tokio::test]
+    async fn groups_isolate_items_and_serve_subpaths() {
+        let first = temp_file("group-a.txt", b"a");
+        let second = temp_file("group-b.txt", b"b");
+        let mut settings = options();
+        settings.groups.push(GroupOptions {
+            id: "team".to_string(),
+            name: "Team".to_string(),
+            slug: "team-a".to_string(),
+            upload_dir: std::env::temp_dir().join("tinypng-share-test-team"),
+        });
+        let manager = ShareManager::default();
+        manager
+            .start(vec![first.display().to_string()], settings, None)
+            .await
+            .unwrap();
+        manager.set_active_group("team".to_string()).unwrap();
+        manager
+            .add_items(vec![second.display().to_string()])
+            .unwrap();
+        manager.set_active_group("default".to_string()).unwrap();
+
+        let status = manager.status();
+        assert_eq!(status.groups.len(), 2);
+        let root_url = status.url.clone().unwrap();
+        let team_url = status
+            .groups
+            .iter()
+            .find(|group| group.slug == "team-a")
+            .map(|group| group.url.clone())
+            .unwrap();
+
+        let client = reqwest::Client::new();
+        let page = client.get(team_url.clone()).send().await.unwrap();
+        assert!(
+            page.status().is_success() || page.status().is_redirection(),
+            "分组页面不可访问：{}",
+            page.status()
+        );
+        let root_items: Vec<serde_json::Value> = client
+            .get(format!("{root_url}/api/items"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let team_items: Vec<serde_json::Value> = client
+            .get(format!("{team_url}/api/items"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(root_items.iter().any(|item| item["name"] == "group-a.txt"));
+        assert!(!root_items.iter().any(|item| item["name"] == "group-b.txt"));
+        assert!(team_items.iter().any(|item| item["name"] == "group-b.txt"));
+        assert!(!team_items.iter().any(|item| item["name"] == "group-a.txt"));
         manager.stop().await;
     }
 
@@ -1200,6 +1422,7 @@ mod tests {
             ));
             let next_id = Arc::new(AtomicU32::new(100));
             let context = server::Context {
+                base: String::new(),
                 items: shared.clone(),
                 port,
                 events,
@@ -1211,7 +1434,7 @@ mod tests {
                 public: true,
                 app: None,
             };
-            let app = server::router(context);
+            let app = server::router(vec![context]);
             tokio::spawn(async move {
                 let _ = axum::serve(
                     listener,

@@ -327,6 +327,12 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
               <p v-if="shareState.warning" class="notice" role="note">{{ t(shareState.warning) }}</p>
 
               <template v-if="shareRunning">
+                <div v-if="shareState.groups.length > 1" class="share-groups" role="tablist" :aria-label="t('分组')">
+                  <button v-for="group in shareState.groups" :key="group.id" type="button" class="share-group-tab"
+                    :aria-selected="shareState.activeGroup === group.id" @click="share.setGroup(group.id)">
+                    {{ group.id === 'default' ? t('默认分组') : group.name }}<span>{{ group.slug ? `/g/${group.slug}` : t('根路径') }}</span>
+                  </button>
+                </div>
                 <div class="share-link-row">
                   <div class="share-link-copy">
                     <span class="share-label">{{ t('分享链接') }}</span>

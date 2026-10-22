@@ -17,6 +17,12 @@ export interface AccountView {
   enabled: boolean;
 }
 
+export interface GroupView {
+  id: string;
+  name: string;
+  slug: string;
+}
+
 export interface SettingsView {
   general: { startFace: StartFace; lastFace: Face; language: Language };
   compression: { autoCompress: boolean; concurrency: number; saveDir: string | null };
@@ -29,6 +35,7 @@ export interface SettingsView {
     allowUpload: boolean;
     allowText: boolean;
     accounts: AccountView[];
+    groups: GroupView[];
   };
 }
 
@@ -67,6 +74,9 @@ export interface SettingsAdapter {
     patch: { enabled?: boolean; permissions?: Permissions; password?: string }
   ): Promise<SettingsMutation>;
   deleteAccount(id: string): Promise<SettingsMutation>;
+  addGroup(name: string, slug: string | null): Promise<SettingsMutation>;
+  updateGroup(id: string, name: string, slug: string): Promise<SettingsMutation>;
+  deleteGroup(id: string): Promise<SettingsMutation>;
 }
 
 export function defaultSettings(): SettingsView {
@@ -81,7 +91,8 @@ export function defaultSettings(): SettingsView {
       pinSet: false,
       allowUpload: false,
       allowText: false,
-      accounts: []
+      accounts: [],
+      groups: []
     }
   };
 }
