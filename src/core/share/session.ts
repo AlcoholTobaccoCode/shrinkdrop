@@ -248,6 +248,36 @@ export function createShareSession(adapter: ShareAdapter) {
     }
   }
 
+  async function dropPaths(paths: string[]) {
+    if (!adapter.desktop || !paths.length || busy.value) return;
+    state.error = '';
+    try {
+      if (running.value) {
+        state.adding = true;
+        apply(await adapter.addItems(paths));
+      } else {
+        state.phase = 'starting';
+        apply(await adapter.start(paths));
+      }
+    } catch (error) {
+      state.error = errorText(error, '添加拖入内容失败');
+      state.phase = running.value ? 'running' : 'idle';
+    } finally {
+      state.adding = false;
+    }
+  }
+
+  async function saveItems(ids: number[]): Promise<boolean> {
+    if (!adapter.desktop || !ids.length) return false;
+    state.error = '';
+    try {
+      return await adapter.saveItems(ids);
+    } catch (error) {
+      state.error = errorText(error, '保存文件失败');
+      return false;
+    }
+  }
+
   async function openUploadFolder() {
     if (!adapter.desktop || !running.value) return;
     state.error = '';
@@ -274,5 +304,5 @@ export function createShareSession(adapter: ShareAdapter) {
     if (copiedTimer) clearTimeout(copiedTimer);
   }
 
-  return { state, running, busy, totalSize, port, connect, refresh, pickAndShare, pickAndShareFolder, addFiles, addFolder, addText, remove, stop, copy, setGroup, openUploadFolder, selectAddress, cycleAddress, toggleIpv6, dispose };
+  return { state, running, busy, totalSize, port, connect, refresh, pickAndShare, pickAndShareFolder, addFiles, addFolder, addText, remove, stop, copy, setGroup, dropPaths, saveItems, openUploadFolder, selectAddress, cycleAddress, toggleIpv6, dispose };
 }

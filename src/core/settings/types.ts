@@ -46,6 +46,7 @@ export interface SettingsView {
     pinSet: boolean;
     allowUpload: boolean;
     allowText: boolean;
+    autoSaveUploads: boolean;
     accounts: AccountView[];
     groups: GroupView[];
   };
@@ -66,6 +67,7 @@ export interface SettingsUpdatePayload {
     public: boolean;
     allowUpload: boolean;
     allowText: boolean;
+    autoSaveUploads: boolean;
   };
 }
 
@@ -105,6 +107,7 @@ export function defaultSettings(): SettingsView {
       pinSet: false,
       allowUpload: false,
       allowText: false,
+      autoSaveUploads: false,
       accounts: [],
       groups: []
     }

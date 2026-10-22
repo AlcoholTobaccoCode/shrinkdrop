@@ -181,11 +181,21 @@ const en: Record<string, string> = {
     'The default group lives at the root; custom groups live under /g/ with isolated files and independent access protection.',
   '还没有自定义分组，默认分组始终可用。': 'No custom groups yet; the default group is always available.',
   '分组名称': 'Group name',
-  '路径（留空随机）': 'Path (blank = random)',
+  '路径（留空随机，仅小写字母/数字/短横线）': 'Path (blank = random; lowercase letters, digits, dashes)',
   '添加分组': 'Add group',
   '根路径': 'Root',
   '默认分组': 'Default',
   '接收目录': 'Upload folder',
+  '分享中': 'Sharing',
+  '已停止': 'Stopped',
+  '只有一个可用网卡': 'Only one LAN interface is available',
+  '当前网络没有可用的 IPv6 地址': 'No usable IPv6 address on this network',
+  '上传后自动保存到下载目录': 'Auto-save uploads to Downloads',
+  '默认手动：访客上传的文件只在列表中高亮，由你选择保存；开启后会自动复制到系统下载目录。':
+    'Manual by default: uploaded files are highlighted in the list for you to save. Turn on to copy them to Downloads automatically.',
+  '访客上传': 'From visitor',
+  '下载所选': 'Download selected',
+  '全部下载': 'Download all',
   '当前未开放访问：在设置里开启「允许公开访问」，或改用 PIN/账号保护':
     'Access is closed. Enable “Allow public access” in Settings, or use PIN/account protection.',
   '没有检测到局域网地址，目前只能在本机访问':

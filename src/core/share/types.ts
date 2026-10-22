@@ -7,6 +7,7 @@ export interface ShareItem {
   size: number;
   modified: number | null;
   text: string | null;
+  visitor: boolean;
 }
 
 export interface ShareGroup {
@@ -38,6 +39,8 @@ export interface ShareAdapter {
   removeItem(id: number): Promise<ShareStatus>;
   addText(text: string): Promise<void>;
   setActiveGroup(id: string): Promise<ShareStatus>;
+  addPaths(paths: string[]): Promise<ShareStatus>;
+  saveItems(ids: number[]): Promise<boolean>;
   openUploadDir(): Promise<void>;
   pickFiles(): Promise<string[]>;
   pickDirectory(): Promise<string[]>;

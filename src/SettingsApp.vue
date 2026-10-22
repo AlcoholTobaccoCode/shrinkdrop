@@ -36,6 +36,15 @@ const groupName = ref('');
 const groupSlug = ref('');
 const groupPins = reactive<Record<string, string>>({});
 
+async function closeWindow() {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('settings_close');
+  } catch {
+    window.close();
+  }
+}
+
 function update(mutator: (draft: typeof view.value) => void) {
   void session.update(mutator);
 }
@@ -79,6 +88,11 @@ function setPublic(event: Event) {
 function setAllowUpload(event: Event) {
   const checked = (event.target as HTMLInputElement).checked;
   update(draft => { draft.share.allowUpload = checked; });
+}
+
+function setAutoSaveUploads(event: Event) {
+  const checked = (event.target as HTMLInputElement).checked;
+  update(draft => { draft.share.autoSaveUploads = checked; });
 }
 
 function setAllowText(event: Event) {
@@ -130,9 +144,20 @@ function removeAccount(id: string) {
   void session.deleteAccount(id);
 }
 
+function normalizeSlug(value: string): string | null {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32);
+  return slug.length >= 2 ? slug : null;
+}
+
 function addGroup() {
   if (!groupName.value.trim()) return;
-  void session.addGroup(groupName.value.trim(), groupSlug.value.trim() || null);
+  const slug = normalizeSlug(groupSlug.value);
+  void session.addGroup(groupName.value.trim(), slug);
   groupName.value = '';
   groupSlug.value = '';
 }
@@ -182,20 +207,10 @@ function clearGroupPin(group: { id: string }) {
   void session.setGroupPin(group.id, null);
 }
 
-function closeWindow() {
-  import('@tauri-apps/api/window')
-    .then(({ getCurrentWindow }) => getCurrentWindow().close())
-    .catch(() => window.close());
-}
 </script>
 
 <template>
   <div class="settings-window">
-        <header class="settings-head">
-          <h2 id="settings-title">{{ t('设置') }}</h2>
-          <button class="icon-button" :aria-label="t('关闭设置')" @click="closeWindow">✕</button>
-        </header>
-
         <div class="settings-main">
           <nav class="settings-nav" :aria-label="t('设置分组')">
             <button class="settings-tab" :aria-current="section === 'general'" @click="section = 'general'">{{ t('通用') }}</button>
@@ -378,10 +393,15 @@ function closeWindow() {
                 <p v-if="!view.share.groups.length" class="settings-hint">{{ t('还没有自定义分组，默认分组始终可用。') }}</p>
                 <div class="settings-account-add">
                   <input v-model="groupName" :placeholder="t('分组名称')" maxlength="32" />
-                  <input v-model="groupSlug" :placeholder="t('路径（留空随机）')" maxlength="32" />
+                  <input v-model="groupSlug" :placeholder="t('路径（留空随机，仅小写字母/数字/短横线）')" maxlength="32" />
                   <button class="button" :disabled="!groupName.trim()" @click="addGroup">{{ t('添加分组') }}</button>
                 </div>
               </div>
+              <div class="settings-row settings-row--switch">
+                <span>{{ t('上传后自动保存到下载目录') }}</span>
+                <label class="switch"><input type="checkbox" :checked="view.share.autoSaveUploads" @change="setAutoSaveUploads" /><span class="switch-track" aria-hidden="true"><span /></span></label>
+              </div>
+              <p class="settings-hint">{{ t('默认手动：访客上传的文件只在列表中高亮，由你选择保存；开启后会自动复制到系统下载目录。') }}</p>
               <p v-if="view.share.protection === 'link'" class="settings-hint">{{ t('未开启公开访问时，链接模式下的访客无法打开分享。') }}</p>
               <p class="settings-hint">{{ t('分享运行中修改端口或保护方式会自动重启服务，旧链接随即失效。') }}</p>
             </section>

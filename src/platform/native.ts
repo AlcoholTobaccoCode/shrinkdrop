@@ -60,6 +60,8 @@ export function createNativeShareAdapter(invoke: NativeInvoke = tauriInvoke): Sh
     addText: (text: string) => invoke<void>('share_add_text', { text }),
     setActiveGroup: (id: string) => invoke<ShareStatus>('share_set_active_group', { groupId: id }),
     openUploadDir: () => invoke<void>('share_open_upload_dir'),
+    addPaths: (paths: string[]) => invoke<ShareStatus>('share_add_items', { paths }),
+    saveItems: (ids: number[]) => invoke<boolean>('share_save_items', { ids }),
     onStatus: async handler => {
       const { listen } = await import('@tauri-apps/api/event');
       const stopStatus = await listen<ShareStatus>('share-status', event => handler(event.payload));
@@ -113,3 +115,8 @@ export function createNativeSettingsAdapter(invoke: NativeInvoke = tauriInvoke):
   };
 }
 //#endregion
+
+export async function connectShareDrops(handler: (paths: string[]) => void): Promise<() => void> {
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen<string[]>('share-paths-dropped', event => handler(event.payload));
+}

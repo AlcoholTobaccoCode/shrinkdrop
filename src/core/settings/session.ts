@@ -23,7 +23,8 @@ function payload(settings: SettingsView): SettingsUpdatePayload {
       protection: settings.share.protection,
       public: settings.share.public,
       allowUpload: settings.share.allowUpload,
-      allowText: settings.share.allowText
+      allowText: settings.share.allowText,
+      autoSaveUploads: settings.share.autoSaveUploads
     }
   };
 }
@@ -45,7 +46,22 @@ export function createSettingsSession(adapter: SettingsAdapter) {
   }
 
   function fail(error: unknown, fallback: string) {
-    state.error = error instanceof Error && error.message ? error.message : fallback;
+    if (typeof error === 'string' && error) {
+      state.error = error;
+      return;
+    }
+    if (error instanceof Error && error.message) {
+      state.error = error.message;
+      return;
+    }
+    if (error && typeof error === 'object' && 'message' in error) {
+      const message = (error as { message?: unknown }).message;
+      if (typeof message === 'string' && message) {
+        state.error = message;
+        return;
+      }
+    }
+    state.error = fallback;
   }
 
   function open() {

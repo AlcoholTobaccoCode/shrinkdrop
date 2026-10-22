@@ -531,6 +531,7 @@
   }
 
   let source = null;
+  let wasDisconnected = false;
 
   function connectEvents() {
     if (source) source.close();
@@ -549,9 +550,14 @@
     source.onopen = () => {
       state.connected = true;
       renderConn();
+      if (wasDisconnected) {
+        wasDisconnected = false;
+        void refreshConfig();
+      }
     };
     source.onerror = () => {
       state.connected = false;
+      wasDisconnected = true;
       renderConn();
     };
   }
@@ -714,30 +720,33 @@
     renderList();
   }
 
+  async function refreshConfig() {
+    const info = await getJSON(BASE + '/api/state');
+    state.auth = info;
+    if (!info.authenticated) {
+      sessionEl.hidden = true;
+      if (info.protection === 'link' && !info.public) {
+        showClosed();
+      } else {
+        showAuth(info);
+      }
+      return info;
+    }
+    hideAuth();
+    applyServerLang(info.lang);
+    renderSession(info);
+    if (info.permissions && info.permissions.download) {
+      syncFromUrl();
+    } else {
+      showNoDownload();
+    }
+    return info;
+  }
+
   async function boot() {
     try {
-      const info = await getJSON(BASE + '/api/state');
-      state.auth = info;
-      if (!info.authenticated) {
-        sessionEl.hidden = true;
-        if (info.protection === 'link' && !info.public) {
-          showClosed();
-          return;
-        }
-        showAuth(info);
-        return;
-      }
-      hideAuth();
-      state.serverLang = info.lang === 'zh' || info.lang === 'en' ? info.lang : '';
-      applyServerLang(info.lang);
-      renderSession(info);
-      if (info.permissions && info.permissions.download) {
-        syncFromUrl();
-        connectEvents();
-      } else {
-        showNoDownload();
-        connectEvents();
-      }
+      await refreshConfig();
+      connectEvents();
     } catch (error) {
       hideChrome(true);
       statusEl.hidden = false;
@@ -745,6 +754,7 @@
       statusEl.textContent = t('loadError');
     }
   }
+
 
   function openSheet(titleText) {
     const overlay = document.createElement('div');

@@ -117,6 +117,8 @@ pub struct ShareSettings {
     pub pin_hash: Option<String>,
     pub allow_upload: bool,
     pub allow_text: bool,
+    #[serde(default)]
+    pub auto_save_uploads: bool,
     pub accounts: Vec<Account>,
 }
 
@@ -131,6 +133,7 @@ impl Default for ShareSettings {
             pin_hash: None,
             allow_upload: false,
             allow_text: false,
+            auto_save_uploads: false,
             accounts: Vec::new(),
         }
     }
@@ -219,6 +222,7 @@ pub struct ShareView {
     pin_set: bool,
     allow_upload: bool,
     allow_text: bool,
+    auto_save_uploads: bool,
     accounts: Vec<AccountView>,
     groups: Vec<GroupView>,
 }
@@ -260,6 +264,7 @@ pub struct ShareUpdate {
     public: bool,
     allow_upload: bool,
     allow_text: bool,
+    auto_save_uploads: bool,
 }
 
 #[derive(Deserialize)]
@@ -282,6 +287,7 @@ pub fn view(settings: &Settings) -> SettingsView {
             pin_set: settings.share.pin_hash.is_some(),
             allow_upload: settings.share.allow_upload,
             allow_text: settings.share.allow_text,
+            auto_save_uploads: settings.share.auto_save_uploads,
             accounts: settings.share.accounts.iter().map(account_view).collect(),
             groups: settings
                 .share
@@ -361,6 +367,7 @@ pub fn share_options(settings: &Settings) -> ShareOptions {
         pin_hash: settings.share.pin_hash.clone(),
         allow_upload: settings.share.allow_upload,
         allow_text: settings.share.allow_text,
+        auto_save_uploads: settings.share.auto_save_uploads,
         accounts: settings.share.accounts.clone(),
         upload_dir: root,
         language: settings.general.language,
@@ -505,11 +512,13 @@ pub async fn settings_update(
     settings.share.public = update.share.public;
     settings.share.allow_upload = update.share.allow_upload;
     settings.share.allow_text = update.share.allow_text;
+    settings.share.auto_save_uploads = update.share.auto_save_uploads;
     let restart = current.share.port != settings.share.port
         || current.share.protection != settings.share.protection
         || current.share.public != settings.share.public
         || current.share.allow_upload != settings.share.allow_upload
         || current.share.allow_text != settings.share.allow_text
+        || current.share.auto_save_uploads != settings.share.auto_save_uploads
         || current.share.upload_dir != settings.share.upload_dir;
     commit(&app, &state, &manager, settings, restart).await
 }
@@ -804,6 +813,14 @@ pub async fn share_delete_account(
 }
 
 #[tauri::command]
+pub fn settings_close(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("settings") {
+        window.close().map_err(|_| "无法关闭设置窗口".to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn settings_open(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("settings") {
         let _ = window.show();
@@ -812,9 +829,10 @@ pub fn settings_open(app: AppHandle) -> Result<(), String> {
     }
     WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
         .title("设置 · TinyPNG Lite")
-        .inner_size(780.0, 640.0)
-        .min_inner_size(600.0, 440.0)
-        .resizable(true)
+        .inner_size(760.0, 680.0)
+        .center()
+        .resizable(false)
+        .maximizable(false)
         .build()
         .map(|_| ())
         .map_err(|_| "无法打开设置窗口".to_string())

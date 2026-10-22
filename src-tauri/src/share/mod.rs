@@ -45,6 +45,7 @@ pub struct SharedItem {
     pub size: u64,
     pub modified: Option<u64>,
     pub text: Option<String>,
+    pub visitor: bool,
 }
 
 /// 下发给前端的描述，不含本机路径。
@@ -57,6 +58,7 @@ pub struct SharedItemView {
     pub size: u64,
     pub modified: Option<u64>,
     pub text: Option<String>,
+    pub visitor: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -108,6 +110,7 @@ pub struct ShareOptions {
     pub pin_hash: Option<String>,
     pub allow_upload: bool,
     pub allow_text: bool,
+    pub auto_save_uploads: bool,
     pub accounts: Vec<Account>,
     pub upload_dir: PathBuf,
     pub language: Language,
@@ -195,6 +198,30 @@ impl ShareManager {
             .ok_or_else(|| "分享分组不可用".to_string())
     }
 
+    pub fn snapshot_items(&self, ids: &[u32]) -> Result<Vec<SharedItem>, String> {
+        let guard = self
+            .running
+            .lock()
+            .map_err(|_| "分享状态不可用".to_string())?;
+        let Some(running) = guard.as_ref() else {
+            return Err("分享还没有开始".to_string());
+        };
+        let group = Self::active_group(running)?;
+        let items = group
+            .items
+            .read()
+            .map_err(|_| "分享列表不可用".to_string())?;
+        let selected: Vec<SharedItem> = items
+            .iter()
+            .filter(|item| ids.contains(&item.id) && item.kind != ItemKind::Text)
+            .cloned()
+            .collect();
+        if selected.is_empty() {
+            return Err("请选择要保存的文件或文件夹".to_string());
+        }
+        Ok(selected)
+    }
+
     pub fn active_upload_dir(&self) -> Result<PathBuf, String> {
         let guard = self
             .running
@@ -259,6 +286,7 @@ impl ShareManager {
                 size: 0,
                 modified,
                 text: Some(text),
+                visitor: false,
             });
         }
         let _ = group.events.send(());
@@ -341,6 +369,7 @@ impl ShareManager {
                 upload_dir: group.upload_dir.clone(),
                 language: self.language.clone(),
                 public: group.public,
+                auto_save_uploads: options.auto_save_uploads,
                 app: app.clone(),
             });
             groups.push(RuntimeGroup {
@@ -526,6 +555,7 @@ fn items_view(items: &[SharedItem]) -> Vec<SharedItemView> {
             size: item.size,
             modified: item.modified,
             text: item.text.clone(),
+            visitor: item.visitor,
         })
         .collect()
 }
@@ -595,6 +625,83 @@ fn status_from(running: &Running) -> ShareStatus {
     }
 }
 
+pub(crate) fn download_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .map(|home| home.join("Downloads"))
+        .unwrap_or_else(|| std::env::temp_dir())
+}
+
+pub(crate) fn unique_destination(dir: &std::path::Path, name: &str) -> PathBuf {
+    let candidate = dir.join(name);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let (stem, extension) = match name.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() => (stem.to_string(), format!(".{extension}")),
+        _ => (name.to_string(), String::new()),
+    };
+    for index in 1..1000 {
+        let candidate = dir.join(format!("{stem} ({index}){extension}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    dir.join(format!("{}-{}", random_token(), name))
+}
+
+fn build_items_zip(items: &[SharedItem], destination: &std::path::Path) -> Result<(), String> {
+    use std::io::Write;
+    let file = fs::File::create(destination).map_err(|error| error.to_string())?;
+    let mut writer = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+    for item in items {
+        match item.kind {
+            ItemKind::File => {
+                writer
+                    .start_file(item.name.clone(), options)
+                    .map_err(|error| error.to_string())?;
+                let mut source = fs::File::open(&item.path).map_err(|error| error.to_string())?;
+                std::io::copy(&mut source, &mut writer).map_err(|error| error.to_string())?;
+            }
+            ItemKind::Dir => {
+                let mut stack = vec![(item.path.clone(), item.name.clone())];
+                while let Some((dir, prefix)) = stack.pop() {
+                    let reader = fs::read_dir(&dir).map_err(|error| error.to_string())?;
+                    for entry in reader.flatten() {
+                        let path = entry.path();
+                        let name = entry.file_name().to_string_lossy().into_owned();
+                        let zip_name = format!("{prefix}/{name}");
+                        let Ok(file_type) = entry.file_type() else {
+                            continue;
+                        };
+                        if file_type.is_dir() {
+                            writer
+                                .add_directory(format!("{zip_name}/"), options)
+                                .map_err(|error| error.to_string())?;
+                            stack.push((path, zip_name));
+                        } else if file_type.is_file() {
+                            writer
+                                .start_file(zip_name, options)
+                                .map_err(|error| error.to_string())?;
+                            let mut source =
+                                fs::File::open(&path).map_err(|error| error.to_string())?;
+                            std::io::copy(&mut source, &mut writer)
+                                .map_err(|error| error.to_string())?;
+                        }
+                    }
+                }
+            }
+            ItemKind::Text => {}
+        }
+    }
+    writer.finish().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 fn modified_secs(meta: &fs::Metadata) -> Option<u64> {
     meta.modified()
         .ok()
@@ -646,6 +753,7 @@ fn collect_items(paths: Vec<String>) -> Result<Vec<SharedItem>, String> {
             },
             modified: modified_secs(&meta),
             text: None,
+            visitor: false,
         });
     }
     Ok(items)
@@ -819,6 +927,45 @@ pub fn share_open_upload_dir(manager: tauri::State<'_, ShareManager>) -> Result<
 }
 
 #[tauri::command]
+pub async fn share_save_items(
+    app: AppHandle,
+    manager: tauri::State<'_, ShareManager>,
+    ids: Vec<u32>,
+) -> Result<bool, String> {
+    let items = manager.snapshot_items(&ids)?;
+    let single_file = items.len() == 1 && items[0].kind == ItemKind::File;
+    let default_name = if single_file {
+        items[0].name.clone()
+    } else {
+        "共享内容.zip".to_string()
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let dialog = app.dialog().file().set_directory(download_dir());
+        let dialog = if single_file {
+            dialog.set_file_name(&default_name)
+        } else {
+            dialog
+                .set_file_name(&default_name)
+                .add_filter("ZIP", &["zip"])
+        };
+        let Some(selected) = dialog.blocking_save_file() else {
+            return Ok(false);
+        };
+        let destination = selected
+            .into_path()
+            .map_err(|_| "保存位置无效".to_string())?;
+        if single_file {
+            fs::copy(&items[0].path, &destination).map_err(|_| "保存文件失败".to_string())?;
+        } else {
+            build_items_zip(&items, &destination)?;
+        }
+        Ok(true)
+    })
+    .await
+    .map_err(|_| "保存失败，请重试".to_string())?
+}
+
+#[tauri::command]
 pub fn share_set_active_group(
     app: AppHandle,
     manager: tauri::State<'_, ShareManager>,
@@ -886,6 +1033,7 @@ mod tests {
             pin_hash: None,
             allow_upload: false,
             allow_text: false,
+            auto_save_uploads: false,
             accounts: Vec::new(),
             groups: vec![GroupOptions {
                 id: "default".to_string(),
@@ -1090,6 +1238,52 @@ mod tests {
     }
 
     #[test]
+    fn selected_items_zip_contains_files_and_folders() {
+        let root = temp_folder("zip-selection");
+        let folder = root.join("album");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("a.txt"), b"a").unwrap();
+        let single = root.join("single.txt");
+        fs::write(&single, b"single").unwrap();
+        let items = vec![
+            SharedItem {
+                id: 1,
+                kind: ItemKind::File,
+                name: "single.txt".to_string(),
+                path: single.clone(),
+                size: 6,
+                modified: None,
+                text: None,
+                visitor: false,
+            },
+            SharedItem {
+                id: 2,
+                kind: ItemKind::Dir,
+                name: "album".to_string(),
+                path: folder.clone(),
+                size: 0,
+                modified: None,
+                text: None,
+                visitor: false,
+            },
+        ];
+        let zip_path = root.join("selection.zip");
+        build_items_zip(&items, &zip_path).unwrap();
+        let file = fs::File::open(&zip_path).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        let names: HashSet<String> = (0..archive.len())
+            .filter_map(|index| {
+                archive
+                    .by_index(index)
+                    .ok()
+                    .map(|entry| entry.name().to_string())
+            })
+            .collect();
+        assert!(names.contains("single.txt"));
+        assert!(names.contains("album/a.txt"));
+    }
+
+    #[test]
     fn qr_svg_is_self_contained() {
         let svg = qr_svg("http://192.168.1.5:5421/s/abc").unwrap();
         assert!(svg.trim_start().starts_with("<svg"));
@@ -1210,6 +1404,7 @@ mod tests {
                 size: 3,
                 modified: None,
                 text: None,
+                visitor: false,
             });
         }
 
@@ -1493,7 +1688,9 @@ mod tests {
             .await
             .unwrap();
         assert!(listed.iter().any(|item| item["kind"] == "text"));
-        assert!(listed.iter().any(|item| item["name"] == "报告.txt"));
+        assert!(listed
+            .iter()
+            .any(|item| item["name"] == "报告.txt" && item["visitor"] == true));
         assert!(upload_dir.join("报告.txt").exists());
         assert!(!upload_dir.join("evil").exists());
     }
@@ -1573,6 +1770,7 @@ mod tests {
                 upload_dir: options.upload_dir.clone(),
                 language: Arc::new(RwLock::new(Language::Auto)),
                 public: true,
+                auto_save_uploads: false,
                 app: None,
             };
             let app = server::router(vec![context]);

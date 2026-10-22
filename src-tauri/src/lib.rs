@@ -24,6 +24,11 @@ pub fn run() {
                 return;
             }
             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                let share_paths: Vec<String> = paths
+                    .iter()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect();
+                let _ = window.app_handle().emit("share-paths-dropped", share_paths);
                 let paths = paths.clone();
                 let app = window.app_handle().clone();
                 tauri::async_runtime::spawn_blocking(move || {
@@ -75,6 +80,7 @@ pub fn run() {
             settings::settings_touch_face,
             settings::settings_pick_directory,
             settings::settings_open,
+            settings::settings_close,
             settings::share_set_pin,
             settings::share_add_account,
             settings::share_update_account,
@@ -85,7 +91,8 @@ pub fn run() {
             settings::share_group_access,
             settings::share_group_set_pin,
             share::share_set_active_group,
-            share::share_open_upload_dir
+            share::share_open_upload_dir,
+            share::share_save_items
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

@@ -7,7 +7,7 @@ import { createShareSession } from './core/share/session';
 import { createSettingsSession } from './core/settings/session';
 import { createLiteAdapter, createSettingsAdapter, createShareAdapter } from './platform';
 import { setLanguage, t } from './core/i18n';
-import { connectDesktopEvents } from './platform/native';
+import { connectDesktopEvents, connectShareDrops } from './platform/native';
 import { fromBrowserFiles } from './platform/web';
 
 //#region 页面会话与交互
@@ -16,6 +16,7 @@ const desktop = adapter.desktop;
 const session = createLiteSession(adapter);
 const { state, summary } = session;
 const dragging = ref(false);
+const shareDragging = ref(false);
 const filePickingDisabled = computed(() => state.importing || state.clearing);
 const startDisabled = computed(() => !desktop || !summary.value.draft || state.clearing);
 const saveDisabled = computed(() => !desktop || !summary.value.completed || summary.value.saving || state.clearing);
@@ -49,11 +50,57 @@ const shareRunning = share.running;
 const shareBusy = share.busy;
 const shareTotalSize = share.totalSize;
 const sharePort = share.port;
+const selectedShareIds = ref<number[]>([]);
+const downloadBusy = ref(false);
+const downloadableItems = computed(() => shareState.items.filter(item => item.kind !== 'text'));
+const selectedShareCount = computed(() => selectedShareIds.value.length);
+
+function isShareSelected(id: number) {
+  return selectedShareIds.value.includes(id);
+}
+
+function toggleShareSelect(id: number) {
+  selectedShareIds.value = isShareSelected(id)
+    ? selectedShareIds.value.filter(value => value !== id)
+    : [...selectedShareIds.value, id];
+}
+
+async function downloadShare(ids: number[]) {
+  if (!ids.length || downloadBusy.value) return;
+  downloadBusy.value = true;
+  const saved = await share.saveItems(ids);
+  downloadBusy.value = false;
+  if (saved) selectedShareIds.value = selectedShareIds.value.filter(id => !ids.includes(id));
+}
+
+function downloadSelected() {
+  void downloadShare(selectedShareIds.value);
+}
+
+function downloadAll() {
+  void downloadShare(downloadableItems.value.map(item => item.id));
+}
+
+watch(
+  () => [shareState.activeGroup, shareState.items.map(item => item.id).join(',')],
+  () => {
+    selectedShareIds.value = selectedShareIds.value.filter(id =>
+      shareState.items.some(item => item.id === id)
+    );
+  }
+);
+
 const textOpen = ref(false);
 const textDraft = ref('');
 const textSending = ref(false);
 const editingPort = ref(false);
 const portDraft = ref(0);
+
+function toggleShare() {
+  if (shareBusy.value) return;
+  if (shareRunning.value) void share.stop();
+  else void share.pickAndShare();
+}
 
 async function submitText() {
   if (!textDraft.value.trim() || textSending.value) return;
@@ -111,6 +158,7 @@ async function onDrop(event: DragEvent) {
 let detached = () => {};
 let detachedShare = () => {};
 let detachedSettings = () => {};
+let detachedShareDrop = () => {};
 let unmounted = false;
 onMounted(async () => {
   const loaded = await settings.load();
@@ -129,18 +177,29 @@ onMounted(async () => {
   void share.connect().then(stop => { if (unmounted) stop(); else detachedShare = stop; });
   if (!desktop) return;
   try {
+    const stopDrops = await connectShareDrops(paths => {
+      shareDragging.value = false;
+      if (face.value === 'share') void share.dropPaths(paths);
+    });
+    if (unmounted) stopDrops(); else detachedShareDrop = stopDrops;
+  } catch { /* 拖拽事件不可用时忽略。 */ }
+  try {
     const stop = await connectDesktopEvents({
       imported: files => {
         dragging.value = false;
+        shareDragging.value = false;
         if (face.value === 'compress') void session.importSources(files, { reportEmpty: true });
       },
       progress: session.updateProgress,
-      drag: active => { dragging.value = active && face.value === 'compress'; }
+      drag: active => {
+        dragging.value = active && face.value === 'compress';
+        shareDragging.value = active && face.value === 'share';
+      }
     });
     if (unmounted) stop(); else detached = stop;
   } catch { session.notify(t('拖放暂时不可用，请使用「添加图片」选择文件。'), 'error'); }
 });
-onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedSettings(); share.dispose(); void session.dispose(); });
+onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedSettings(); detachedShareDrop(); share.dispose(); void session.dispose(); });
 //#endregion
 </script>
 
@@ -305,9 +364,10 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
           </div>
         </section>
 
-        <section id="face-share" class="face face--back" role="tabpanel" aria-labelledby="face-tab-share"
+        <section id="face-share" class="face face--back" :class="{ 'is-dragging': shareDragging }" role="tabpanel" aria-labelledby="face-tab-share"
           :inert="face !== 'share' || undefined" :aria-hidden="face !== 'share'">
           <div class="face-body">
+            <div v-if="shareDragging" class="share-drop-overlay">{{ t('松手即可添加') }}</div>
             <p v-if="!desktop" class="preview-banner" role="note">{{ t('当前为浏览器预览。局域网分享需要桌面版。') }}</p>
 
             <div class="share-workspace">
@@ -319,11 +379,18 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
                     ? t('已分享 {n} 项，手机扫码即可下载', { n: shareState.items.length })
                     : t('手机与电脑连同一个 Wi-Fi，选择文件或文件夹后扫码下载') }}</p>
                 </div>
-                <span v-if="shareRunning && sharePort" class="share-port">
-                  <template v-if="!editingPort">{{ t('端口') }} <button class="port-button" :title="t('端口修改后会重启分享')" @click="startEditPort">{{ sharePort }}</button></template>
-                  <input v-else v-model.number="portDraft" class="port-input" type="number" min="0" max="65535"
-                    :aria-label="t('端口')" @blur="savePort" @keydown.enter.prevent="savePort" @keydown.esc="editingPort = false" />
-                </span>
+                <div class="share-status-actions">
+                  <span v-if="shareRunning && sharePort" class="share-port">
+                    <template v-if="!editingPort">{{ t('端口') }} <button class="port-button" :title="t('端口修改后会重启分享')" @click="startEditPort">{{ sharePort }}</button></template>
+                    <input v-else v-model.number="portDraft" class="port-input" type="number" min="0" max="65535"
+                      :aria-label="t('端口')" @blur="savePort" @keydown.enter.prevent="savePort" @keydown.esc="editingPort = false" />
+                  </span>
+                  <button class="share-toggle" :class="{ 'is-on': shareRunning }" role="switch" :aria-checked="shareRunning"
+                    :disabled="!desktop || shareBusy" @click="toggleShare">
+                    <span class="share-toggle-track" aria-hidden="true"><span /></span>
+                    <span>{{ shareRunning ? t('分享中') : t('已停止') }}</span>
+                  </button>
+                </div>
               </div>
 
               <p v-if="shareState.error" class="notice notice--error" role="alert">{{ shareState.error }}</p>
@@ -346,24 +413,35 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
                       <button class="button" @click="share.copy()"><LiteIcon name="link" />{{ shareState.copied ? t('已复制') : t('复制链接') }}</button>
                       <span v-if="shareState.qr" class="share-qr-pop" aria-hidden="true"><span v-html="shareState.qr"></span></span>
                     </span>
-                    <button class="button button--quiet" :disabled="shareState.addresses.length < 2" @click="share.cycleAddress()">{{ t('切换网卡') }}</button>
-                    <button class="button button--quiet" :disabled="!shareState.ipv6Addresses.length" @click="share.toggleIpv6()">IPv6</button>
+                    <button class="button button--quiet" :disabled="shareState.addresses.length < 2"
+                      :title="shareState.addresses.length < 2 ? t('只有一个可用网卡') : t('切换网卡')" @click="share.cycleAddress()">{{ t('切换网卡') }}</button>
+                    <button class="button button--quiet" :disabled="!shareState.ipv6Addresses.length"
+                      :title="!shareState.ipv6Addresses.length ? t('当前网络没有可用的 IPv6 地址') : 'IPv6'" @click="share.toggleIpv6()">IPv6</button>
                   </div>
                 </div>
 
                 <div class="share-body">
-                  <div class="share-qr" :aria-label="t('分享二维码')">
-                    <div v-if="shareState.qr" v-html="shareState.qr"></div>
-                    <span v-else class="share-qr-hint">{{ shareState.qrError ? t('二维码生成失败，请用链接访问') : t('正在生成二维码…') }}</span>
-                  </div>
                   <div class="share-files">
+                    <div class="share-list-head">
+                      <span>{{ t('已分享内容') }}</span>
+                      <div class="share-list-actions">
+                        <button v-if="selectedShareCount" class="button button--quiet" :disabled="downloadBusy" @click="downloadSelected">
+                          {{ t('下载所选') }} ({{ selectedShareCount }})
+                        </button>
+                        <button v-if="downloadableItems.length" class="button button--quiet" :disabled="downloadBusy" @click="downloadAll">{{ t('全部下载') }}</button>
+                      </div>
+                    </div>
                     <ul class="share-list" :aria-label="t('已分享内容')">
-                      <li v-for="item in shareState.items" :key="item.id" class="share-row">
+                      <li v-for="item in shareState.items" :key="item.id" class="share-row" :class="{ 'share-row--visitor': item.visitor }">
+                        <input v-if="item.kind !== 'text'" type="checkbox" class="share-select" :checked="isShareSelected(item.id)"
+                          :aria-label="`${t('下载')} ${item.name}`" @change="toggleShareSelect(item.id)" />
                         <span class="share-name" :title="item.kind === 'text' ? item.text || item.name : item.name">
                           <template v-if="item.kind === 'text'">“{{ item.text || item.name }}”</template>
                           <template v-else>{{ item.name }}</template>
+                          <em v-if="item.visitor" class="share-badge">{{ t('访客上传') }}</em>
                         </span>
                         <span class="share-size">{{ item.kind === 'dir' ? t('文件夹') : item.kind === 'text' ? t('文字') : formatBytes(item.size) }}</span>
+                        <button v-if="item.kind !== 'text'" class="icon-button" :title="t('下载')" :aria-label="`${t('下载')} ${item.name}`" :disabled="downloadBusy" @click="downloadShare([item.id])"><LiteIcon name="download" /></button>
                         <button class="icon-button" :aria-label="`${t('移除')} ${item.name}`" :disabled="!desktop" @click="share.remove(item.id)"><LiteIcon name="close" /></button>
                       </li>
                     </ul>

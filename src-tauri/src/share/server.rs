@@ -55,6 +55,7 @@ pub struct Context {
     pub upload_dir: PathBuf,
     pub language: Arc<RwLock<Language>>,
     pub public: bool,
+    pub auto_save_uploads: bool,
     pub app: Option<tauri::AppHandle>,
 }
 
@@ -344,6 +345,7 @@ struct ItemView {
     size: u64,
     modified: Option<u64>,
     text: Option<String>,
+    visitor: bool,
 }
 
 async fn list_items(State(context): State<Context>, headers: HeaderMap) -> Response {
@@ -364,6 +366,7 @@ async fn list_items(State(context): State<Context>, headers: HeaderMap) -> Respo
                 size: item.size,
                 modified: item.modified,
                 text: item.text.clone(),
+                visitor: item.visitor,
             })
             .collect::<Vec<_>>(),
     )
@@ -714,6 +717,13 @@ async fn upload(
             .file_name()
             .map(|value| value.to_string_lossy().into_owned())
             .unwrap_or_else(|| name.clone());
+        if context.auto_save_uploads {
+            let directory = super::download_dir();
+            if fs::create_dir_all(&directory).is_ok() {
+                let destination = super::unique_destination(&directory, &display);
+                let _ = fs::copy(&path, destination);
+            }
+        }
         push_item(
             &context,
             SharedItem {
@@ -724,6 +734,7 @@ async fn upload(
                 size,
                 modified,
                 text: None,
+                visitor: true,
             },
         );
         uploaded.push(UploadedFile {
@@ -777,6 +788,7 @@ async fn add_text(
             size: 0,
             modified,
             text: Some(text),
+            visitor: true,
         },
     );
     Json(json!({ "ok": true, "id": id })).into_response()
@@ -1099,6 +1111,7 @@ mod tests {
             size: 0,
             modified: None,
             text: None,
+            visitor: false,
         };
 
         assert!(resolve_path(&item, "").is_ok());

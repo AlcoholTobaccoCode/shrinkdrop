@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 /// 虚拟网卡前缀：这些地址对局域网访客没有意义，直接跳过。
 const VIRTUAL_PREFIXES: &[&str] = &[
-    "utun", "awdl", "llw", "bridge", "docker", "vmnet", "vboxnet", "lo", "stf", "gif", "anpi",
+    "utun", "awdl", "llw", "docker", "vmnet", "vboxnet", "lo", "stf", "gif", "anpi",
 ];
 
 pub fn candidate_addresses() -> Vec<String> {
