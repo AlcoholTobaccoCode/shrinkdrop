@@ -27,7 +27,7 @@ use tower_http::services::ServeFile;
 
 use super::auth::{self, AuthConfig, Claims, Permissions, Protection};
 use super::{ItemKind, SharedItem};
-use crate::settings::VisitorLang;
+use crate::settings::Language;
 
 const PAGE: &str = include_str!("page.html");
 const PAGE_CSS: &str = include_str!("page.css");
@@ -54,7 +54,7 @@ pub struct Context {
     pub auth: Arc<AuthConfig>,
     pub next_id: Arc<AtomicU32>,
     pub upload_dir: PathBuf,
-    pub visitor_lang: VisitorLang,
+    pub language: Arc<RwLock<Language>>,
 }
 
 pub fn router(context: Context) -> Router {
@@ -192,7 +192,11 @@ fn state_payload(context: &Context, headers: &HeaderMap) -> serde_json::Value {
         "authenticated": context.auth.authenticated(claims.as_ref()),
         "account": account,
         "permissions": permissions,
-        "lang": context.visitor_lang,
+        "lang": context
+            .language
+            .read()
+            .map(|language| language.effective())
+            .unwrap_or("zh"),
         "upload": permissions.as_ref().map(|value| value.upload).unwrap_or(false),
         "text": permissions.as_ref().map(|value| value.text).unwrap_or(false),
     })
@@ -809,28 +813,36 @@ async fn unique_path(directory: &FsPath, name: &str) -> Result<PathBuf, ()> {
 async fn events(State(context): State<Context>, headers: HeaderMap) -> Response {
     let allowed = permissions(&context, &headers).is_some();
     let receiver = context.events.subscribe();
-    let stream =
-        futures_util::stream::unfold((receiver, allowed), |(mut receiver, allowed)| async move {
+    let language = context.language.clone();
+    let stream = futures_util::stream::unfold(
+        (receiver, allowed, language),
+        |(mut receiver, allowed, language)| async move {
             if !allowed {
                 return None;
             }
+            let code = language
+                .read()
+                .map(|value| value.effective())
+                .unwrap_or("zh");
             let event = match tokio::time::timeout(Duration::from_secs(15), receiver.recv()).await {
-                Ok(Ok(())) => Event::default().event("update").data("1"),
+                Ok(Ok(())) => Event::default().event("update").data(code),
                 Ok(Err(broadcast::error::RecvError::Lagged(_))) => {
-                    Event::default().event("update").data("1")
+                    Event::default().event("update").data(code)
                 }
                 Ok(Err(broadcast::error::RecvError::Closed)) => return None,
                 Err(_) => Event::default().comment("ping"),
             };
             Some((
                 Ok::<_, std::convert::Infallible>(event),
-                (receiver, allowed),
+                (receiver, allowed, language),
             ))
-        });
+        },
+    );
     Sse::new(stream)
         .keep_alive(KeepAlive::default())
         .into_response()
 }
+
 //#endregion
 
 //#region 路径与安全工具

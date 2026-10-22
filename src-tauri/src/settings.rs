@@ -44,11 +44,26 @@ impl Default for Face {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum VisitorLang {
+pub enum Language {
     #[default]
     Auto,
     Zh,
     En,
+}
+
+impl Language {
+    /// 访客页最终展示的语言；Auto 跟随系统，取不到时回退中文。
+    pub fn effective(self) -> &'static str {
+        match self {
+            Language::Zh => "zh",
+            Language::En => "en",
+            Language::Auto => match sys_locale::get_locale() {
+                Some(locale) if locale.to_lowercase().starts_with("zh") => "zh",
+                Some(_) => "en",
+                None => "zh",
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -56,7 +71,8 @@ pub enum VisitorLang {
 pub struct General {
     pub start_face: StartFace,
     pub last_face: Face,
-    pub visitor_lang: VisitorLang,
+    #[serde(default, alias = "visitorLang")]
+    pub language: Language,
 }
 
 impl Default for General {
@@ -64,7 +80,7 @@ impl Default for General {
         Self {
             start_face: StartFace::Last,
             last_face: Face::Compress,
-            visitor_lang: VisitorLang::Auto,
+            language: Language::Auto,
         }
     }
 }
@@ -256,7 +272,7 @@ pub fn share_options(settings: &Settings) -> ShareOptions {
         allow_text: settings.share.allow_text,
         accounts: settings.share.accounts.clone(),
         upload_dir: upload_dir(&settings.share),
-        visitor_lang: settings.general.visitor_lang,
+        language: settings.general.language,
     }
 }
 
@@ -333,6 +349,7 @@ async fn commit(
     } else {
         false
     };
+    manager.set_language(settings.general.language);
     if restarted {
         let _ = app.emit(
             "settings-toast",
@@ -371,8 +388,7 @@ pub async fn settings_update(
         || current.share.protection != settings.share.protection
         || current.share.allow_upload != settings.share.allow_upload
         || current.share.allow_text != settings.share.allow_text
-        || current.share.upload_dir != settings.share.upload_dir
-        || current.general.visitor_lang != settings.general.visitor_lang;
+        || current.share.upload_dir != settings.share.upload_dir;
     commit(&app, &state, &manager, settings, restart).await
 }
 
@@ -518,4 +534,23 @@ pub fn settings_open(app: AppHandle) -> Result<(), String> {
         .build()
         .map(|_| ())
         .map_err(|_| "无法打开设置窗口".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn language_setting_migrates_visitor_lang_key() {
+        let general: General = serde_json::from_str(r#"{"visitorLang":"en"}"#).unwrap();
+        assert_eq!(general.language, Language::En);
+        let general: General = serde_json::from_str(r#"{"language":"zh"}"#).unwrap();
+        assert_eq!(general.language, Language::Zh);
+    }
+
+    #[test]
+    fn explicit_language_codes_are_stable() {
+        assert_eq!(Language::Zh.effective(), "zh");
+        assert_eq!(Language::En.effective(), "en");
+    }
 }

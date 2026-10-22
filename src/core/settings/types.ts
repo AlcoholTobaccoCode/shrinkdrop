@@ -1,6 +1,6 @@
 export type StartFace = 'last' | 'compress' | 'share';
 export type Face = 'compress' | 'share';
-export type VisitorLang = 'auto' | 'zh' | 'en';
+export type Language = 'auto' | 'zh' | 'en';
 export type Protection = 'link' | 'pin' | 'accounts';
 
 export interface Permissions {
@@ -18,7 +18,7 @@ export interface AccountView {
 }
 
 export interface SettingsView {
-  general: { startFace: StartFace; lastFace: Face; visitorLang: VisitorLang };
+  general: { startFace: StartFace; lastFace: Face; language: Language };
   compression: { autoCompress: boolean; concurrency: number; saveDir: string | null };
   share: {
     port: number;
@@ -69,7 +69,7 @@ export interface SettingsAdapter {
 
 export function defaultSettings(): SettingsView {
   return {
-    general: { startFace: 'last', lastFace: 'compress', visitorLang: 'auto' },
+    general: { startFace: 'last', lastFace: 'compress', language: 'auto' },
     compression: { autoCompress: false, concurrency: 5, saveDir: null },
     share: {
       port: 5421,

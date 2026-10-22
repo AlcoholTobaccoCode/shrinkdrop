@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { createSettingsSession } from './core/settings/session';
 import { createSettingsAdapter } from './platform';
-import type { Permissions, Protection, StartFace, VisitorLang } from './core/settings/types';
+import type { Language, Permissions, Protection, StartFace } from './core/settings/types';
 
 const session = createSettingsSession(createSettingsAdapter());
 onMounted(() => { void session.load(); });
@@ -24,9 +24,9 @@ function setStartFace(event: Event) {
   update(draft => { draft.general.startFace = value; });
 }
 
-function setVisitorLang(event: Event) {
-  const value = (event.target as HTMLSelectElement).value as VisitorLang;
-  update(draft => { draft.general.visitorLang = value; });
+function setLanguage(event: Event) {
+  const value = (event.target as HTMLSelectElement).value as Language;
+  update(draft => { draft.general.language = value; });
 }
 
 function setAutoCompress(event: Event) {
@@ -139,14 +139,14 @@ function closeWindow() {
                 </select>
               </label>
               <label class="settings-row">
-                <span>访客页语言</span>
-                <select :value="view.general.visitorLang" @change="setVisitorLang">
-                  <option value="auto">跟随浏览器</option>
+                <span>语言</span>
+                <select :value="view.general.language" @change="setLanguage">
+                  <option value="auto">跟随系统</option>
                   <option value="zh">中文</option>
                   <option value="en">English</option>
                 </select>
               </label>
-              <p class="settings-hint">桌面端界面语言暂不做切换；这里只影响访客页。</p>
+              <p class="settings-hint">访客页会立即切换语言；桌面端双语界面正在接入。</p>
             </section>
 
             <section v-else-if="section === 'compression'" class="settings-section">

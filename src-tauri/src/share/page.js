@@ -131,7 +131,8 @@
     loading: true,
     error: '',
     connected: false,
-    auth: null
+    auth: null,
+    serverLang: ''
   };
 
   let loadSerial = 0;
@@ -532,7 +533,12 @@
   function connectEvents() {
     if (source) source.close();
     source = new EventSource(BASE + '/api/events');
-    source.addEventListener('update', () => {
+    source.addEventListener('update', event => {
+      const lang = event.data;
+      if ((lang === 'zh' || lang === 'en') && state.serverLang !== lang) {
+        state.serverLang = lang;
+        applyServerLang(lang);
+      }
       clearTimeout(refreshTimer);
       refreshTimer = setTimeout(() => {
         if (!state.loading) load();
@@ -689,11 +695,13 @@
   }
 
   function applyServerLang(lang) {
-    if (localStorage.getItem('share:lang')) return;
-    if (lang === 'zh' || lang === 'en') {
-      state.lang = lang;
-      applyStatic();
-    }
+    if (lang !== 'zh' && lang !== 'en') return;
+    state.serverLang = lang;
+    if (state.lang === lang) return;
+    state.lang = lang;
+    applyStatic();
+    renderConn();
+    renderList();
   }
 
   async function boot() {
@@ -706,6 +714,7 @@
         return;
       }
       hideAuth();
+      state.serverLang = info.lang === 'zh' || info.lang === 'en' ? info.lang : '';
       applyServerLang(info.lang);
       renderSession(info);
       if (info.permissions && info.permissions.download) {

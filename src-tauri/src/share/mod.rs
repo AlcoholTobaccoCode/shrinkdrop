@@ -19,7 +19,7 @@ use tauri_plugin_dialog::DialogExt;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, watch};
 
-use crate::settings::{SettingsState, VisitorLang};
+use crate::settings::{Language, SettingsState};
 use auth::{Account, AuthConfig, Protection};
 
 const DEFAULT_PORT: u16 = 5421;
@@ -80,7 +80,7 @@ pub struct ShareOptions {
     pub allow_text: bool,
     pub accounts: Vec<Account>,
     pub upload_dir: PathBuf,
-    pub visitor_lang: VisitorLang,
+    pub language: Language,
 }
 
 struct Running {
@@ -98,6 +98,7 @@ struct Running {
 #[derive(Default)]
 pub struct ShareManager {
     running: Mutex<Option<Running>>,
+    language: Arc<RwLock<Language>>,
 }
 
 fn shared_temp_dir(token: &str) -> PathBuf {
@@ -121,6 +122,17 @@ impl ShareManager {
         };
         let snapshot = items.read().map(|guard| guard.clone()).unwrap_or_default();
         self.spawn_server(snapshot, options).await
+    }
+
+    pub fn set_language(&self, language: Language) {
+        if let Ok(mut guard) = self.language.write() {
+            *guard = language;
+        }
+        if let Ok(guard) = self.running.lock() {
+            if let Some(running) = guard.as_ref() {
+                let _ = running.events.send(());
+            }
+        }
     }
 
     async fn spawn_server(
@@ -158,8 +170,11 @@ impl ShareManager {
             auth,
             next_id: next_id.clone(),
             upload_dir: options.upload_dir.clone(),
-            visitor_lang: options.visitor_lang,
+            language: self.language.clone(),
         };
+        if let Ok(mut language) = self.language.write() {
+            *language = options.language;
+        }
         let app = server::router(context);
 
         let (shutdown, mut rx) = watch::channel(false);
@@ -568,7 +583,7 @@ mod tests {
             allow_text: false,
             accounts: Vec::new(),
             upload_dir: std::env::temp_dir().join("tinypng-share-test-uploads"),
-            visitor_lang: VisitorLang::Auto,
+            language: Language::Auto,
         }
     }
 
@@ -1009,7 +1024,7 @@ mod tests {
 
         use super::super::auth::AuthConfig;
         use super::super::server;
-        use super::super::{ShareOptions, SharedItem, VisitorLang};
+        use super::super::{Language, ShareOptions, SharedItem};
         use super::options;
 
         pub async fn spawn(
@@ -1044,7 +1059,7 @@ mod tests {
                 auth,
                 next_id,
                 upload_dir: options.upload_dir.clone(),
-                visitor_lang: VisitorLang::Auto,
+                language: Arc::new(RwLock::new(Language::Auto)),
             };
             let app = server::router(context);
             tokio::spawn(async move {
