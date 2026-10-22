@@ -61,12 +61,6 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked
 pnpm tauri build
 ```
 
-## 分支
-
-- `main`：轻量压缩客户端与局域网分享面，当前默认分支。前端只保留Vue和Tauri API；Rust负责压缩网络、文件注册、取消、原生保存与分享服务。
-- `codex/workbench-archive`：完整工作台，保存于提交`3b9d413`，含共享合同、Server 与历史验收。日常开发不基于此分支。
-
-更早的 10-10 骨架已归档为标签 `archive/pre-batch-split`，不再作为分支维护。
-
+## 文档
 
 设计与进度见 [轻量版设计](docs/lite/design.md)、[实现计划](docs/lite/plan.md)、[2026-10-20 交互补充](docs/lite/2026-10-20-enhancements.md)、[局域网分享设计](docs/share/design.md)。实际验证见 [本次验收](docs/lite/2026-10-20-verification.md)、[初版验收](docs/lite/verification.md)。

@@ -31,10 +31,10 @@
 | 文件结果 | PNG格式、720×480尺寸保留；覆盖成功的图片约51.7kB；无遗留覆盖暂存文件 |
 | 退出后启动交付目录中的App | 空列表、自动压缩关闭；新隐私提示、批量覆盖按钮可见 |
 
-本机截图与摘要证据（仅本地保存，不随仓库发布）：`mac-start.png`、`mac-completed.png`、`mac-single-confirm.png`、`mac-batch-confirm.png`、`mac-batch-result.png`、`mac-narrow.png`，以及取消前后摘要JSON。确认面板绑定主窗口，避免独立弹窗落在后台。
+本机截图与摘要证据（`mac-start.png`、`mac-completed.png`、`mac-single-confirm.png`、`mac-batch-confirm.png`、`mac-batch-result.png`、`mac-narrow.png` 及取消前后摘要JSON）只保存在本地，不随仓库发布。确认面板绑定主窗口，避免独立弹窗落在后台。
 
 ## 交付与边界
 
-Mac 本地构建产物：`shrinkdrop.app`，文件总大小12,731,919字节。主程序SHA256为`7701f78f0446d07d62866efbdc31ef51d166a0e04581627c7b1b5ebef3ebeacd`，与构建目录逐字节一致。本次使用`--no-sign`构建，未进行Apple Developer ID签名、公证或对外发布。构建信息另存于同目录`build-evidence.json`。
+Mac 本地构建产物 `shrinkdrop.app`，文件总大小12,731,919字节。主程序SHA256为`7701f78f0446d07d62866efbdc31ef51d166a0e04581627c7b1b5ebef3ebeacd`，与构建目录逐字节一致。本次使用`--no-sign`构建，未进行Apple Developer ID签名、公证或对外发布。构建信息另存于同目录`build-evidence.json`。
 
 本次实际GUI验收平台为macOS。Windows/Linux没有运行实测；相关跨平台保护由Rust回归与源码检查覆盖。未增加开发Server或长期监听端口。本次未推送、未合并。
