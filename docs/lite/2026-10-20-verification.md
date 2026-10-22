@@ -35,6 +35,6 @@
 
 ## 交付与边界
 
-Mac 本地构建产物：`TinyPNG Lite.app`，文件总大小12,731,919字节。主程序SHA256为`7701f78f0446d07d62866efbdc31ef51d166a0e04581627c7b1b5ebef3ebeacd`，与构建目录逐字节一致。本次使用`--no-sign`构建，未进行Apple Developer ID签名、公证或对外发布。构建信息另存于同目录`build-evidence.json`。
+Mac 本地构建产物：`shrinkdrop.app`，文件总大小12,731,919字节。主程序SHA256为`7701f78f0446d07d62866efbdc31ef51d166a0e04581627c7b1b5ebef3ebeacd`，与构建目录逐字节一致。本次使用`--no-sign`构建，未进行Apple Developer ID签名、公证或对外发布。构建信息另存于同目录`build-evidence.json`。
 
 本次实际GUI验收平台为macOS。Windows/Linux没有运行实测；相关跨平台保护由Rust回归与源码检查覆盖。未增加开发Server或长期监听端口。本次未推送、未合并。

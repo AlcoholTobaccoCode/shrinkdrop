@@ -1,4 +1,4 @@
-# TinyPNG Lite Implementation Plan
+# shrinkdrop Implementation Plan
 
 > For agentic workers: Use subagent-driven-development or executing-plans; steps use checkbox tracking.
 

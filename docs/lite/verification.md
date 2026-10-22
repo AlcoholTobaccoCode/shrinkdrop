@@ -1,4 +1,4 @@
-# TinyPNG Lite 验收记录
+# shrinkdrop 验收记录
 
 日期：2026-10-13。
 
@@ -20,7 +20,7 @@
 | sample-one.png | 8,851 | 1,539 | png 480×360 |
 | sample-two.png | 4,647 | 129 | png 360×480 |
 
-最终release结果保存在本机`/private/tmp/tinypng-lite-final-output/`；debug结果在`/private/tmp/tinypng-lite-ui-output/`，单张另存为`single-ui.min.png`（1,539字节）。最终四张原图压缩前后SHA-256完全一致，账号文件哈希与归档前一致且继续被Git忽略。
+最终release结果保存在本机`/private/tmp/shrinkdrop-final-output/`；debug结果在`/private/tmp/shrinkdrop-ui-output/`，单张另存为`single-ui.min.png`（1,539字节）。最终四张原图压缩前后SHA-256完全一致，账号文件哈希与归档前一致且继续被Git忽略。
 
 截图：[导入后待处理](screenshots/mac-draft.png)、[四图压缩完成](screenshots/mac-completed.png)、[约600×420窄窗口](screenshots/mac-narrow.png)。截图均来自最终release App。
 
@@ -33,7 +33,7 @@
 - 最终App缩至约600×420，列表可滚动且导入/开始/保存按钮保持可用；已恢复常用窗口大小。
 - 关闭最终App前有四份已登记临时结果，关闭后文件全部消失；重新打开回到空状态。开发端口5170无监听，没有启动Server。
 - 两次规格审查及质量增量复审均PASS。最终fresh前端76项、Rust31项通过（1项live默认ignored），类型/生产构建/密钥扫描/diff检查通过。
-- 本机Mac Apple Silicon release App：`TinyPNG Lite.app`，12,572,415字节（约11.99MiB）。这是本地构建，未执行正式签名发布，也未推送分支。
+- 本机Mac Apple Silicon release App：`shrinkdrop.app`，12,572,415字节（约11.99MiB）。这是本地构建，未执行正式签名发布，也未推送分支。
 
 
 ## 验证边界
