@@ -105,7 +105,7 @@ function copyWithQr() {
 function toggleShare() {
   if (shareBusy.value) return;
   if (shareRunning.value) void share.stop();
-  else void share.pickAndShare();
+  else void share.startEmpty();
 }
 
 async function submitText() {
@@ -461,7 +461,7 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
 
               <div v-else class="drop-zone drop-zone--empty share-empty">
                 <span class="drop-icon"><LiteIcon name="upload" /></span>
-                <strong>{{ shareBusy ? t('正在准备分享链接') : desktop ? t('选择内容，立即开始分享') : t('桌面版才能开启分享') }}</strong>
+                <strong>{{ shareBusy ? t('正在准备分享链接') : desktop ? t('打开分享开关开始，或先选择内容') : t('桌面版才能开启分享') }}</strong>
                 <span>{{ t('文件或文件夹 · 单次最多 200 项') }}</span>
                 <div class="share-empty-actions">
                   <button class="button button--primary" :disabled="!desktop || shareBusy" @click="share.pickAndShare()">
@@ -470,7 +470,7 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
                     <LiteIcon name="folder" />{{ t('选择文件夹') }}
                   </button>
                 </div>
-                <span class="empty-hint">{{ t('链接只在分享期间有效，停止后立即失效') }}</span>
+                <span class="empty-hint">{{ t('不选文件也可以直接开始分享，链接只在分享期间有效') }}</span>
               </div>
             </div>
 

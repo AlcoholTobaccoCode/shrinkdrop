@@ -248,6 +248,20 @@ export function createShareSession(adapter: ShareAdapter) {
     }
   }
 
+  async function startEmpty(): Promise<boolean> {
+    if (!adapter.desktop || running.value || busy.value) return false;
+    state.error = '';
+    state.phase = 'starting';
+    try {
+      apply(await adapter.start([]));
+      return true;
+    } catch (error) {
+      state.error = errorText(error, '开始分享失败');
+      state.phase = 'idle';
+      return false;
+    }
+  }
+
   async function dropPaths(paths: string[]) {
     if (!adapter.desktop || !paths.length || busy.value) return;
     state.error = '';
@@ -304,5 +318,5 @@ export function createShareSession(adapter: ShareAdapter) {
     if (copiedTimer) clearTimeout(copiedTimer);
   }
 
-  return { state, running, busy, totalSize, port, connect, refresh, pickAndShare, pickAndShareFolder, addFiles, addFolder, addText, remove, stop, copy, setGroup, dropPaths, saveItems, openUploadFolder, selectAddress, cycleAddress, toggleIpv6, dispose };
+  return { state, running, busy, totalSize, port, connect, refresh, pickAndShare, pickAndShareFolder, addFiles, addFolder, addText, remove, stop, copy, setGroup, startEmpty, dropPaths, saveItems, openUploadFolder, selectAddress, cycleAddress, toggleIpv6, dispose };
 }

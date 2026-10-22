@@ -187,6 +187,9 @@ const en: Record<string, string> = {
   '默认分组': 'Default',
   '接收目录': 'Upload folder',
   '分享中': 'Sharing',
+  '打开分享开关开始，或先选择内容': 'Turn on sharing to start, or choose items first',
+  '不选文件也可以直接开始分享，链接只在分享期间有效':
+    'You can start sharing without picking a file; the link is only valid while sharing.',
   '已停止': 'Stopped',
   '只有一个可用网卡': 'Only one LAN interface is available',
   '当前网络没有可用的 IPv6 地址': 'No usable IPv6 address on this network',

@@ -156,7 +156,11 @@ impl ShareManager {
         options: ShareOptions,
         app: Option<AppHandle>,
     ) -> Result<ShareStatus, String> {
-        let items = collect_items(paths)?;
+        let items = if paths.is_empty() {
+            Vec::new()
+        } else {
+            collect_items(paths)?
+        };
         let active = options
             .groups
             .first()
@@ -1074,6 +1078,18 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].kind, ItemKind::File);
         assert_eq!(items[1].kind, ItemKind::Dir);
+    }
+
+    #[tokio::test]
+    async fn manager_can_start_empty_and_add_later() {
+        let file = temp_file("empty-start.txt", b"x");
+        let manager = ShareManager::default();
+        let status = manager.start(Vec::new(), options(), None).await.unwrap();
+        assert!(status.running);
+        assert!(status.items.is_empty());
+        let status = manager.add_items(vec![file.display().to_string()]).unwrap();
+        assert_eq!(status.items.len(), 1);
+        manager.stop().await;
     }
 
     #[tokio::test]
