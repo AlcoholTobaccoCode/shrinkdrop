@@ -271,7 +271,7 @@ input[type="checkbox"]:focus-visible, input[type="radio"]:focus-visible, select:
 .share-qr-pop { position: absolute; right: 0; top: calc(100% + 10px); z-index: 40; padding: 10px; border-radius: 10px; background: #fff; box-shadow: 0 14px 36px #0004; opacity: 0; visibility: hidden; transform: translateY(-5px); transition: opacity .16s ease, transform .16s ease, visibility .16s; pointer-events: none; }
 .share-qr-pop::before { content: ""; position: absolute; right: 22px; top: -5px; width: 10px; height: 10px; background: #fff; transform: rotate(45deg); }
 .share-qr-pop svg { display: block; width: 168px; height: 168px; }
-.share-copy-wrap:hover .share-qr-pop, .share-copy-wrap:focus-within .share-qr-pop { opacity: 1; visibility: visible; transform: none; }
+.share-copy-wrap:hover .share-qr-pop, .share-copy-wrap:focus-within .share-qr-pop, .share-qr-pop.is-open { opacity: 1; visibility: visible; transform: none; }
 .text-sheet { width: min(460px, 100%); display: flex; flex-direction: column; gap: 12px; padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: 0 24px 60px #0005; }
 .text-sheet h2 { margin: 0; font-size: 16px; }
 .text-sheet textarea { min-height: 140px; resize: vertical; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; font-size: 13px; }

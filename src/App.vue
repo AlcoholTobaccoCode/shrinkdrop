@@ -52,6 +52,7 @@ const shareTotalSize = share.totalSize;
 const sharePort = share.port;
 const selectedShareIds = ref<number[]>([]);
 const downloadBusy = ref(false);
+const qrPinned = ref(false);
 const downloadableItems = computed(() => shareState.items.filter(item => item.kind !== 'text'));
 const selectedShareCount = computed(() => selectedShareIds.value.length);
 
@@ -95,6 +96,11 @@ const textDraft = ref('');
 const textSending = ref(false);
 const editingPort = ref(false);
 const portDraft = ref(0);
+
+function copyWithQr() {
+  qrPinned.value = !qrPinned.value;
+  void share.copy();
+}
 
 function toggleShare() {
   if (shareBusy.value) return;
@@ -410,8 +416,11 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
                   </div>
                   <div class="share-link-actions">
                     <span class="share-copy-wrap">
-                      <button class="button" @click="share.copy()"><LiteIcon name="link" />{{ shareState.copied ? t('已复制') : t('复制链接') }}</button>
-                      <span v-if="shareState.qr" class="share-qr-pop" aria-hidden="true"><span v-html="shareState.qr"></span></span>
+                      <button class="button" @click="copyWithQr"><LiteIcon name="link" />{{ shareState.copied ? t('已复制') : t('复制链接') }}</button>
+                      <span class="share-qr-pop" :class="{ 'is-open': qrPinned }" aria-hidden="true">
+                        <span v-if="shareState.qr" v-html="shareState.qr"></span>
+                        <span v-else class="share-qr-hint">{{ shareState.qrError ? t('二维码生成失败，请用链接访问') : t('正在生成二维码…') }}</span>
+                      </span>
                     </span>
                     <button class="button button--quiet" :disabled="shareState.addresses.length < 2"
                       :title="shareState.addresses.length < 2 ? t('只有一个可用网卡') : t('切换网卡')" @click="share.cycleAddress()">{{ t('切换网卡') }}</button>
