@@ -55,6 +55,10 @@ const downloadBusy = ref(false);
 const shareGroupsEl = ref<HTMLElement>();
 const downloadableItems = computed(() => shareState.items.filter(item => item.kind !== 'text'));
 const selectedShareCount = computed(() => selectedShareIds.value.length);
+// 地址栏当前是否走 IPv6；按钮据此显示可切换到的另一族地址。
+const shareUsingIpv6 = computed(() =>
+  shareState.ipv6Addresses.some(address => shareState.url.includes(`//${address}:`))
+);
 
 // 列表/卡片只影响展示层；两者共用 state.items 与同一组任务操作。
 type TaskView = 'list' | 'cards';
@@ -483,7 +487,8 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
                     <button class="button button--quiet" :disabled="shareState.addresses.length < 2"
                       :title="shareState.addresses.length < 2 ? t('只有一个可用网卡') : t('切换网卡')" @click="share.cycleAddress()">{{ t('切换网卡') }}</button>
                     <button class="button button--quiet" :disabled="!shareState.ipv6Addresses.length"
-                      :title="!shareState.ipv6Addresses.length ? t('当前网络没有可用的 IPv6 地址') : 'IPv6'" @click="share.toggleIpv6()">IPv6</button>
+                      :title="!shareState.ipv6Addresses.length ? t('当前网络没有可用的 IPv6 地址') : shareUsingIpv6 ? t('切回 IPv4 地址') : t('切换到 IPv6 地址')"
+                      @click="share.toggleIpv6()">{{ shareUsingIpv6 ? t('IPv4') : t('IPv6') }}</button>
                   </div>
                 </div>
 

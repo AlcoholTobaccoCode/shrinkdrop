@@ -370,7 +370,7 @@ h1 {
   height: 16px;
 }
 
-.row-link--text { align-items: flex-start; cursor: default; }
+.row-link--text { align-items: center; cursor: pointer; width: 100%; border: 0; background: transparent; padding: 9px 13px; text-align: left; color: inherit; }
 .row-link--text .name { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; white-space: normal; word-break: break-word; line-height: 1.55; max-height: 1.55em; }
 .row-link--text .btn { align-self: center; }
 .row--dir .action {

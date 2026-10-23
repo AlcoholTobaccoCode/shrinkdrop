@@ -183,9 +183,11 @@ p, h1 { margin: 0; }
 .flip-stage { flex: 1; min-height: 0; perspective: 1600px; }
 .flip-card { position: relative; height: 100%; transform-style: preserve-3d; transition: transform .68s cubic-bezier(.22,.61,.36,1); }
 .flip-stage.is-share .flip-card { transform: rotateY(180deg); }
-.face { position: absolute; inset: 0; display: flex; flex-direction: column; backface-visibility: hidden; -webkit-backface-visibility: hidden; visibility: hidden; transition: visibility 0s linear .34s; }
+/* 3D 翻面时 backface-visibility 无法完全屏蔽子元素：让退出面先淡出，
+   进入面在翻转过半后再淡入，两面不会同时可见。 */
+.face { position: absolute; inset: 0; display: flex; flex-direction: column; backface-visibility: hidden; -webkit-backface-visibility: hidden; opacity: 0; visibility: hidden; transition: opacity .16s ease, visibility 0s linear .16s; }
 .flip-stage:not(.is-share) .face--front,
-.flip-stage.is-share .face--back { visibility: visible; transition-delay: 0s; }
+.flip-stage.is-share .face--back { opacity: 1; visibility: visible; transition: opacity .16s ease .34s, visibility 0s linear 0s; }
 .face[aria-hidden="true"] { pointer-events: none; }
 .face--back { position: absolute; transform: rotateY(180deg); }
 .face-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -201,16 +203,17 @@ p, h1 { margin: 0; }
 .share-link-copy { min-width: 0; flex: 1; }
 .share-label { font-size: 11px; color: var(--muted); }
 .share-url { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
-.share-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 172px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 12px; overflow: hidden; }
+.share-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 12px; overflow: hidden; }
 .share-qr { display: grid; place-items: center; align-content: center; padding: 8px; background: #fff; border: 1px solid var(--line); border-radius: 9px; min-height: 0; min-width: 0; overflow: hidden; }
 .share-qr > div, .share-qr svg { width: 100%; height: auto; max-width: 100%; max-height: 100%; display: block; }
 .share-qr-hint { color: #777; font-size: 11px; text-align: center; }
 .share-files { min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: 9px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 .share-list { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 0; list-style: none; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
-.share-row { display: grid; grid-template-columns: minmax(0, 1fr) 74px 30px; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+.share-row { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--line); }
 .share-row:last-child { border-bottom: 0; }
-.share-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.share-size { text-align: right; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.share-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.share-size { flex: 0 0 74px; text-align: right; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.share-row > .icon-button, .share-row > .share-select { flex: none; }
 .share-empty { min-height: 220px; }
 .share-empty-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .share-empty-hint { padding: 18px; color: var(--muted); font-size: 12px; text-align: center; }

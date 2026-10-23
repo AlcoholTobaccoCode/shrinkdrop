@@ -238,7 +238,9 @@
     play: svg('<path d="M8 5l11 7-11 7z"/>'),
     pause: svg('<path d="M8 5v14M16 5v14"/>'),
     volume: svg('<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M17 9a4 4 0 0 1 0 6"/>'),
-    volumeOff: svg('<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M17 9l4 6M21 9l-4 6"/>')
+    volumeOff: svg('<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M17 9l4 6M21 9l-4 6"/>'),
+    copy: svg('<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>'),
+    check: svg('<path d="M5 12l4 4L19 6"/>')
   };
 
   const EXT_KIND = {
@@ -394,8 +396,16 @@
   function textRowFor(entry) {
     const li = document.createElement('li');
     li.className = 'row row--expandable';
-    const card = document.createElement('div');
-    card.className = 'row-link row-link--text';
+    const key = entryKey(entry, true);
+    const expanded = preview.openKey === key;
+    li.innerHTML = '';
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'row-link row-link--text';
+    toggle.setAttribute('aria-expanded', String(expanded));
+    toggle.setAttribute('aria-label', (entry.name || t('textItem')) + ' ' + (expanded ? t('collapse') : t('preview')));
+
     const icon = document.createElement('span');
     icon.className = 'icon';
     icon.innerHTML = ICONS.text;
@@ -409,34 +419,34 @@
     meta.textContent = [t('textItem'), formatDate(entry.modified)].filter(Boolean).join(' · ');
     main.append(name, meta);
 
-    const key = entryKey(entry, true);
-    const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'btn ghost';
-    toggle.textContent = preview.openKey === key ? t('collapse') : t('preview');
-    toggle.setAttribute('aria-expanded', String(preview.openKey === key));
+    const chevron = document.createElement('span');
+    chevron.className = 'action action--chevron';
+    chevron.innerHTML = ICONS.chevron;
+
+    toggle.append(icon, main, chevron);
     toggle.addEventListener('click', () => {
-      preview.openKey = preview.openKey === key ? '' : key;
+      preview.openKey = expanded ? '' : key;
       renderList();
     });
+
     const copy = document.createElement('button');
     copy.type = 'button';
-    copy.className = 'btn ghost';
-    copy.textContent = t('copy');
+    copy.className = 'btn ghost row-download';
+    copy.innerHTML = ICONS.copy;
+    copy.setAttribute('aria-label', t('copy'));
     copy.addEventListener('click', async () => {
-      const value = entry.text || '';
       try {
-        await navigator.clipboard.writeText(value);
-        copy.textContent = t('copied');
-        setTimeout(() => { copy.textContent = t('copy'); }, 1400);
+        await navigator.clipboard.writeText(entry.text || '');
+        copy.innerHTML = ICONS.check;
+        setTimeout(() => { copy.innerHTML = ICONS.copy; }, 1400);
       } catch (error) {
-        copy.textContent = t('copy');
+        copy.innerHTML = ICONS.copy;
       }
     });
-    card.append(icon, main, toggle, copy);
-    li.append(card);
 
-    if (preview.openKey === key) {
+    li.append(toggle, copy);
+
+    if (expanded) {
       const panel = document.createElement('div');
       panel.className = 'preview';
       panel.id = 'preview-' + encodeURIComponent(key);
