@@ -4,6 +4,7 @@ import { createSettingsSession } from './core/settings/session';
 import { createSettingsAdapter } from './platform';
 import { setLanguage, t } from './core/i18n';
 import type { Language, Permissions, Protection, StartFace } from './core/settings/types';
+import { version as appVersion } from '../package.json';
 
 const session = createSettingsSession(createSettingsAdapter());
 
@@ -407,7 +408,7 @@ function clearGroupPin(group: { id: string }) {
             </section>
 
             <section v-else class="settings-section">
-              <p><strong>shrinkdrop / File Share</strong> 0.1.0</p>
+              <p><strong>shrinkdrop / File Share</strong> {{ appVersion }}</p>
               <p class="settings-hint">{{ t('设置保存在应用配置目录；PIN 使用哈希，账号口令明文保存在本地。') }}</p>
               <p class="settings-hint">{{ t('压缩使用匿名 TinyPNG 接口；分享服务只在同一个 Tauri 进程内运行。') }}</p>
             </section>

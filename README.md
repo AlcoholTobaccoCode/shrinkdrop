@@ -71,16 +71,27 @@ pnpm tauri build
 
 推送与应用版本一致的 `v<版本>` 标签后，流水线会在双平台构建和校验全部成功后，自动创建并公开发布同名 GitHub Release，将三个安装包、合并的校验文件和构建信息附在 Assets 中。Release 附件不受 Actions 的 90 天保留期限制。含 `-` 的预发布版本会标记为 Pre-release，正式版本会设为 Latest。重跑同一标签会更新同名 Release 的附件。
 
-发布新版本时，先同步修改上述版本配置（并更新 Cargo.lock），提交代码，再按版本号创建标签并推送到公共仓库：
+发布新版本前先提交功能改动，在干净的 `main` 上运行：
 
 ```bash
-git push origin main
-VERSION=$(node -p 'require("./package.json").version')
-git tag -a "v$VERSION" -m "shrinkdrop $VERSION"
-git push origin "v$VERSION"
+pnpm release                         # 交互选择版本并确认
+pnpm release patch --dry-run         # 预演补丁版本递增，例如 0.1.0 → 0.1.1
+pnpm release minor                  # 次版本递增，例如 0.1.0 → 0.2.0
+pnpm release 0.2.0-beta.1            # 指定预发布版本
+pnpm release 0.2.0 --yes             # 明确版本并跳过确认
 ```
 
-标签必须指向包含对应版本代码和发布流水线的提交。标签与项目版本不一致会立即失败；不要移动已发布版本的标签，后续更新请递增版本号。
+脚本检查远端历史、版本一致性和标签占用，同步修改上述四个版本文件，单独创建版本提交及注释标签，然后推送代码与标签并触发公开 Release 构建。已手动提交目标版本时，可以指定相同版本直接打标；已存在的标签会拒绝发布。设置页版本自动读取 `package.json`。
+
+`--dry-run` 会获取远端引用并显示计划，不修改文件、提交、标签或远端分支。未提交文件、版本降级、远端有本地尚未包含的提交都会阻止发布。不要移动已发布标签，后续更新请递增版本号。
+
+维护者也可使用 `pnpm sync:public --dry-run` 预览待同步的已提交代码，再运行 `pnpm sync:public` 确认公开同步（自动化可加 `--yes`）。运行前需要配置好脚本使用的源远端和公共远端；完整方向、前置提交步骤及失败处理见 `pnpm sync:public --help`。同步只快进更新公共 `main`，不包含本地未提交文件或标签；历史分叉会停止。公共 `main` 更新后自动打包并保留 Actions 产物，需要公开 Release 时使用 `pnpm release`。
+
+只想重新打包公共 `main`，可在 Actions 中点击 **Run workflow**，或运行：
+
+```bash
+gh workflow run release.yml --repo AlcoholTobaccoCode/shrinkdrop --ref main
+```
 
 ## 文档
 
