@@ -1,8 +1,12 @@
 name: Release desktop builds
 
 on:
+  workflow_dispatch:
   push:
     tags: ['v*']
+
+permissions:
+  contents: write
 
 jobs:
   tauri:
@@ -11,27 +15,47 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            args: '--target universal-apple-darwin'
+            artifact: macos-universal
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+            args: '--target universal-apple-darwin --bundles app,dmg'
           - platform: windows-latest
-            args: ''
+            artifact: windows-x64
+            rust-targets: x86_64-pc-windows-msvc
+            args: '--target x86_64-pc-windows-msvc --bundles nsis,msi'
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 11
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - run: pnpm test
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
           releaseName: shrinkdrop ${{ github.ref_name }}
           releaseBody: See the assets below for installers.
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} --ci -- --locked
+      - run: pnpm check:secrets
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shrinkdrop-${{ matrix.artifact }}
+          path: |
+            src-tauri/target/**/bundle/dmg/*.dmg
+            src-tauri/target/**/bundle/nsis/*.exe
+            src-tauri/target/**/bundle/msi/*.msi
+          if-no-files-found: error
+          retention-days: 14
