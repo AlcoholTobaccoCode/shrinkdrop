@@ -1,15 +1,19 @@
-name: Release desktop builds
+name: Desktop installers
 
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     tags: ['v*']
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   tauri:
+    if: github.repository == 'AlcoholTobaccoCode/shrinkdrop'
+    name: Build ${{ matrix.artifact }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -17,10 +21,12 @@ jobs:
           - platform: macos-latest
             artifact: macos-universal
             rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+            bundle-directory: src-tauri/target/universal-apple-darwin/release/bundle
             args: '--target universal-apple-darwin --bundles app,dmg'
           - platform: windows-latest
             artifact: windows-x64
             rust-targets: x86_64-pc-windows-msvc
+            bundle-directory: src-tauri/target/x86_64-pc-windows-msvc/release/bundle
             args: '--target x86_64-pc-windows-msvc --bundles nsis,msi'
     runs-on: ${{ matrix.platform }}
     steps:
@@ -39,23 +45,21 @@ jobs:
           workspaces: src-tauri -> target
       - run: pnpm test
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - name: Read app version
+        id: app
+        shell: bash
+        run: |
+          node -e "const fs = require('node:fs'); fs.appendFileSync(process.env.GITHUB_OUTPUT, 'version=' + require('./package.json').version + '\n')"
       - uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-          releaseName: shrinkdrop ${{ github.ref_name }}
-          releaseBody: See the assets below for installers.
-          releaseDraft: true
-          prerelease: false
           args: ${{ matrix.args }} --ci -- --locked
       - run: pnpm check:secrets
+      - name: Collect installers and checksums
+        run: node scripts/collect-installers.mjs "${{ matrix.bundle-directory }}" "dist/installers/ci/${{ matrix.artifact }}" "${{ matrix.artifact }}"
       - uses: actions/upload-artifact@v4
         with:
-          name: shrinkdrop-${{ matrix.artifact }}
-          path: |
-            src-tauri/target/**/bundle/dmg/*.dmg
-            src-tauri/target/**/bundle/nsis/*.exe
-            src-tauri/target/**/bundle/msi/*.msi
+          name: shrinkdrop-${{ steps.app.outputs.version }}-${{ matrix.artifact }}-${{ github.run_number }}-${{ github.run_attempt }}
+          path: dist/installers/ci/${{ matrix.artifact }}/
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 90
+          compression-level: 0

@@ -61,6 +61,16 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked
 pnpm tauri build
 ```
 
+## 自动打包与下载
+
+公共仓库的 [Desktop installers 流水线](https://github.com/AlcoholTobaccoCode/shrinkdrop/actions/workflows/release.yml) 会在推送到 `main` 或推送 `v*` 标签时自动运行，也可在 Actions 页面点击 **Run workflow** 手动触发。相同工作流在私有仓库中会跳过打包。
+
+每次构建先运行前端和 Rust 测试，再并行生成 Windows x64（`.exe`、`.msi`）与 macOS 通用（`.dmg`，支持 Intel 和 Apple Silicon）安装包。成功后进入该次运行页面，在 **Artifacts** 下载对应平台压缩包；通常需要登录 GitHub。
+
+产物名为 `shrinkdrop-<版本>-<平台>-<运行编号>-<重跑次数>`，每个平台包内还包含 `SHA256SUMS.txt` 和记录提交、版本及构建链接的 `build-info.json`。每次运行的产物单独保留 **90 天**，到期由 GitHub 自动删除；长期使用请下载到本地。流水线不自动发布 GitHub Release，安装包暂未配置开发者签名及 macOS 公证。
+
+默认 `git push` 只推私有仓库；需要触发公共仓库自动打包时，执行 `git push origin main`。推送标签到公共仓库可使用 `git push origin v0.1.0`（标签需提前创建）。
+
 ## 文档
 
 设计与进度见 [轻量版设计](docs/lite/design.md)、[实现计划](docs/lite/plan.md)、[2026-10-20 交互补充](docs/lite/2026-10-20-enhancements.md)、[局域网分享设计](docs/share/design.md)。实际验证见 [本次验收](docs/lite/2026-10-20-verification.md)、[初版验收](docs/lite/verification.md)。
