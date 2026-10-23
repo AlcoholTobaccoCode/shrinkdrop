@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      tagged: ${{ steps.version.outputs.tagged }}
     steps:
       - uses: actions/checkout@v4
       - name: Validate app and tag versions
@@ -32,11 +33,23 @@ jobs:
           assert version == tauri == cargo == locked, f'Version mismatch: {version}, {tauri}, {cargo}, {locked}'
           if os.environ['GITHUB_REF_TYPE'] == 'tag':
               assert os.environ['GITHUB_REF_NAME'] == f'v{version}', 'Tag must match app version'
+          # 原子推送 main 与标签会同时触发两个运行；main 上若该版本已打标签，
+          # 说明构建由标签那次负责，这里跳过以免同一提交打包两遍。
+          tagged = 'false'
+          if os.environ['GITHUB_REF_TYPE'] == 'branch':
+              import subprocess
+              result = subprocess.run(
+                  ['git', 'ls-remote', '--tags', 'origin', f'refs/tags/v{version}'],
+                  capture_output=True, text=True,
+              )
+              tagged = 'true' if result.stdout.strip() else 'false'
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'version={version}\n')
+              output.write(f'tagged={tagged}\n')
 
   tauri:
     needs: version
+    if: needs.version.outputs.tagged != 'true'
     name: Build ${{ matrix.artifact }}
     timeout-minutes: 45
     strategy:
