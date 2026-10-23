@@ -1,6 +1,6 @@
 [package]
 name = "shrinkdrop"
-version = "0.1.0"
+version = "0.1.1"
 description = "轻量匿名图片压缩桌面客户端"
 authors = ["Tinypng Cross Platform"]
 edition = "2021"
