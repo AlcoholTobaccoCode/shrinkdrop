@@ -61,12 +61,31 @@ Runtime   { running, url, port, candidates[], connections, transfer }
 | GET | `/api/items` | 列出全部分享根（文件/目录） |
 | GET | `/api/list?id=&path=` | 列出目录内容，含面包屑路径 |
 | GET | `/api/download?id=&path=` | 单文件 Range 下载；目录现场打包 zip |
+| GET | `/api/preview?id=&path=` | 内联预览（Range + 显式 Content-Type + `inline`），仅限可预览类型 |
 | GET | `/api/thumb?id=&path=` | 图片缩略图（200px JPEG） |
 | POST | `/api/upload` | multipart 上传，写上传目录 |
 | POST | `/api/text` | 写入一条文本 |
 | GET | `/api/events` | SSE：列表与传输变化 |
 
 错误统一为 `{ code, message }`，不返回内部路径。鉴权失败一律 404/403，不回显 token 是否存在的细节。
+
+## 条目预览
+
+访客页按条目就地展开，同一列表只展开一项；展开后才请求媒体，收起音视频时暂停并记住本次会话的位置与倍率。
+
+| 类型 | 行为 |
+|---|---|
+| 图片 | 280×180 固定框等比完整显示；点击进入全屏，可切换原图尺寸，Esc 关闭 |
+| 音频 | 拖动进度、±15 秒、倍率循环 1× → 1.5× → 2× → 2.5× → 3× → 1×，横向铺满 |
+| 视频 | 原生控件，横向铺满 |
+| 文本 | 默认单行；展开后限高 240px 内滚动，可复制全文 |
+| Markdown | 内嵌 marked + DOMPurify，预览/源码切换；相对图片显示占位提示 |
+| 代码 | html/css/js/ts/json/py/java/go/rs/sh/sql/yaml 等按扩展名高亮，超 512 KB 提示下载 |
+| Office / PDF | 保留下载，不做预览 |
+
+预览路由复用下载鉴权与路径校验，只额外切换 `Content-Disposition: inline` 与显式 MIME；`nosniff` 保持开启。支持类型以扩展名白名单为入口，能否播放仍由浏览器解码决定，失败时提供下载。CSP 增加 `media-src 'self'`。
+
+代码高亮使用内嵌 highlight.js（约 127 KB），浅深两套主题随系统切换，不请求外部资源。列表按 key 增量更新，SSE 刷新不会替换正在播放的媒体元素；不支持预览的文件显示「暂不预览」。
 
 ## 认证与权限
 
