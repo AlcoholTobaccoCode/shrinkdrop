@@ -36,7 +36,7 @@ export interface GroupAccessPatch {
 }
 
 export interface SettingsView {
-  general: { startFace: StartFace; lastFace: Face; language: Language };
+  general: { startFace: StartFace; lastFace: Face; language: Language; keepAwake: boolean };
   compression: { autoCompress: boolean; concurrency: number; saveDir: string | null };
   share: {
     port: number;
@@ -97,7 +97,7 @@ export interface SettingsAdapter {
 
 export function defaultSettings(): SettingsView {
   return {
-    general: { startFace: 'last', lastFace: 'compress', language: 'auto' },
+    general: { startFace: 'last', lastFace: 'compress', language: 'auto', keepAwake: false },
     compression: { autoCompress: false, concurrency: 5, saveDir: null },
     share: {
       port: 5421,

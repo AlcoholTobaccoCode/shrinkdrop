@@ -74,6 +74,8 @@ pub struct General {
     pub last_face: Face,
     #[serde(default, alias = "visitorLang")]
     pub language: Language,
+    /// macOS 上阻止空闲休眠，便于访客在合盖/待机期间继续下载。
+    pub keep_awake: bool,
 }
 
 impl Default for General {
@@ -82,6 +84,7 @@ impl Default for General {
             start_face: StartFace::Last,
             last_face: Face::Compress,
             language: Language::Auto,
+            keep_awake: false,
         }
     }
 }
@@ -471,6 +474,13 @@ async fn commit(
     validate(&settings)?;
     state.replace(settings.clone());
     persist(app, &settings)?;
+    // 防休眠只影响系统电源状态，失败不回滚设置，避免开关看起来"没生效"却已保存。
+    if let Err(error) = app
+        .state::<crate::power::SleepInhibitor>()
+        .apply(settings.general.keep_awake)
+    {
+        let _ = app.emit("settings-toast", error);
+    }
     let restarted = if restart {
         restart_if_running(app, manager, &settings).await
     } else {

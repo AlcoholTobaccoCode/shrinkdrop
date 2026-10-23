@@ -11,6 +11,8 @@ const session = createSettingsSession(createSettingsAdapter());
 type Section = 'general' | 'compression' | 'share' | 'about';
 const section = ref<Section>('general');
 const view = computed(() => session.state.view);
+// 防休眠依赖 macOS 的 caffeinate，仅在 Mac 上展示该开关。
+const isMac = /Mac/i.test(navigator.userAgent);
 async function applyWindowTitle() {
   try {
     const { getCurrentWindow } = await import('@tauri-apps/api/window');
@@ -63,6 +65,11 @@ function changeLanguage(event: Event) {
 function setAutoCompress(event: Event) {
   const checked = (event.target as HTMLInputElement).checked;
   update(draft => { draft.compression.autoCompress = checked; });
+}
+
+function setKeepAwake(event: Event) {
+  const checked = (event.target as HTMLInputElement).checked;
+  update(draft => { draft.general.keepAwake = checked; });
 }
 
 function setConcurrency(event: Event) {
@@ -241,6 +248,14 @@ function clearGroupPin(group: { id: string }) {
                 </select>
               </label>
               <p class="settings-hint">{{ t('语言修改会立即同步到桌面端与访客页。') }}</p>
+              <div v-if="isMac" class="settings-row settings-row--switch">
+                <span>{{ t('合盖不休眠') }}</span>
+                <label class="switch">
+                  <input type="checkbox" :checked="view.general.keepAwake" @change="setKeepAwake" />
+                  <span class="switch-track" aria-hidden="true"><span /></span>
+                </label>
+              </div>
+              <p v-if="isMac" class="settings-hint">{{ t('开启后使用系统防休眠，笔记本合盖或空闲时不会进入睡眠；关闭应用或此开关即恢复。') }}</p>
             </section>
 
             <section v-else-if="section === 'compression'" class="settings-section">

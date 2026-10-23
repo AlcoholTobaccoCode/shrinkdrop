@@ -4,6 +4,7 @@ mod commands;
 mod compression;
 mod file_ops;
 mod overwrite;
+mod power;
 mod settings;
 mod share;
 
@@ -14,8 +15,13 @@ pub fn run() {
         .manage(compression::CompressionState::default())
         .manage(share::ShareManager::default())
         .manage(settings::SettingsState::default())
+        .manage(power::SleepInhibitor::default())
         .setup(|app| {
             let loaded = settings::load(&app.handle());
+            // 启动时恢复用户上次选择的防休眠状态。
+            let _ = app
+                .state::<power::SleepInhibitor>()
+                .apply(loaded.general.keep_awake);
             app.state::<settings::SettingsState>().replace(loaded);
             Ok(())
         })
@@ -49,6 +55,8 @@ pub fn run() {
                 window.state::<compression::CompressionState>().cancel_all();
                 let _ = file_ops::cleanup_all(&window.state::<file_ops::FileState>());
                 window.state::<share::ShareManager>().shutdown_now();
+                // 结束防休眠子进程，避免应用退出后继续阻止系统睡眠。
+                window.state::<power::SleepInhibitor>().release();
                 if let Some(settings) = window.app_handle().get_webview_window("settings") {
                     let _ = settings.close();
                 }

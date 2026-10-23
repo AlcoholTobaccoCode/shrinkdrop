@@ -161,6 +161,9 @@ const en: Record<string, string> = {
   '语言': 'Language',
   '语言修改会立即同步到桌面端与访客页。':
     'Language changes apply to the desktop and visitor page immediately.',
+  '合盖不休眠': 'Stay awake with lid closed',
+  '开启后使用系统防休眠，笔记本合盖或空闲时不会进入睡眠；关闭应用或此开关即恢复。':
+    'Uses the system sleep inhibitor so the laptop keeps running when the lid is closed or idle. Turn this off or quit the app to restore normal sleep.',
   '设置保存在应用配置目录；PIN 使用哈希，账号口令明文保存在本地。':
     'Settings live in the app config folder; PIN is hashed and account passwords are stored in plain text locally.',
   '正在取消': 'Canceling',
