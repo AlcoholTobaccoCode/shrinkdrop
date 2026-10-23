@@ -135,6 +135,12 @@ function toggleShare() {
   else void share.startEmpty();
 }
 
+/** 整行点击切换分组展开；仅在存在多个分组时可切换。 */
+function toggleGroupsFromRow() {
+  if (shareState.groups.length <= 1) return;
+  groupsOpen.value = !groupsOpen.value;
+}
+
 async function submitText() {
   if (!textDraft.value.trim() || textSending.value) return;
   textSending.value = true;
@@ -448,12 +454,19 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
 
             <div class="share-workspace">
               <div class="share-status-card" :class="{ 'is-expanded': groupsOpen }">
-                <div class="share-status">
-                  <button v-if="shareState.groups.length > 1" type="button" class="share-status-toggle"
-                    :aria-expanded="groupsOpen" :aria-controls="'share-groups'" :aria-label="groupsOpen ? t('收起分组') : t('展开分组')"
-                    @click="groupsOpen = !groupsOpen">
+                <div class="share-status" :class="{ 'is-interactive': shareState.groups.length > 1 }"
+                  :role="shareState.groups.length > 1 ? 'button' : undefined"
+                  :tabindex="shareState.groups.length > 1 ? 0 : undefined"
+                  :aria-expanded="shareState.groups.length > 1 ? groupsOpen : undefined"
+                  :aria-controls="shareState.groups.length > 1 ? 'share-groups' : undefined"
+                  :aria-label="shareState.groups.length > 1 ? (groupsOpen ? t('收起分组') : t('展开分组')) : undefined"
+                  @click="toggleGroupsFromRow"
+                  @keydown.enter.prevent="toggleGroupsFromRow"
+                  @keydown.space.prevent="toggleGroupsFromRow">
+                  <span v-if="shareState.groups.length > 1" class="share-status-toggle" aria-hidden="true"
+                    :class="{ 'is-expanded': groupsOpen }">
                     <LiteIcon name="chevron" />
-                  </button>
+                  </span>
                   <span class="share-dot" :class="{ 'is-on': shareRunning }" aria-hidden="true" />
                   <div class="share-copy">
                     <strong>{{ shareRunning ? t('正在分享') : shareBusy ? t('正在准备') : t('分享未开始') }}</strong>
@@ -461,16 +474,16 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
                       ? t('已分享 {n} 项，手机扫码即可下载', { n: shareState.items.length })
                       : t('手机与电脑连同一个 Wi-Fi，选择文件或文件夹后扫码下载') }}</p>
                   </div>
-                  <div class="share-status-actions">
+                  <div class="share-status-actions" @click.stop>
                     <button class="share-service-toggle" :class="{ 'is-on': shareRunning }" role="switch" :aria-checked="shareRunning"
-                      :disabled="!desktop || shareBusy" @click="toggleShare">
+                      :disabled="!desktop || shareBusy" @click.stop="toggleShare">
                       <span class="service-dot" aria-hidden="true"></span>
                       <span>{{ shareRunning ? t('分享中') : t('开启服务') }}</span>
                     </button>
-                    <span v-if="shareRunning && sharePort" class="share-port">
-                      <template v-if="!editingPort">{{ t('端口') }} <button class="port-button" :title="t('端口修改后会重启分享')" @click="startEditPort">{{ sharePort }}</button></template>
+                    <span v-if="shareRunning && sharePort" class="share-port" @click.stop>
+                      <template v-if="!editingPort">{{ t('端口') }} <button class="port-button" :title="t('端口修改后会重启分享')" @click.stop="startEditPort">{{ sharePort }}</button></template>
                       <input v-else v-model.number="portDraft" class="port-input" type="number" min="0" max="65535"
-                        :aria-label="t('端口')" @blur="savePort" @keydown.enter.prevent="savePort" @keydown.esc="editingPort = false" />
+                        :aria-label="t('端口')" @blur="savePort" @keydown.enter.prevent="savePort" @keydown.esc="editingPort = false" @click.stop />
                     </span>
                   </div>
                 </div>

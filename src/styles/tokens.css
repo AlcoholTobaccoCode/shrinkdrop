@@ -196,9 +196,11 @@ p, h1 { margin: 0; }
 .share-status-card { flex-shrink: 0; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
 .share-status { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: transparent; border: 0; border-radius: 0; flex-shrink: 0; }
 .share-status-toggle { display: grid; place-items: center; width: 24px; height: 24px; flex: none; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); }
-.share-status-toggle:hover { background: var(--surface-hover); color: var(--text); }
 .share-status-toggle svg { width: 14px; height: 14px; transition: transform .16s ease; }
-.share-status-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
+.share-status-toggle.is-expanded svg { transform: rotate(90deg); }
+.share-status.is-interactive { cursor: pointer; }
+.share-status.is-interactive:hover { background: var(--surface-hover); }
+.share-status.is-interactive:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .share-status-card .share-groups { margin: 0; padding: 10px 12px 10px; border-top: 1px solid var(--line); }
 .share-groups { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 .share-groups::-webkit-scrollbar { height: 6px; }
@@ -248,6 +250,12 @@ p, h1 { margin: 0; }
 .settings-row select, .settings-input { height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background-color: var(--bg); font-size: 12px; color: var(--text); }
 .settings-number { width: 96px; height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); font-size: 12px; color: var(--text); }
 .settings-hint { color: var(--muted); font-size: 11px; line-height: 1.6; }
+/* 三档滑块：默认关，中间档阻止空闲休眠，第三档含合盖。 */
+.keep-awake-steps { display: inline-flex; padding: 3px; gap: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.keep-awake-step { border: 0; background: transparent; color: var(--muted); font-size: 11px; padding: 4px 10px; border-radius: 6px; white-space: nowrap; transition: background .16s, color .16s; }
+.keep-awake-step:hover { color: var(--text); }
+.keep-awake-step.is-active { background: var(--surface); color: var(--accent); font-weight: 600; box-shadow: 0 1px 3px #0001; }
+.keep-awake-step:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .settings-path-row { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
 .settings-path { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .settings-choices { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; }
@@ -333,7 +341,7 @@ button:not(:disabled), select, summary, [role="button"], .share-group-tab, .port
 button:disabled, input:disabled { cursor: not-allowed; }
 .settings-head { justify-content: flex-end; min-height: 46px; padding: 8px 14px; }
 .settings-window { height: 100vh; overflow: hidden; }
-.share-status-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; margin-left: auto; }
+.share-status-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; margin-left: auto; cursor: default; }
 .share-service-toggle { display: inline-flex; align-items: center; gap: 7px; height: 24px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 12px; font-weight: 550; }
 .share-service-toggle.is-on { color: var(--accent); }
 .service-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
