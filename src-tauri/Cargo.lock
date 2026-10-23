@@ -3266,6 +3266,34 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "shrinkdrop"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "axum",
+ "futures-util",
+ "getrandom 0.4.3",
+ "hmac",
+ "if-addrs",
+ "image",
+ "qrcode",
+ "reqwest",
+ "same-file",
+ "serde",
+ "serde_json",
+ "sha2",
+ "socket2 0.5.10",
+ "sys-locale",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tokio",
+ "tower",
+ "tower-http",
+ "zip",
+]
+
+[[package]]
 name = "simd-adler32"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3914,34 +3942,6 @@ checksum = "7e689342a48d2ea927c87ea50cabf8594854bf940e9310208848d680d668ed85"
 dependencies = [
  "num-conv",
  "time-core",
-]
-
-[[package]]
-name = "shrinkdrop"
-version = "0.1.0"
-dependencies = [
- "argon2",
- "axum",
- "futures-util",
- "getrandom 0.4.3",
- "hmac",
- "if-addrs",
- "image",
- "qrcode",
- "reqwest",
- "same-file",
- "serde",
- "serde_json",
- "sha2",
- "socket2 0.5.10",
- "sys-locale",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tokio",
- "tower",
- "tower-http",
- "zip",
 ]
 
 [[package]]
