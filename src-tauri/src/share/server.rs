@@ -30,7 +30,7 @@ use crate::settings::Language;
 const PAGE: &str = include_str!("page.html");
 const PAGE_CSS: &str = include_str!("page.css");
 const PAGE_JS: &str = include_str!("page.js");
-const CSP: &str = "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'";
+const CSP: &str = "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'";
 const THUMB_MAX_BYTES: u64 = 20_000_000;
 const ZIP_MAX_FILES: usize = 20_000;
 const ZIP_MAX_BYTES: u64 = 8 * 1024 * 1024 * 1024;
@@ -81,6 +81,11 @@ fn route_table() -> Router<Context> {
         .route("/", get(page))
         .route("/assets/app.css", get(stylesheet))
         .route("/assets/app.js", get(script))
+        .route("/assets/marked.js", get(marked_script))
+        .route("/assets/purify.js", get(purify_script))
+        .route("/assets/highlight.js", get(highlight_script))
+        .route("/assets/highlight-light.css", get(highlight_light))
+        .route("/assets/highlight-dark.css", get(highlight_dark))
         .route("/api/state", get(state))
         .route("/api/unlock", post(unlock))
         .route("/api/login", post(login))
@@ -88,6 +93,7 @@ fn route_table() -> Router<Context> {
         .route("/api/items", get(list_items))
         .route("/api/list", get(list_dir))
         .route("/api/download", get(download))
+        .route("/api/preview", get(preview))
         .route("/api/thumb", get(thumbnail))
         .route("/api/events", get(events))
         .route(
@@ -161,6 +167,63 @@ async fn script() -> Response {
             HeaderValue::from_static("text/javascript; charset=utf-8"),
         )],
         PAGE_JS,
+    )
+        .into_response()
+}
+
+/// Markdown 解析与清洗库随应用内嵌，访客页离线可用。
+async fn marked_script() -> Response {
+    (
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/javascript; charset=utf-8"),
+        )],
+        include_str!("vendor/marked.umd.js"),
+    )
+        .into_response()
+}
+
+async fn purify_script() -> Response {
+    (
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/javascript; charset=utf-8"),
+        )],
+        include_str!("vendor/purify.min.js"),
+    )
+        .into_response()
+}
+
+async fn highlight_script() -> Response {
+    (
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/javascript; charset=utf-8"),
+        )],
+        include_str!("vendor/highlight.min.js"),
+    )
+        .into_response()
+}
+
+/// 高亮主题跟随系统深浅色，两者都内嵌，避免访客页发外部请求。
+async fn highlight_light() -> Response {
+    (
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/css; charset=utf-8"),
+        )],
+        include_str!("vendor/highlight-light.css"),
+    )
+        .into_response()
+}
+
+async fn highlight_dark() -> Response {
+    (
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/css; charset=utf-8"),
+        )],
+        include_str!("vendor/highlight-dark.css"),
     )
         .into_response()
 }
@@ -346,6 +409,8 @@ struct ItemView {
     modified: Option<u64>,
     text: Option<String>,
     visitor: bool,
+    /// 根条目的文件类型是否可直接预览（目录/文字为 false）。
+    preview: bool,
 }
 
 async fn list_items(State(context): State<Context>, headers: HeaderMap) -> Response {
@@ -367,6 +432,7 @@ async fn list_items(State(context): State<Context>, headers: HeaderMap) -> Respo
                 modified: item.modified,
                 text: item.text.clone(),
                 visitor: item.visitor,
+                preview: item.kind == ItemKind::File && preview_mime(&item.path).is_some(),
             })
             .collect::<Vec<_>>(),
     )
@@ -404,6 +470,8 @@ struct EntryView {
     modified: Option<u64>,
     path: String,
     thumb: bool,
+    /// 是否支持就地预览；与扩展名映射一致，最终仍由浏览器解码决定。
+    preview: bool,
 }
 
 #[derive(Serialize)]
@@ -482,6 +550,7 @@ async fn list_dir(
                 .map(|duration| duration.as_secs()),
             path: relative.to_string_lossy().replace('\\', "/"),
             thumb: kind == ItemKind::File && is_image(&canonical),
+            preview: kind == ItemKind::File && preview_mime(&canonical).is_some(),
         });
     }
     entries.sort_by(|left, right| {
@@ -562,6 +631,95 @@ async fn serve_file(path: PathBuf, name: String, request: Request) -> Response {
     }
     response
 }
+
+/// 内联预览：沿用 Range 与路径校验，只改响应头语义，下载仍走 attachment。
+async fn preview(
+    State(context): State<Context>,
+    headers: HeaderMap,
+    Query(query): Query<ItemQuery>,
+    request: Request,
+) -> Response {
+    let Some(permissions) = permissions(&context, &headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if !permissions.download {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Ok(root) = find_item(&context, query.id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if root.kind == ItemKind::Text {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let target = match resolve_path(&root, &query.path) {
+        Ok(target) => target,
+        Err(status) => return status.into_response(),
+    };
+    let Ok(meta) = fs::metadata(&target) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !meta.is_file() {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let Some(mime) = preview_mime(&target) else {
+        return StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response();
+    };
+    // 文本类预览直接注入 DOM，超过上限时不返回内容，前端保留下载。
+    if mime.starts_with("text/plain") && meta.len() > CODE_PREVIEW_MAX_BYTES {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    }
+    let mut response = match ServeFile::new(&target).oneshot(request).await {
+        Ok(response) => response.map(Body::new),
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_static("inline"),
+    );
+    headers.insert(
+        header::HeaderName::from_static("accept-ranges"),
+        HeaderValue::from_static("bytes"),
+    );
+    response
+}
+
+/// 预览只开放浏览器可直接解码的类型；未知扩展名一律要求下载。
+fn preview_mime(path: &FsPath) -> Option<&'static str> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())?
+        .to_ascii_lowercase();
+    Some(match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "avif" => "image/avif",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "m4a" | "aac" => "audio/mp4",
+        "flac" => "audio/flac",
+        "mp4" | "m4v" => "video/mp4",
+        "webm" => "video/webm",
+        "mov" => "video/quicktime",
+        "mkv" => "video/x-matroska",
+        "txt" => "text/plain; charset=utf-8",
+        "md" | "markdown" => "text/plain; charset=utf-8",
+        "html" | "htm" => "text/plain; charset=utf-8",
+        "css" | "scss" | "less" => "text/plain; charset=utf-8",
+        "js" | "mjs" | "cjs" | "jsx" | "ts" | "tsx" => "text/plain; charset=utf-8",
+        "json" | "jsonl" => "text/plain; charset=utf-8",
+        "py" | "java" | "kt" | "go" | "rs" | "rb" | "php" | "c" | "h" | "cc" | "cpp" | "hpp" | "cs"
+        | "swift" | "sh" | "bash" | "zsh" | "sql" | "yml" | "yaml" | "toml" | "xml" | "ini"
+        | "vue" | "svelte" => "text/plain; charset=utf-8",
+        _ => return None,
+    })
+}
+
+/// 代码预览上限：超出时只提示下载，避免把超大文件塞进 DOM。
+const CODE_PREVIEW_MAX_BYTES: u64 = 512 * 1024;
 
 async fn thumbnail(
     State(context): State<Context>,
