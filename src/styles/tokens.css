@@ -199,7 +199,10 @@ p, h1 { margin: 0; }
 .share-status-toggle:hover { background: var(--surface-hover); color: var(--text); }
 .share-status-toggle svg { width: 14px; height: 14px; transition: transform .16s ease; }
 .share-status-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
-.share-status-card .share-groups { margin: 0; padding: 0 12px 10px; max-height: 118px; overflow-y: auto; overflow-x: hidden; flex-wrap: wrap; align-content: flex-start; border-top: 1px solid var(--line); padding-top: 10px; }
+.share-status-card .share-groups { margin: 0; padding: 10px 12px 10px; border-top: 1px solid var(--line); }
+.share-groups { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.share-groups::-webkit-scrollbar { height: 6px; }
+.share-groups::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
 .share-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
 .share-dot.is-on { background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
 .share-copy { min-width: 0; }

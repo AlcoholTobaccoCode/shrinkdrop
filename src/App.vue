@@ -9,6 +9,7 @@ import { createLiteAdapter, createSettingsAdapter, createShareAdapter } from './
 import { setLanguage, t } from './core/i18n';
 import { connectDesktopEvents, connectShareDrops } from './platform/native';
 import { fromBrowserFiles } from './platform/web';
+import { horizontalWheelTarget, wheelDelta } from './core/ui/horizontal-wheel';
 
 //#region 页面会话与交互
 const adapter = createLiteAdapter();
@@ -116,15 +117,16 @@ const editingPort = ref(false);
 const portDraft = ref(0);
 
 function onGroupsWheel(event: WheelEvent) {
-  // 分组现在按行换行、纵向滚动；只拦截仍可继续滚动的方向。
+  // 分组单行横向排列：把鼠标滚轮的纵向滚动映射为左右滚动。
   const element = shareGroupsEl.value;
-  if (!element || element.scrollHeight <= element.clientHeight) return;
-  if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
-  const atTop = element.scrollTop <= 0 && event.deltaY < 0;
-  const atBottom = element.scrollTop + element.clientHeight >= element.scrollHeight - 1 && event.deltaY > 0;
-  if (atTop || atBottom) return;
+  if (!element) return;
+  const target = horizontalWheelTarget(
+    { scrollLeft: element.scrollLeft, clientWidth: element.clientWidth, scrollWidth: element.scrollWidth },
+    wheelDelta(event)
+  );
+  if (target === null) return;
   event.preventDefault();
-  element.scrollTop += event.deltaY;
+  element.scrollLeft = target;
 }
 
 function toggleShare() {
