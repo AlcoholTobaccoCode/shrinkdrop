@@ -58,6 +58,7 @@ pub fn run() {
             commands::choose_files,
             commands::choose_directory,
             commands::read_file,
+            commands::read_thumbnail,
             commands::compress_image,
             commands::cancel_compression,
             commands::cleanup_temp_files,

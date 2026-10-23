@@ -232,14 +232,15 @@ describe('shrinkdrop session', () => {
     expect(adapter.cleanup).toHaveBeenCalledWith('session');
   });
 
-  it('clear preserves rows if any active cancellation fails', async () => {
-    const { session, adapter, requests } = fixture();
+  it('clear always releases the session even when native cancellation is unconfirmed', async () => {
+    const { session, adapter } = fixture();
     vi.mocked(adapter.cancel).mockRejectedValue(new Error('failed'));
     await session.importSources([source('a')]); session.start();
-    expect(await session.clear()).toBe(false);
-    expect(session.state.items).toHaveLength(1);
-    expect(adapter.cleanup).not.toHaveBeenCalled();
-    requests[0]!.gate.resolve(output('a')); await session.whenIdle();
+    // 取消未确认也必须清空并关闭旧会话，否则新任务会被旧槽位长期阻塞。
+    expect(await session.clear()).toBe(true);
+    expect(session.state.items).toHaveLength(0);
+    expect(adapter.cleanup).toHaveBeenCalledTimes(1);
+    expect(session.state.notice).toContain('部分任务未确认取消');
   });
 
   it('starts a fresh native session after Clear permanently retires the old prefix', async () => {
@@ -278,9 +279,11 @@ describe('shrinkdrop session', () => {
     '匿名压缩被服务拒绝，请稍后再试',
     '压缩请求太频繁，请稍后再试',
     '无法连接压缩服务，请检查网络后重试',
+    '压缩服务连接中断，请重试',
     '无法初始化网络连接，请重新启动应用',
-    '压缩服务响应超时，请重试',
-    '压缩超过 60 秒，请检查网络后重试',
+    '上传或等待压缩响应超时，请重试',
+    '压缩结果下载超时，请重试',
+    '压缩超过 240 秒，请检查网络后重试',
     '图片已损坏，无法读取',
     '图片内容不完整或已损坏，请换一张图片',
     '图片尺寸过大，请先缩小图片',

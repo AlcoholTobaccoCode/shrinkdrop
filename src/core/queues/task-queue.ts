@@ -2,17 +2,26 @@ export interface QueueContext {
   signal: AbortSignal;
 }
 
+export interface QueueOptions {
+  /** 分组上限，例如大图同时最多 2 张；未设置的分组只受总并发限制。 */
+  groupConcurrency?: Record<string, number>;
+  group?: string;
+}
+
 interface QueueItem<T> {
   run: (context: QueueContext) => Promise<T>;
   resolve: (value: T) => void;
   reject: (reason?: unknown) => void;
   externalSignal?: AbortSignal;
+  group?: string;
 }
 
 export class TaskQueue {
   private readonly pending: QueueItem<unknown>[] = [];
   private readonly controllers = new Set<AbortController>();
   private readonly idleWaiters: Array<() => void> = [];
+  private readonly activeByGroup: Record<string, number> = {};
+  private groupConcurrency: Record<string, number> = {};
   private active = 0;
   private maxConcurrency: number;
 
@@ -33,7 +42,7 @@ export class TaskQueue {
 
   add<T>(
     run: (context: QueueContext) => Promise<T>,
-    options: { signal?: AbortSignal } = {}
+    options: { signal?: AbortSignal; group?: string } = {}
   ): Promise<T> {
     if (options.signal?.aborted) {
       return Promise.reject(options.signal.reason ?? new Error('任务已取消'));
@@ -44,10 +53,17 @@ export class TaskQueue {
         run,
         resolve: resolve as (value: unknown) => void,
         reject,
-        externalSignal: options.signal
+        externalSignal: options.signal,
+        group: options.group
       });
       this.drain();
     });
+  }
+
+  /** 更新分组上限；已排队的任务会在下次调度时按新上限放行。 */
+  setGroupConcurrency(groupConcurrency: Record<string, number>): void {
+    this.groupConcurrency = { ...groupConcurrency };
+    this.drain();
   }
 
   cancelAll(reason = new Error('队列已取消')): void {
@@ -69,13 +85,19 @@ export class TaskQueue {
 
   private drain(): void {
     while (this.active < this.maxConcurrency && this.pending.length > 0) {
-      const item = this.pending.shift();
+      const index = this.pending.findIndex(item => {
+        const limit = item.group ? this.groupConcurrency[item.group] : undefined;
+        return limit === undefined || (this.activeByGroup[item.group!] ?? 0) < limit;
+      });
+      if (index < 0) return;
+      const [item] = this.pending.splice(index, 1);
       if (item) void this.runItem(item);
     }
   }
 
   private async runItem<T>(item: QueueItem<T>): Promise<void> {
     this.active += 1;
+    if (item.group) this.activeByGroup[item.group] = (this.activeByGroup[item.group] ?? 0) + 1;
     const controller = new AbortController();
     this.controllers.add(controller);
     const externalSignal = item.externalSignal;
@@ -95,6 +117,7 @@ export class TaskQueue {
     } finally {
       externalSignal?.removeEventListener('abort', forwardAbort);
       this.controllers.delete(controller);
+      if (item.group) this.activeByGroup[item.group] = Math.max(0, (this.activeByGroup[item.group] ?? 1) - 1);
       this.active -= 1;
       this.drain();
       this.resolveIdleIfNeeded();

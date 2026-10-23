@@ -12,6 +12,9 @@ export interface LiteItem {
   attempt: number;
   taskId?: string;
   stage?: ProgressEvent['stage'];
+  /** 当前阶段开始时间戳，用于显示真实等待秒数。 */
+  stageStartedAt?: number;
+  stageSeconds?: number;
   progress: number;
   transferred?: number;
   transferTotal?: number;
@@ -120,8 +123,12 @@ export function createLiteSession(adapter: LiteAdapter, options: SessionOptions 
       const item = state.items[state.items.length - 1]!;
       reads.push(thumbnails.add(async () => {
         try {
-          const bytes = await adapter.readFile(source);
-          const thumbnailUrl = createURL(new Blob([new Uint8Array(bytes)], { type: expectedMime }));
+          const bytes = adapter.readThumbnail
+            ? await adapter.readThumbnail(source)
+            : await adapter.readFile(source);
+          const thumbnailUrl = createURL(new Blob([new Uint8Array(bytes)], {
+            type: adapter.readThumbnail ? 'image/jpeg' : expectedMime
+          }));
           if (present(item)) item.thumbnailUrl = thumbnailUrl;
           else revokeURL(thumbnailUrl);
         } catch {
@@ -147,6 +154,9 @@ export function createLiteSession(adapter: LiteAdapter, options: SessionOptions 
   //#endregion
 
   //#region 压缩与取消
+  /** 大图并发上限：≥8,000,000 字节同时最多 2 张，仍受用户设置的 1–5 总并发约束。 */
+  const LARGE_IMAGE_BYTES = 8_000_000;
+  queue.setGroupConcurrency({ large: 2 });
   function enqueue(item: LiteItem) {
     item.attempt += 1;
     const attempt: Attempt = {
@@ -161,6 +171,7 @@ export function createLiteSession(adapter: LiteAdapter, options: SessionOptions 
     void queue.add(async () => {
       if (!current(item, attempt)) return;
       item.status = 'processing'; item.stage = 'uploading'; item.progress = 0.02;
+      item.stageStartedAt = Date.now(); item.stageSeconds = 0;
       try {
         const result = await adapter.compress(item.source.id, attempt.taskId);
         if (attempt.cancelPromise) await attempt.cancelPromise;
@@ -169,17 +180,25 @@ export function createLiteSession(adapter: LiteAdapter, options: SessionOptions 
           throw new Error('invalid result');
         }
         item.result = result; item.status = 'completed'; item.stage = undefined; item.progress = 1;
+        item.stageStartedAt = undefined; item.stageSeconds = undefined;
         item.cancelError = undefined;
+        syncStageTicker();
       } catch (error) {
         if (attempt.cancelPromise) await attempt.cancelPromise;
         if (!current(item, attempt)) return;
         item.status = 'failed'; item.stage = undefined;
+        item.stageStartedAt = undefined; item.stageSeconds = undefined;
         item.cancelError = undefined;
         item.error = compressionError(error);
+        syncStageTicker();
       }
-    }, { signal: attempt.controller.signal }).catch(() => {
+    }, {
+      signal: attempt.controller.signal,
+      group: item.source.size >= LARGE_IMAGE_BYTES ? 'large' : undefined
+    }).catch(() => {
       // 排队期间取消会拒绝队列 Promise，此时状态已由 cancel 更新。
     });
+    syncStageTicker();
   }
   function start(clearNotice = true) {
     if (!adapter.desktop || disposed || state.clearing) return;
@@ -234,11 +253,36 @@ export function createLiteSession(adapter: LiteAdapter, options: SessionOptions 
     const ratio = hasBytes ? Math.min(event.transferred! / event.total!, 1) : 0;
     const progress = { uploading: 0.02 + ratio * 0.4, processing: 0.45,
       downloading: 0.65 + ratio * 0.3, verifying: 0.97 }[event.stage];
+    if (event.stage !== item.stage) {
+      item.stageStartedAt = Date.now();
+      item.stageSeconds = 0;
+    }
     item.stage = event.stage;
     item.transferred = hasBytes ? Math.min(event.transferred!, event.total!) : undefined;
     item.transferTotal = hasBytes ? event.total : undefined;
     // 阶段占比只驱动视觉填充；厂商处理期间不编造百分比，也不因切换站点倒退。
     item.progress = Math.max(item.progress, progress);
+    syncStageTicker();
+  }
+  //#endregion
+
+  //#region 阶段计时
+  // 等待压缩响应没有服务端进度，只递增真实经过的秒数，避免伪造百分比。
+  let stageTicker: number | undefined;
+  function syncStageTicker() {
+    const waiting = state.items.some(item => item.status === 'processing' && item.stage === 'processing');
+    if (waiting && !stageTicker) {
+      stageTicker = setInterval(() => {
+        for (const item of state.items) {
+          if (item.status === 'processing' && item.stage === 'processing' && item.stageStartedAt) {
+            item.stageSeconds = Math.floor((Date.now() - item.stageStartedAt) / 1000);
+          }
+        }
+      }, 1000);
+    } else if (!waiting && stageTicker) {
+      clearInterval(stageTicker);
+      stageTicker = undefined;
+    }
   }
   //#endregion
 
@@ -343,16 +387,18 @@ export function createLiteSession(adapter: LiteAdapter, options: SessionOptions 
     const retiredSessionId = sessionId;
     try {
       const canceled = await Promise.all(state.items.map(item => cancel(item.id)));
-      if (canceled.some(success => !success)) {
-        notify('部分任务未能取消，列表已保留，请稍后再试。', 'error'); return false;
-      }
-      // 原生请求真正结束后再清理，避免晚到结果写入已清空的会话。
-      await queue.onIdle();
+      // 取消已确认时等原生请求真正结束，避免晚到结果写入已清空的会话；
+      // 个别取消未确认则不再等待，直接关闭旧会话，否则会长期占住并发槽位。
+      if (canceled.every(Boolean)) await queue.onIdle();
       state.items.forEach(revokeThumbnail); state.items = []; state.notice = '';
+      syncStageTicker();
       await thumbnails.onIdle(); await cleanup(retiredSessionId);
       // 原生清理会永久关闭旧会话，后续导入必须使用新的会话标识。
       attempts.clear();
       if (!disposed) sessionId = createUUID();
+      if (canceled.some(success => !success)) {
+        notify('部分任务未确认取消，已清空列表并重置会话。', 'error');
+      }
       return true;
     } finally { state.clearing = false; }
   }
@@ -361,6 +407,7 @@ export function createLiteSession(adapter: LiteAdapter, options: SessionOptions 
     disposed = true;
     const retiredSessionId = sessionId;
     state.items.forEach(revokeThumbnail);
+    if (stageTicker) { clearInterval(stageTicker); stageTicker = undefined; }
     disposePromise = (async () => {
       await Promise.all(state.items.map(item => cancel(item.id)));
       await queue.onIdle(); await thumbnails.onIdle();
@@ -382,9 +429,11 @@ const nativeCompressionMessages = new Map([
   '压缩服务暂时不可用，请稍后重试',
   '压缩服务返回了不受支持的跳转，请稍后重试',
   '无法连接压缩服务，请检查网络后重试',
+  '压缩服务连接中断，请重试',
   '无法初始化网络连接，请重新启动应用',
-  '压缩服务响应超时，请重试',
-  '压缩超过 60 秒，请检查网络后重试',
+  '上传或等待压缩响应超时，请重试',
+  '压缩结果下载超时，请重试',
+  '压缩超过 240 秒，请检查网络后重试',
   '图片已损坏，无法读取',
   '图片内容不完整或已损坏，请换一张图片',
   '图片尺寸过大，请先缩小图片',

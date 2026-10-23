@@ -10,6 +10,14 @@ use tokio::sync::{watch, OwnedSemaphorePermit, Semaphore};
 pub const MAX_IMAGE_BYTES: usize = 20_000_000;
 const MAX_IMAGE_PIXELS: u64 = 64_000_000;
 const SITES: &[&str] = &["tinypng.com", "tinyjpg.com", "tinify.cn"];
+/// 单任务总预算覆盖线路切换、上传、等待压缩与结果下载。
+const TASK_BUDGET: Duration = Duration::from_secs(240);
+/// 上传并等待压缩响应的上限；包含慢上行与大图处理。
+const UPLOAD_BUDGET: Duration = Duration::from_secs(120);
+const DOWNLOAD_BUDGET: Duration = Duration::from_secs(60);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
+/// 最多两条线路，共享总预算；POST 超时不自动重传整图。
+const MAX_ATTEMPTS: usize = 2;
 const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const CANCELED: &str = "任务已取消";
 
@@ -217,10 +225,36 @@ fn network_client(https_only: bool) -> Result<reqwest::Client, String> {
         .https_only(https_only)
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
-        .connect_timeout(Duration::from_secs(8))
-        .timeout(Duration::from_secs(18))
+        .connect_timeout(CONNECT_TIMEOUT)
         .build()
         .map_err(|_| "无法初始化网络连接，请重新启动应用".into())
+}
+
+/// 每次请求的预算取「阶段上限」与「任务剩余预算」的较小值。
+fn stage_budget(deadline: tokio::time::Instant, limit: Duration) -> Result<Duration, String> {
+    let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+    if left.is_zero() {
+        return Err("压缩超过 240 秒，请检查网络后重试".into());
+    }
+    Ok(left.min(limit))
+}
+
+/// 列表缩略图：按长边 160px 等比缩放后编码为 JPEG，供前端直接展示。
+pub fn thumbnail_jpeg(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    let image = image::ImageReader::open(path)
+        .map_err(|_| "图片无法读取，请确认文件仍然存在".to_string())?
+        .with_guessed_format()
+        .map_err(|_| "无法识别图片格式".to_string())?
+        .decode()
+        .map_err(|_| "图片内容不完整或已损坏".to_string())?;
+    let thumb = image.thumbnail(160, 160);
+    let mut buffer = Vec::new();
+    let mut cursor = std::io::Cursor::new(&mut buffer);
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, 78);
+    encoder
+        .encode_image(&thumb)
+        .map_err(|_| "无法生成缩略图".to_string())?;
+    Ok(buffer)
 }
 
 fn random_forwarded_ip() -> Result<String, String> {
@@ -351,6 +385,7 @@ async fn compress_at_site(
     site: &str,
     bytes: &[u8],
     input: (&str, u32, u32),
+    deadline: tokio::time::Instant,
     progress: impl Fn(TransferProgress) + Send + Sync + 'static,
 ) -> Result<Vec<u8>, String> {
     let origin = format!("https://{site}");
@@ -361,27 +396,34 @@ async fn compress_at_site(
         total: Some(bytes.len() as u64),
     });
     let upload_progress = progress.clone();
-    let response = client
-        .post(format!("{origin}/backend/opt/shrink"))
-        .header(reqwest::header::CONTENT_TYPE, input.0)
-        .header(reqwest::header::CONTENT_LENGTH, bytes.len())
-        .header(reqwest::header::USER_AGENT, USER_AGENT)
-        .header(reqwest::header::ORIGIN, &origin)
-        .header(reqwest::header::REFERER, format!("{origin}/"))
-        .header("X-Forwarded-For", random_forwarded_ip()?)
-        .body(reqwest::Body::wrap_stream(upload_stream(
-            bytes.to_vec(),
-            move |event| upload_progress(event),
-        )))
-        .send()
-        .await
-        .map_err(|error| {
-            if error.is_timeout() {
-                "压缩服务响应超时，请重试".to_string()
-            } else {
-                "无法连接压缩服务，请检查网络后重试".to_string()
-            }
-        })?;
+    let upload_budget = stage_budget(deadline, UPLOAD_BUDGET)?;
+    let response = tokio::time::timeout(
+        upload_budget,
+        client
+            .post(format!("{origin}/backend/opt/shrink"))
+            .header(reqwest::header::CONTENT_TYPE, input.0)
+            .header(reqwest::header::CONTENT_LENGTH, bytes.len())
+            .header(reqwest::header::USER_AGENT, USER_AGENT)
+            .header(reqwest::header::ORIGIN, &origin)
+            .header(reqwest::header::REFERER, format!("{origin}/"))
+            .header("X-Forwarded-For", random_forwarded_ip()?)
+            .body(reqwest::Body::wrap_stream(upload_stream(
+                bytes.to_vec(),
+                move |event| upload_progress(event),
+            )))
+            .send(),
+    )
+    .await
+    .map_err(|_| "上传或等待压缩响应超时，请重试".to_string())?
+    .map_err(|error| {
+        if error.is_timeout() {
+            "上传或等待压缩响应超时，请重试".to_string()
+        } else if error.is_connect() {
+            "无法连接压缩服务，请检查网络后重试".to_string()
+        } else {
+            "压缩服务连接中断，请重试".to_string()
+        }
+    })?;
     if !response.status().is_success() {
         return Err(status_error(response.status()));
     }
@@ -401,22 +443,29 @@ async fn compress_at_site(
         transferred: 0,
         total: Some(output.size),
     });
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|_| "压缩结果下载失败，请重试".to_string())?;
+    let download_budget = stage_budget(deadline, DOWNLOAD_BUDGET)?;
+    let response = tokio::time::timeout(
+        download_budget,
+        client.get(url).send(),
+    )
+    .await
+    .map_err(|_| "压缩结果下载超时，请重试".to_string())?
+    .map_err(|_| "压缩结果下载失败，请重试".to_string())?;
     if !response.status().is_success() {
         return Err(status_error(response.status()));
     }
-    let result = limited_body_progress(response, MAX_IMAGE_BYTES, |transferred| {
-        progress(TransferProgress {
-            stage: "downloading",
-            transferred: transferred as u64,
-            total: Some(output.size),
-        });
-    })
-    .await?;
+    let result = tokio::time::timeout(
+        download_budget,
+        limited_body_progress(response, MAX_IMAGE_BYTES, |transferred| {
+            progress(TransferProgress {
+                stage: "downloading",
+                transferred: transferred as u64,
+                total: Some(output.size),
+            });
+        }),
+    )
+    .await
+    .map_err(|_| "压缩结果下载超时，请重试".to_string())??;
     if result.len() as u64 != output.size {
         return Err("压缩结果下载不完整，请重试".into());
     }
@@ -447,6 +496,8 @@ pub async fn compress<R: tauri::Runtime>(
     let mut slot_cancel = cancel.clone();
     let work = async {
         let _permit = state.acquire(&mut slot_cancel).await?;
+        // 预算从拿到槽位开始计算，排队时间不计入上传/下载超时。
+        let deadline = tokio::time::Instant::now() + TASK_BUDGET;
         let input_app = app.clone();
         let (source, bytes, input) = tauri::async_runtime::spawn_blocking(move || {
             let files = input_app.state::<FileState>();
@@ -460,10 +511,12 @@ pub async fn compress<R: tauri::Runtime>(
         let client = network_client(true)?;
         let source_fingerprint = crate::overwrite::fingerprint(&bytes);
         let mut last_error = "压缩服务暂时不可用，请稍后重试".to_string();
-        for site in SITES {
+        // 只切一次线路；整图重传会放大等待，因此超时后交由用户手动重试。
+        let mut switched = false;
+        for site in SITES.iter().take(MAX_ATTEMPTS) {
             let progress_app = app.clone();
             let progress_task = task_id.clone();
-            match compress_at_site(&client, site, &bytes, input, move |transfer| {
+            match compress_at_site(&client, site, &bytes, input, deadline, move |transfer| {
                 let _ = progress_app.emit(
                     "lite-progress",
                     Progress {
@@ -509,7 +562,19 @@ pub async fn compress<R: tauri::Runtime>(
                         })
                     });
                 }
-                Err(message) => last_error = message,
+                Err(message) => {
+                    let retryable = matches!(
+                        message.as_str(),
+                        "无法连接压缩服务，请检查网络后重试"
+                            | "压缩服务连接中断，请重试"
+                            | "压缩服务暂时不可用，请稍后重试"
+                    );
+                    last_error = message;
+                    if !retryable || switched || SITES.len() < 2 {
+                        break;
+                    }
+                    switched = true;
+                }
             }
         }
         Err(last_error)
@@ -517,7 +582,7 @@ pub async fn compress<R: tauri::Runtime>(
     let result = tokio::select! {
         biased;
         _ = wait_canceled(&mut cancel) => Err(CANCELED.into()),
-        result = tokio::time::timeout(Duration::from_secs(60), work) => result.unwrap_or_else(|_| Err("压缩超过 60 秒，请检查网络后重试".into())),
+        result = tokio::time::timeout(TASK_BUDGET, work) => result.unwrap_or_else(|_| Err("压缩超过 240 秒，请检查网络后重试".into())),
     };
     if result.is_err() {
         let _ = state.cancel(&task_id);
@@ -617,6 +682,25 @@ mod tests {
             status_error(reqwest::StatusCode::TOO_MANY_REQUESTS),
             "压缩请求太频繁，请稍后再试"
         );
+    }
+
+    #[test]
+    fn stage_budget_is_clamped_by_the_shared_task_deadline() {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let upload = stage_budget(deadline, UPLOAD_BUDGET).unwrap();
+        assert!(upload <= Duration::from_secs(10));
+        assert!(upload > Duration::from_secs(9));
+        assert_eq!(
+            stage_budget(tokio::time::Instant::now(), UPLOAD_BUDGET).unwrap_err(),
+            "压缩超过 240 秒，请检查网络后重试"
+        );
+    }
+
+    #[test]
+    fn task_budget_covers_the_slow_large_image_case() {
+        assert!(UPLOAD_BUDGET > Duration::from_secs(18));
+        assert!(TASK_BUDGET > UPLOAD_BUDGET + DOWNLOAD_BUDGET / 2);
+        assert!(MAX_ATTEMPTS < SITES.len());
     }
 
     #[test]
@@ -788,6 +872,7 @@ mod tests {
                 "tinypng.com",
                 &bytes,
                 input,
+                tokio::time::Instant::now() + TASK_BUDGET,
                 |event| eprintln!("native live stage: {}", event.stage),
             ),
         )

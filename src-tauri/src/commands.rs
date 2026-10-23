@@ -85,6 +85,21 @@ pub async fn read_file<R: tauri::Runtime>(
     .await
     .map_err(|_| "读取图片失败，请重试".to_string())?
 }
+
+/// 生成列表缩略图，避免仅为展示把整张大图通过 IPC 复制到前端。
+#[tauri::command]
+pub async fn read_thumbnail<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    source_id: String,
+) -> Result<Vec<u8>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let files = app.state::<FileState>();
+        let record = file_ops::source_record(&files, &source_id)?;
+        compression::thumbnail_jpeg(&record.path)
+    })
+    .await
+    .map_err(|_| "生成缩略图失败，请重试".to_string())?
+}
 //#endregion
 
 //#region 匿名压缩与会话取消
@@ -104,7 +119,10 @@ pub fn cancel_compression(
     task_id: String,
 ) -> Result<(), String> {
     state.cancel(&task_id)?;
-    file_ops::cleanup(&files, &task_id)
+    // 取消是主契约；临时文件清理失败不应让调用方以为取消失败，
+    // 否则前端会保留整批任务并继续占用压缩槽位。
+    let _ = file_ops::cleanup(&files, &task_id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -114,7 +132,10 @@ pub fn cleanup_temp_files(
     session_id: String,
 ) -> Result<(), String> {
     state.cancel_session(&session_id)?;
-    file_ops::cleanup(&files, &session_id)
+    // 会话已经永久关闭，残留临时文件不影响后续新会话；
+    // 清理失败不能让前端误判为取消失败而保留旧列表。
+    let _ = file_ops::cleanup(&files, &session_id);
+    Ok(())
 }
 //#endregion
 

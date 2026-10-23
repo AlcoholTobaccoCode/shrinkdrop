@@ -21,7 +21,9 @@ describe('readable image feedback', () => {
     item.stage = 'downloading'; expect(statusLabel(item)).toBe('正在下载');
     item.transferred = 250; item.transferTotal = 1000;
     expect(statusLabel(item)).toBe('正在下载 25%');
-    item.stage = 'processing'; expect(statusLabel(item)).toBe('正在压缩');
+    item.stage = 'processing'; expect(statusLabel(item)).toBe('等待压缩结果');
+    item.stageSeconds = 26;
+    expect(statusLabel(item)).toBe('等待压缩结果 · 已等待 26 秒');
     item.stage = 'verifying'; expect(statusLabel(item)).toBe('正在校验');
     item.status = 'canceled'; expect(statusLabel(item)).toBe('已取消');
     item.status = 'completed'; item.overwritten = true;

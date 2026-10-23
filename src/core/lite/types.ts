@@ -34,6 +34,8 @@ export interface LiteAdapter {
   chooseFiles(): Promise<SourceFile[]>;
   chooseDirectory(): Promise<SourceFile[]>;
   readFile(source: SourceFile): Promise<Uint8Array>;
+  /** 原生缩略图；缺省时回退到整图读取。 */
+  readThumbnail?(source: SourceFile): Promise<Uint8Array>;
   compress(sourceId: string, taskId: string): Promise<CompressionResult>;
   cancel(taskId: string): Promise<void>;
   save(tempFileId: string, suggestedName: string): Promise<{ saved: boolean }>;

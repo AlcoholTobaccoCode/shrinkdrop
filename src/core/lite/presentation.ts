@@ -20,10 +20,13 @@ import { t } from '../i18n';
 export function statusLabel(item: LiteItem): string {
   if (item.cancelPending) return t('正在取消');
   if (item.status === 'processing') {
-    const label = t({ uploading: '正在上传', processing: '正在压缩', downloading: '正在下载', verifying: '正在校验' }[item.stage ?? 'uploading']);
+    const label = t({ uploading: '正在上传', processing: '等待压缩结果', downloading: '正在下载', verifying: '正在校验' }[item.stage ?? 'uploading']);
     if ((item.stage === 'uploading' || item.stage === 'downloading')
       && item.transferTotal && item.transferred !== undefined) {
       return `${label} ${Math.floor(item.transferred / item.transferTotal * 100)}%`;
+    }
+    if (item.stage === 'processing' && item.stageSeconds) {
+      return t('等待压缩结果 · 已等待 {n} 秒', { n: item.stageSeconds });
     }
     return label;
   }

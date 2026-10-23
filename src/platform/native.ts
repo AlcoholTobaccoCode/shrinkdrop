@@ -12,6 +12,7 @@ export function createNativeAdapter(invoke: NativeInvoke = tauriInvoke): LiteAda
     chooseFiles: () => invoke<SourceFile[]>('choose_files'),
     chooseDirectory: () => invoke<SourceFile[]>('choose_directory'),
     readFile: async source => Uint8Array.from(await invoke<number[]>('read_file', { sourceId: source.id })),
+    readThumbnail: async source => Uint8Array.from(await invoke<number[]>('read_thumbnail', { sourceId: source.id })),
     compress: (sourceId, taskId) => invoke<CompressionResult>('compress_image', { sourceId, taskId }),
     cancel: taskId => invoke<void>('cancel_compression', { taskId }),
     save: (tempFileId, suggestedName) => invoke<{ saved: boolean }>('save_temp_file', { tempFileId, suggestedName }),
