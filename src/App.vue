@@ -56,6 +56,18 @@ const shareGroupsEl = ref<HTMLElement>();
 const downloadableItems = computed(() => shareState.items.filter(item => item.kind !== 'text'));
 const selectedShareCount = computed(() => selectedShareIds.value.length);
 
+// 列表/卡片只影响展示层；两者共用 state.items 与同一组任务操作。
+type TaskView = 'list' | 'cards';
+const TASK_VIEW_KEY = 'shrinkdrop:task-view';
+const taskView = ref<TaskView>(
+  typeof localStorage !== 'undefined' && localStorage.getItem(TASK_VIEW_KEY) === 'cards' ? 'cards' : 'list'
+);
+function setTaskView(next: TaskView) {
+  if (taskView.value === next) return;
+  taskView.value = next;
+  try { localStorage.setItem(TASK_VIEW_KEY, next); } catch { /* 存储不可用时仅保留本次会话。 */ }
+}
+
 function isShareSelected(id: number) {
   return selectedShareIds.value.includes(id);
 }
@@ -302,8 +314,14 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
                   <LiteIcon name="plus" /><span>{{ dragging ? t('松手即可添加') : t('拖入更多图片或文件夹') }}</span>
                   <span class="drop-limit">{{ t('单张 ≤ 20 MB') }}</span>
                 </button>
-                <div class="list-heading" aria-hidden="true"><span>{{ t('图片') }}</span><span>{{ t('原始大小') }}</span><span>{{ t('压缩后') }}</span><span>{{ t('变化') }}</span><span>{{ t('操作') }}</span></div>
-                <ul class="image-list" :aria-label="t('待压缩图片')">
+                <div class="task-toolbar">
+                  <div class="list-heading" aria-hidden="true"><span>{{ t('图片') }}</span><span>{{ t('原始大小') }}</span><span>{{ t('压缩后') }}</span><span>{{ t('变化') }}</span><span>{{ t('操作') }}</span></div>
+                  <div class="view-switch" role="group" :aria-label="t('任务视图')">
+                    <button class="view-switch-button" :aria-pressed="taskView === 'list'" :aria-label="t('列表视图')" :title="t('列表视图')" @click="setTaskView('list')"><LiteIcon name="list" /></button>
+                    <button class="view-switch-button" :aria-pressed="taskView === 'cards'" :aria-label="t('卡片视图')" :title="t('卡片视图')" @click="setTaskView('cards')"><LiteIcon name="grid" /></button>
+                  </div>
+                </div>
+                <ul v-if="taskView === 'list'" class="image-list" :aria-label="t('待压缩图片')">
                   <li v-for="item in state.items" :key="item.id" class="image-row"
                     :class="{ 'image-row--error': item.status === 'failed' || item.saveError || item.overwriteError,
                       'image-row--busy': item.status === 'processing', 'image-row--stopped': item.status === 'canceled' }"
@@ -343,6 +361,43 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
                       <button v-if="item.status !== 'queued' && item.status !== 'processing'" class="icon-button remove-button" :disabled="summary.saving || state.clearing" :aria-label="`${t('移除')} ${item.source.name}`" @click="session.remove(item.id)"><LiteIcon name="close" /></button>
                     </div>
                     <p v-if="item.error || item.cancelError || item.saveError || item.overwriteError" class="row-error" role="status">{{ item.overwriteError || item.saveError || item.error || item.cancelError }}</p>
+                  </li>
+                </ul>
+                <ul v-else class="task-cards" :aria-label="t('待压缩图片')">
+                  <li v-for="item in state.items" :key="item.id" class="task-card"
+                    :class="{ 'task-card--error': item.status === 'failed' || item.saveError || item.overwriteError,
+                      'task-card--busy': item.status === 'processing', 'task-card--stopped': item.status === 'canceled' }"
+                    :style="{ '--item-progress': `${item.progress * 100}%` }">
+                    <div v-if="item.status !== 'draft'" class="row-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                      :aria-valuenow="item.status === 'completed' ? 100 : undefined"
+                      :aria-label="`${item.source.name} ${t('压缩进度')}`" :aria-valuetext="statusLabel(item)" />
+                    <span class="card-thumb">
+                      <img v-if="item.thumbnailUrl && !item.thumbnailFailed" :src="item.thumbnailUrl" alt="" loading="lazy" decoding="async" @error="item.thumbnailFailed = true" />
+                      <LiteIcon v-else name="image" />
+                    </span>
+                    <p class="card-name" :title="item.source.relativePath || item.source.name">{{ item.source.name }}</p>
+                    <p class="card-metrics">
+                      <span class="card-size">{{ formatBytes(item.source.size) }} → {{ item.result ? formatBytes(item.result.size) : '—' }}</span>
+                      <span v-if="item.result" class="file-change" :class="`file-change--${sizeChange(item.source.size, item.result.size).tone}`">{{ sizeChange(item.source.size, item.result.size).text }}</span>
+                    </p>
+                    <p class="card-status" :class="`file-status--${item.status}`" aria-live="polite">
+                      <span v-if="item.status === 'processing' || item.status === 'queued'" class="status-dot" :class="{ 'status-dot--busy': item.status === 'processing' }" />
+                      <LiteIcon v-if="item.status === 'completed'" name="check" />{{ statusLabel(item) }}
+                    </p>
+                    <p v-if="item.error || item.cancelError || item.saveError || item.overwriteError" class="card-error" role="status">{{ item.overwriteError || item.saveError || item.error || item.cancelError }}</p>
+                    <div class="card-actions">
+                      <button v-if="item.status === 'queued' || item.status === 'processing'" class="row-button" :disabled="item.cancelPending || state.clearing" :aria-label="`${t('取消')} ${item.source.name}`" @click="session.cancel(item.id)">{{ t('取消') }}</button>
+                      <button v-else-if="item.status === 'failed' || item.status === 'canceled'" class="row-button" :disabled="!desktop || state.clearing" :aria-label="`${t('重试')} ${item.source.name}`" @click="session.retry(item.id)"><LiteIcon name="retry" />{{ t('重试') }}</button>
+                      <button v-if="item.status === 'completed'" class="row-button row-button--save" :disabled="!desktop || summary.saving || state.clearing" :aria-label="`${item.saveError ? t('重试保存') : t('保存')} ${item.source.name}`" @click="session.save(item.id)">
+                        <LiteIcon name="download" />{{ item.saving ? t('保存中') : item.saveError ? t('重试保存') : t('保存') }}
+                      </button>
+                      <button v-if="item.status === 'completed'" class="row-button row-button--overwrite"
+                        :disabled="!desktop || summary.saving || state.clearing || item.overwritten"
+                        :aria-label="`${item.overwritten ? t('已覆盖') : item.overwriteError ? t('重试覆盖') : t('覆盖')} ${item.source.name}`"
+                        :title="item.overwritten ? t('已用压缩结果覆盖原图') : t('确认后用压缩结果替换原图')"
+                        @click="session.overwrite(item.id)"><LiteIcon name="replace" />{{ item.overwriting ? t('覆盖中') : item.overwritten ? t('已覆盖') : t('覆盖') }}</button>
+                      <button v-if="item.status !== 'queued' && item.status !== 'processing'" class="icon-button remove-button" :disabled="summary.saving || state.clearing" :aria-label="`${t('移除')} ${item.source.name}`" @click="session.remove(item.id)"><LiteIcon name="close" /></button>
+                    </div>
                   </li>
                 </ul>
               </template>
