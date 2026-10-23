@@ -1,5 +1,5 @@
 <script setup lang="ts">
-withDefaults(defineProps<{ name: 'image' | 'plus' | 'folder' | 'upload' | 'download' | 'close' | 'retry' | 'check' | 'replace' | 'settings' | 'link' | 'list' | 'grid' }>(), { name: 'image' });
+withDefaults(defineProps<{ name: 'image' | 'plus' | 'folder' | 'upload' | 'download' | 'close' | 'retry' | 'check' | 'replace' | 'settings' | 'link' | 'list' | 'grid' | 'chevron' }>(), { name: 'image' });
 const paths = {
   image: 'M4 4h16v16H4z M4 15l5-5 5 5 3-3 3 3 M15 8h.01',
   plus: 'M12 5v14 M5 12h14',
@@ -13,7 +13,8 @@ const paths = {
   link: 'M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1 M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1',
   settings: 'M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.1A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.24.6.8 1 1.55 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z',
   list: 'M8 5h11 M8 12h11 M8 19h11 M3.5 5h.01 M3.5 12h.01 M3.5 19h.01',
-  grid: 'M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z'
+  grid: 'M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z',
+  chevron: 'M9 6l6 6-6 6'
 };
 </script>
 

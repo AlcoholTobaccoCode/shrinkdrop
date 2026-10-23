@@ -186,6 +186,8 @@ const en: Record<string, string> = {
   '端口修改后会重启分享': 'Saving a new port restarts sharing',
   '切换网卡': 'Switch interface',
   '分组': 'Groups',
+  '展开分组': 'Show groups',
+  '收起分组': 'Hide groups',
   '默认分组在根路径；自定义分组在 /g/路径，文件互不共享，可独立设置访问保护。':
     'The default group lives at the root; custom groups live under /g/ with isolated files and independent access protection.',
   '还没有自定义分组，默认分组始终可用。': 'No custom groups yet; the default group is always available.',

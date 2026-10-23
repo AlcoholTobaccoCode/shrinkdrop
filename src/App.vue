@@ -53,6 +53,8 @@ const sharePort = share.port;
 const selectedShareIds = ref<number[]>([]);
 const downloadBusy = ref(false);
 const shareGroupsEl = ref<HTMLElement>();
+// 分组默认收起，展开后限高滚动，避免多分组时挤占列表空间。
+const groupsOpen = ref(false);
 const downloadableItems = computed(() => shareState.items.filter(item => item.kind !== 'text'));
 const selectedShareCount = computed(() => selectedShareIds.value.length);
 // 地址栏当前是否走 IPv6；按钮据此显示可切换到的另一族地址。
@@ -114,11 +116,15 @@ const editingPort = ref(false);
 const portDraft = ref(0);
 
 function onGroupsWheel(event: WheelEvent) {
+  // 分组现在按行换行、纵向滚动；只拦截仍可继续滚动的方向。
   const element = shareGroupsEl.value;
-  if (!element || element.scrollWidth <= element.clientWidth) return;
+  if (!element || element.scrollHeight <= element.clientHeight) return;
   if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+  const atTop = element.scrollTop <= 0 && event.deltaY < 0;
+  const atBottom = element.scrollTop + element.clientHeight >= element.scrollHeight - 1 && event.deltaY > 0;
+  if (atTop || atBottom) return;
   event.preventDefault();
-  element.scrollLeft += event.deltaY;
+  element.scrollTop += event.deltaY;
 }
 
 function toggleShare() {
@@ -439,25 +445,39 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
             <p v-if="!desktop" class="preview-banner" role="note">{{ t('当前为浏览器预览。局域网分享需要桌面版。') }}</p>
 
             <div class="share-workspace">
-              <div class="share-status">
-                <span class="share-dot" :class="{ 'is-on': shareRunning }" aria-hidden="true" />
-                <div class="share-copy">
-                  <strong>{{ shareRunning ? t('正在分享') : shareBusy ? t('正在准备') : t('分享未开始') }}</strong>
-                  <p>{{ shareRunning
-                    ? t('已分享 {n} 项，手机扫码即可下载', { n: shareState.items.length })
-                    : t('手机与电脑连同一个 Wi-Fi，选择文件或文件夹后扫码下载') }}</p>
-                </div>
-                <div class="share-status-actions">
-                  <button class="share-service-toggle" :class="{ 'is-on': shareRunning }" role="switch" :aria-checked="shareRunning"
-                    :disabled="!desktop || shareBusy" @click="toggleShare">
-                    <span class="service-dot" aria-hidden="true"></span>
-                    <span>{{ shareRunning ? t('分享中') : t('开启服务') }}</span>
+              <div class="share-status-card" :class="{ 'is-expanded': groupsOpen }">
+                <div class="share-status">
+                  <button v-if="shareState.groups.length > 1" type="button" class="share-status-toggle"
+                    :aria-expanded="groupsOpen" :aria-controls="'share-groups'" :aria-label="groupsOpen ? t('收起分组') : t('展开分组')"
+                    @click="groupsOpen = !groupsOpen">
+                    <LiteIcon name="chevron" />
                   </button>
-                  <span v-if="shareRunning && sharePort" class="share-port">
-                    <template v-if="!editingPort">{{ t('端口') }} <button class="port-button" :title="t('端口修改后会重启分享')" @click="startEditPort">{{ sharePort }}</button></template>
-                    <input v-else v-model.number="portDraft" class="port-input" type="number" min="0" max="65535"
-                      :aria-label="t('端口')" @blur="savePort" @keydown.enter.prevent="savePort" @keydown.esc="editingPort = false" />
-                  </span>
+                  <span class="share-dot" :class="{ 'is-on': shareRunning }" aria-hidden="true" />
+                  <div class="share-copy">
+                    <strong>{{ shareRunning ? t('正在分享') : shareBusy ? t('正在准备') : t('分享未开始') }}</strong>
+                    <p>{{ shareRunning
+                      ? t('已分享 {n} 项，手机扫码即可下载', { n: shareState.items.length })
+                      : t('手机与电脑连同一个 Wi-Fi，选择文件或文件夹后扫码下载') }}</p>
+                  </div>
+                  <div class="share-status-actions">
+                    <button class="share-service-toggle" :class="{ 'is-on': shareRunning }" role="switch" :aria-checked="shareRunning"
+                      :disabled="!desktop || shareBusy" @click="toggleShare">
+                      <span class="service-dot" aria-hidden="true"></span>
+                      <span>{{ shareRunning ? t('分享中') : t('开启服务') }}</span>
+                    </button>
+                    <span v-if="shareRunning && sharePort" class="share-port">
+                      <template v-if="!editingPort">{{ t('端口') }} <button class="port-button" :title="t('端口修改后会重启分享')" @click="startEditPort">{{ sharePort }}</button></template>
+                      <input v-else v-model.number="portDraft" class="port-input" type="number" min="0" max="65535"
+                        :aria-label="t('端口')" @blur="savePort" @keydown.enter.prevent="savePort" @keydown.esc="editingPort = false" />
+                    </span>
+                  </div>
+                </div>
+                <div v-if="shareRunning && shareState.groups.length > 1 && groupsOpen" id="share-groups" ref="shareGroupsEl"
+                  class="share-groups" role="tablist" :aria-label="t('分组')" @wheel="onGroupsWheel">
+                  <button v-for="group in shareState.groups" :key="group.id" type="button" class="share-group-tab"
+                    :aria-selected="shareState.activeGroup === group.id" @click="share.setGroup(group.id)">
+                    {{ group.id === 'default' ? t('默认分组') : group.name }}<span>{{ group.slug ? `/g/${group.slug}` : t('根路径') }}</span>
+                  </button>
                 </div>
               </div>
 
@@ -465,12 +485,6 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
               <p v-if="shareState.warning" class="notice" role="note">{{ t(shareState.warning) }}</p>
 
               <template v-if="shareRunning">
-                <div v-if="shareState.groups.length > 1" ref="shareGroupsEl" class="share-groups" role="tablist" :aria-label="t('分组')" @wheel="onGroupsWheel">
-                  <button v-for="group in shareState.groups" :key="group.id" type="button" class="share-group-tab"
-                    :aria-selected="shareState.activeGroup === group.id" @click="share.setGroup(group.id)">
-                    {{ group.id === 'default' ? t('默认分组') : group.name }}<span>{{ group.slug ? `/g/${group.slug}` : t('根路径') }}</span>
-                  </button>
-                </div>
                 <div class="share-link-row">
                   <div class="share-link-copy">
                     <span class="share-label">{{ t('分享链接') }}</span>
