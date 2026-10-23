@@ -1393,6 +1393,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preview_is_inline_with_typed_ranges_while_download_stays_attachment() {
+        let path = temp_file("clip.mp3", b"0123456789abcdef");
+        let items = collect_items(vec![path.display().to_string()]).unwrap();
+        let (base, _token, _items) = server_tests::spawn(items).await;
+
+        let client = reqwest::Client::new();
+        let list: serde_json::Value = client
+            .get(format!("{base}/api/items"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(list[0]["preview"], true);
+        let id = list[0]["id"].as_u64().unwrap();
+
+        let preview = client
+            .get(format!("{base}/api/preview?id={id}"))
+            .header(reqwest::header::RANGE, "bytes=4-7")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(preview.status(), reqwest::StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            preview.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
+            "audio/mpeg"
+        );
+        assert_eq!(
+            preview
+                .headers()
+                .get(reqwest::header::CONTENT_DISPOSITION)
+                .unwrap(),
+            "inline"
+        );
+        assert_eq!(preview.bytes().await.unwrap().as_ref(), b"4567");
+
+        let download = client
+            .get(format!("{base}/api/download?id={id}"))
+            .send()
+            .await
+            .unwrap();
+        assert!(download
+            .headers()
+            .get(reqwest::header::CONTENT_DISPOSITION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("attachment"));
+    }
+
+    #[tokio::test]
+    async fn preview_rejects_unknown_file_types() {
+        let path = temp_file("notes.xyz", b"data");
+        let items = collect_items(vec![path.display().to_string()]).unwrap();
+        let (base, _token, _items) = server_tests::spawn(items).await;
+        let client = reqwest::Client::new();
+        let list: serde_json::Value = client
+            .get(format!("{base}/api/items"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(list[0]["preview"], false);
+        let response = client
+            .get(format!("{base}/api/preview?id={}", list[0]["id"]))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE
+        );
+    }
+
+    #[tokio::test]
     async fn live_list_reflects_added_items() {
         let first = temp_file("first.txt", b"one");
         let second = temp_file("second.txt", b"two");

@@ -62,7 +62,38 @@
       cancel: '取消',
       copy: '复制',
       copied: '已复制',
-      textItem: '文字'
+      textItem: '文字',
+      preview: '预览',
+      collapse: '收起',
+      openImage: '查看大图',
+      imagePreview: '图片预览',
+      closePreview: '关闭预览',
+      audioPreview: '音频',
+      videoPreview: '视频',
+      previewLoading: '正在加载预览…',
+      previewError: '预览加载失败，请重试',
+      previewUnsupported: '当前浏览器不支持此文件的编码',
+      retryPreview: '重新加载',
+      downloadFile: '下载文件',
+      previewUnavailable: '暂不预览',
+      copyFull: '复制全文',
+      copySource: '复制源码',
+      markdownPreview: '预览',
+      markdownSource: '源码',
+      back15: '后退 15 秒',
+      forward15: '前进 15 秒',
+      play: '播放',
+      pause: '暂停',
+      mute: '静音',
+      unmute: '取消静音',
+      rate: '倍率',
+      imageHint: '等比完整显示 · 点击查看大图',
+      textLimit: '长文本可在框内滚动',
+      prev: '上一张',
+      next: '下一张',
+      zoom: '原图尺寸',
+      fit: '适配窗口',
+      previewTooLarge: '文件超过 512 KB，请下载后查看'
     },
     en: {
       tagline: 'LAN sharing',
@@ -110,7 +141,38 @@
       cancel: 'Cancel',
       copy: 'Copy',
       copied: 'Copied',
-      textItem: 'Text'
+      textItem: 'Text',
+      preview: 'Preview',
+      collapse: 'Collapse',
+      openImage: 'View large',
+      imagePreview: 'Image preview',
+      closePreview: 'Close preview',
+      audioPreview: 'Audio',
+      videoPreview: 'Video',
+      previewLoading: 'Loading preview…',
+      previewError: 'Preview failed to load. Try again.',
+      previewUnsupported: 'This browser cannot play this encoding',
+      retryPreview: 'Reload',
+      downloadFile: 'Download file',
+      previewUnavailable: 'No preview',
+      copyFull: 'Copy all',
+      copySource: 'Copy source',
+      markdownPreview: 'Preview',
+      markdownSource: 'Source',
+      back15: 'Back 15 seconds',
+      forward15: 'Forward 15 seconds',
+      play: 'Play',
+      pause: 'Pause',
+      mute: 'Mute',
+      unmute: 'Unmute',
+      rate: 'Speed',
+      imageHint: 'Full image, scaled to fit · tap for large view',
+      textLimit: 'Long text scrolls inside the box',
+      prev: 'Previous',
+      next: 'Next',
+      zoom: 'Actual size',
+      fit: 'Fit to window',
+      previewTooLarge: 'File exceeds 512 KB. Download it to view.'
     }
   };
 
@@ -135,6 +197,14 @@
     connected: false,
     auth: null,
     serverLang: ''
+  };
+
+  // 同一列表只展开一项；媒体在收起、切换目录或刷新时暂停并记住位置。
+  const preview = {
+    openKey: '',
+    media: {},
+    markdownMode: 'preview',
+    fullImage: null
   };
 
   let loadSerial = 0;
@@ -162,7 +232,13 @@
     code: svg('<path d="M9 7l-5 5 5 5M15 7l5 5-5 5"/>'),
     text: svg('<path d="M5 5h14M5 10h14M5 15h9M5 20h6"/>'),
     download: svg('<path d="M12 4v10M8 10l4 4 4-4M5 19h14"/>'),
-    chevron: svg('<path d="M9 6l6 6-6 6"/>')
+    chevron: svg('<path d="M9 6l6 6-6 6"/>'),
+    rotateBack: svg('<path d="M4 11a8 8 0 1 1 2.3 6.7"/><path d="M4 5v6h6"/>'),
+    rotateForward: svg('<path d="M20 11a8 8 0 1 0-2.3 6.7"/><path d="M20 5v6h-6"/>'),
+    play: svg('<path d="M8 5l11 7-11 7z"/>'),
+    pause: svg('<path d="M8 5v14M16 5v14"/>'),
+    volume: svg('<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M17 9a4 4 0 0 1 0 6"/>'),
+    volumeOff: svg('<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M17 9l4 6M21 9l-4 6"/>')
   };
 
   const EXT_KIND = {
@@ -226,6 +302,57 @@
     return BASE + '/api/thumb?id=' + encodeURIComponent(id) + '&path=' + encodeURIComponent(path);
   }
 
+  function previewUrl(id, path) {
+    let url = BASE + '/api/preview?id=' + encodeURIComponent(id);
+    if (path) url += '&path=' + encodeURIComponent(path);
+    return url;
+  }
+
+  function entryKey(entry, root) {
+    return (root ? 'root' : 'dir:' + state.itemId) + ':' + (entry.path || '') + ':' + entry.name;
+  }
+
+  function extensionOf(name) {
+    const dot = (name || '').lastIndexOf('.');
+    return dot >= 0 ? name.slice(dot + 1).toLowerCase() : '';
+  }
+
+  function previewKind(entry) {
+    if (entry.kind === 'text') return 'text';
+    if (entry.kind === 'dir') return '';
+    const ext = extensionOf(entry.name);
+    if (ext === 'md' || ext === 'markdown') return 'markdown';
+    if (CODE_EXTENSIONS.has(ext)) return 'code';
+    if (entry.preview) {
+      if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif'].includes(ext)) return 'image';
+      if (['mp3', 'wav', 'm4a', 'aac', 'flac'].includes(ext)) return 'audio';
+      if (['mp4', 'm4v', 'webm', 'mov', 'mkv'].includes(ext)) return 'video';
+      if (ext === 'txt') return 'textfile';
+    }
+    return '';
+  }
+
+  // 代码类预览：只在这些扩展名上启用，服务端同样按白名单返回 text/plain。
+  const CODE_EXTENSIONS = new Set([
+    'html', 'htm', 'css', 'scss', 'less',
+    'js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'json', 'jsonl',
+    'py', 'java', 'kt', 'go', 'rs', 'rb', 'php',
+    'c', 'h', 'cc', 'cpp', 'hpp', 'cs', 'swift',
+    'sh', 'bash', 'zsh', 'sql', 'yml', 'yaml', 'toml', 'xml', 'ini',
+    'vue', 'svelte'
+  ]);
+
+  const CODE_LANG = {
+    html: 'xml', htm: 'xml', xml: 'xml', vue: 'xml', svelte: 'xml',
+    js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+    ts: 'typescript', tsx: 'typescript', json: 'json', jsonl: 'json',
+    py: 'python', java: 'java', kt: 'kotlin', go: 'go', rs: 'rust', rb: 'ruby',
+    php: 'php', c: 'c', h: 'c', cc: 'cpp', cpp: 'cpp', hpp: 'cpp', cs: 'csharp',
+    swift: 'swift', sh: 'bash', bash: 'bash', zsh: 'bash', sql: 'sql',
+    yml: 'yaml', yaml: 'yaml', toml: 'ini', ini: 'ini',
+    css: 'css', scss: 'scss', less: 'less'
+  };
+
   async function getJSON(url) {
     const response = await fetch(url, { cache: 'no-store', headers: { accept: 'application/json' } });
     if (!response.ok) throw new Error('HTTP ' + response.status);
@@ -266,7 +393,7 @@
 
   function textRowFor(entry) {
     const li = document.createElement('li');
-    li.className = 'row';
+    li.className = 'row row--expandable';
     const card = document.createElement('div');
     card.className = 'row-link row-link--text';
     const icon = document.createElement('span');
@@ -281,6 +408,17 @@
     meta.className = 'meta';
     meta.textContent = [t('textItem'), formatDate(entry.modified)].filter(Boolean).join(' · ');
     main.append(name, meta);
+
+    const key = entryKey(entry, true);
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'btn ghost';
+    toggle.textContent = preview.openKey === key ? t('collapse') : t('preview');
+    toggle.setAttribute('aria-expanded', String(preview.openKey === key));
+    toggle.addEventListener('click', () => {
+      preview.openKey = preview.openKey === key ? '' : key;
+      renderList();
+    });
     const copy = document.createElement('button');
     copy.type = 'button';
     copy.className = 'btn ghost';
@@ -295,15 +433,29 @@
         copy.textContent = t('copy');
       }
     });
-    card.append(icon, main, copy);
+    card.append(icon, main, toggle, copy);
     li.append(card);
+
+    if (preview.openKey === key) {
+      const panel = document.createElement('div');
+      panel.className = 'preview';
+      panel.id = 'preview-' + encodeURIComponent(key);
+      const body = document.createElement('div');
+      body.className = 'preview-text';
+      body.tabIndex = 0;
+      body.textContent = entry.text || '';
+      panel.append(body);
+      li.append(panel);
+    }
     return li;
   }
 
   function rowFor(entry, root) {
     if (entry.kind === 'text') return textRowFor(entry);
     const li = document.createElement('li');
+    const kind = previewKind(entry);
     li.className = 'row' + (entry.kind === 'dir' ? ' row--dir' : '');
+    if (kind) li.className += ' row--expandable';
 
     const link = document.createElement(entry.kind === 'dir' ? 'button' : 'a');
     link.className = 'row-link';
@@ -312,6 +464,15 @@
       link.addEventListener('click', () => {
         navigate(root ? entry.id : state.itemId, root ? '' : entry.path);
       });
+    } else if (kind) {
+      // 有预览的类型：标题区域展开预览，下载仍由右侧按钮负责。
+      link.type = 'button';
+      link.setAttribute('aria-expanded', String(preview.openKey === entryKey(entry, root)));
+      link.addEventListener('click', () => {
+        const key = entryKey(entry, root);
+        preview.openKey = preview.openKey === key ? '' : key;
+        renderList();
+      });
     } else {
       link.href = downloadUrl(root ? entry.id : state.itemId, root ? '' : entry.path);
       link.setAttribute('download', entry.name || '');
@@ -319,9 +480,9 @@
 
     const icon = document.createElement('span');
     icon.className = 'icon';
-    if (entry.thumb && !root) {
+    if ((entry.thumb || kind === 'image') && entry.kind === 'file') {
       const img = document.createElement('img');
-      img.src = thumbUrl(state.itemId, entry.path);
+      img.src = thumbUrl(root ? entry.id : state.itemId, root ? '' : entry.path);
       img.alt = '';
       img.loading = 'lazy';
       img.decoding = 'async';
@@ -351,16 +512,467 @@
 
     const action = document.createElement('span');
     action.className = 'action';
-    action.innerHTML = entry.kind === 'dir' ? ICONS.chevron : ICONS.download;
+    if (kind) {
+      action.innerHTML = ICONS.chevron;
+      action.classList.add('action--chevron');
+    } else {
+      action.innerHTML = entry.kind === 'dir' ? ICONS.chevron : ICONS.download;
+    }
 
     link.append(icon, main, action);
     li.append(link);
+
+    if (kind) {
+      const download = document.createElement('button');
+      download.type = 'button';
+      download.className = 'btn ghost row-download';
+      download.innerHTML = ICONS.download;
+      download.setAttribute('aria-label', t('download') + ' ' + (entry.name || ''));
+      download.addEventListener('click', () => {
+        const anchor = document.createElement('a');
+        anchor.href = downloadUrl(root ? entry.id : state.itemId, root ? '' : entry.path);
+        anchor.setAttribute('download', entry.name || '');
+        document.body.append(anchor);
+        anchor.click();
+        anchor.remove();
+      });
+      li.append(download);
+    } else if (entry.kind === 'file') {
+      // 不支持预览的文件明确标注，避免用户误以为点击无反应。
+      const badge = document.createElement('span');
+      badge.className = 'preview-unavailable';
+      badge.textContent = t('previewUnavailable');
+      link.insertBefore(badge, action);
+    }
+
+    if (preview.openKey === entryKey(entry, root) && kind) {
+      li.append(previewPanel(entry, root, kind));
+    }
     return li;
   }
 
+  /** 条目展开后的预览容器；只在这里按需加载媒体。 */
+  function previewPanel(entry, root, kind) {
+    const id = root ? entry.id : state.itemId;
+    const path = root ? '' : entry.path;
+    const key = entryKey(entry, root);
+    const panel = document.createElement('div');
+    panel.className = 'preview';
+    panel.id = 'preview-' + encodeURIComponent(key);
+
+    if (kind === 'text' || kind === 'textfile') {
+      const body = document.createElement('div');
+      body.className = 'preview-text';
+      body.tabIndex = 0;
+      if (kind === 'text') {
+        body.textContent = entry.text || '';
+      } else {
+        body.textContent = t('previewLoading');
+        void fetch(previewUrl(id, path), { cache: 'no-store' })
+          .then(response => {
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            return response.text();
+          })
+          .then(text => { if (body.isConnected) body.textContent = text; })
+          .catch(() => { if (body.isConnected) panel.replaceChildren(previewError(entry, id, path)); });
+      }
+      panel.append(body);
+      return panel;
+    }
+    if (kind === 'markdown') {
+      return markdownPanel(entry, id, path, panel);
+    }
+    if (kind === 'code') {
+      return codePanel(entry, id, path, panel);
+    }
+    if (kind === 'image') {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'preview-image';
+      button.setAttribute('aria-label', t('openImage') + ' ' + (entry.name || ''));
+      const img = document.createElement('img');
+      img.src = previewUrl(id, path);
+      img.alt = entry.name || '';
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      img.addEventListener('error', () => button.replaceWith(previewError(entry, id, path)));
+      button.append(img);
+      const hint = document.createElement('span');
+      hint.className = 'preview-hint';
+      hint.textContent = t('imageHint');
+      button.append(hint);
+      button.addEventListener('click', () => openFullImage(entry, id, path));
+      const caption = document.createElement('p');
+      caption.className = 'preview-caption';
+      caption.textContent = t('imageHint');
+      panel.append(button, caption);
+      return panel;
+    }
+    if (kind === 'audio') {
+      return audioPanel(entry, id, path, panel);
+    }
+    if (kind === 'video') {
+      const video = document.createElement('video');
+      video.className = 'preview-video';
+      video.src = previewUrl(id, path);
+      video.controls = true;
+      video.playsInline = true;
+      video.preload = 'metadata';
+      video.setAttribute('aria-label', t('videoPreview') + ' ' + (entry.name || ''));
+      video.addEventListener('error', () => panel.replaceChildren(previewError(entry, id, path)));
+      panel.append(video);
+      return panel;
+    }
+    return panel;
+  }
+
+  function previewError(entry, id, path, reason) {
+    const box = document.createElement('div');
+    box.className = 'preview-error';
+    box.setAttribute('role', 'status');
+    const message = document.createElement('span');
+    message.textContent = reason || t('previewUnsupported');
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'btn ghost';
+    retry.textContent = t('retryPreview');
+    retry.addEventListener('click', () => {
+      const fresh = box.cloneNode(false);
+      fresh.textContent = t('previewLoading');
+      box.replaceWith(fresh);
+      renderList();
+    });
+    const download = document.createElement('button');
+    download.type = 'button';
+    download.className = 'btn ghost';
+    download.textContent = t('downloadFile');
+    download.addEventListener('click', () => {
+      const anchor = document.createElement('a');
+      anchor.href = downloadUrl(id, path);
+      anchor.setAttribute('download', entry.name || '');
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+    });
+    box.append(message, retry, download);
+    return box;
+  }
+
+  function audioPanel(entry, id, path, panel) {
+    const key = preview.openKey;
+    const saved = preview.media[key] || { time: 0, rate: 1, volume: 0.8 };
+    const box = document.createElement('div');
+    box.className = 'preview-audio';
+    const audio = document.createElement('audio');
+    audio.preload = 'metadata';
+    audio.src = previewUrl(id, path);
+    audio.volume = saved.volume;
+    audio.playbackRate = saved.rate;
+
+    const seek = document.createElement('input');
+    seek.type = 'range';
+    seek.className = 'preview-range';
+    seek.min = '0';
+    seek.max = '1';
+    seek.step = '0.1';
+    seek.value = '0';
+    seek.setAttribute('aria-label', t('audioPreview') + ' ' + (entry.name || ''));
+    const timeRow = document.createElement('div');
+    timeRow.className = 'preview-time-row';
+    const currentLabel = document.createElement('span');
+    currentLabel.textContent = '00:00';
+    const durationLabel = document.createElement('span');
+    durationLabel.textContent = '--:--';
+    timeRow.append(currentLabel, durationLabel);
+
+    const controls = document.createElement('div');
+    controls.className = 'preview-controls';
+    const back = iconButton(ICONS.rotateBack, t('back15'));
+    const play = iconButton(ICONS.play, t('play'));
+    play.classList.add('preview-play');
+    const forward = iconButton(ICONS.rotateForward, t('forward15'));
+    const rate = document.createElement('button');
+    rate.type = 'button';
+    rate.className = 'preview-rate';
+    rate.textContent = saved.rate + '×';
+    rate.setAttribute('aria-label', t('rate') + ' ' + saved.rate + '×');
+    const mute = iconButton(ICONS.volume, t('mute'));
+    controls.append(back, play, forward, rate, mute);
+
+    const formatTime = seconds => {
+      if (!Number.isFinite(seconds)) return '--:--';
+      const total = Math.floor(seconds);
+      return String(Math.floor(total / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+    };
+    const sync = () => {
+      const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+      seek.max = String(duration || 1);
+      seek.value = String(audio.currentTime);
+      seek.style.setProperty('--value', (duration ? audio.currentTime / duration * 100 : 0) + '%');
+      currentLabel.textContent = formatTime(audio.currentTime);
+      durationLabel.textContent = formatTime(duration);
+    };
+
+    audio.addEventListener('loadedmetadata', () => {
+      if (saved.time) audio.currentTime = Math.min(saved.time, audio.duration || 0);
+      sync();
+    });
+    audio.addEventListener('timeupdate', sync);
+    audio.addEventListener('play', () => setPlayIcon(play, true));
+    audio.addEventListener('pause', () => setPlayIcon(play, false));
+    audio.addEventListener('error', () => panel.replaceChildren(previewError(entry, id, path)));
+    play.addEventListener('click', () => {
+      if (audio.paused) void audio.play().catch(() => {});
+      else audio.pause();
+    });
+    back.addEventListener('click', () => { audio.currentTime = Math.max(0, audio.currentTime - 15); sync(); });
+    forward.addEventListener('click', () => { audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 15); sync(); });
+    seek.addEventListener('input', () => { audio.currentTime = Number(seek.value); sync(); });
+    rate.addEventListener('click', () => {
+      const rates = [1, 1.5, 2, 2.5, 3];
+      const next = rates[(rates.indexOf(audio.playbackRate) + 1) % rates.length];
+      audio.playbackRate = next;
+      rate.textContent = next + '×';
+      rate.setAttribute('aria-label', t('rate') + ' ' + next + '×');
+      preview.media[key] = {
+        time: audio.currentTime,
+        rate: next,
+        volume: audio.volume
+      };
+    });
+    mute.addEventListener('click', () => {
+      audio.muted = !audio.muted;
+      mute.innerHTML = audio.muted ? ICONS.volumeOff : ICONS.volume;
+      mute.setAttribute('aria-label', audio.muted ? t('unmute') : t('mute'));
+    });
+
+    panel.addEventListener('preview-hide', () => {
+      preview.media[key] = {
+        time: audio.currentTime,
+        rate: audio.playbackRate,
+        volume: audio.volume
+      };
+      audio.pause();
+    }, { once: true });
+
+    box.append(audio, seek, timeRow, controls);
+    panel.append(box);
+    return panel;
+  }
+
+  function setPlayIcon(button, playing) {
+    button.innerHTML = playing ? ICONS.pause : ICONS.play;
+    button.setAttribute('aria-label', playing ? t('pause') : t('play'));
+  }
+
+  function iconButton(icon, label) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'preview-icon-button';
+    button.innerHTML = icon;
+    button.setAttribute('aria-label', label);
+    return button;
+  }
+
+  function markdownPanel(entry, id, path, panel) {
+    const toolbar = document.createElement('div');
+    toolbar.className = 'preview-markdown-bar';
+    const modes = document.createElement('div');
+    modes.className = 'preview-modes';
+    const previewButton = document.createElement('button');
+    previewButton.type = 'button';
+    previewButton.textContent = t('markdownPreview');
+    const sourceButton = document.createElement('button');
+    sourceButton.type = 'button';
+    sourceButton.textContent = t('markdownSource');
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'btn ghost';
+    copy.textContent = t('copySource');
+    modes.append(previewButton, sourceButton);
+    toolbar.append(modes, copy);
+
+    const body = document.createElement('div');
+    body.className = 'preview-markdown';
+    let text = entry.text || '';
+    const apply = mode => {
+      preview.markdownMode = mode;
+      previewButton.setAttribute('aria-pressed', String(mode === 'preview'));
+      sourceButton.setAttribute('aria-pressed', String(mode === 'source'));
+      body.className = 'preview-markdown' + (mode === 'source' ? ' preview-markdown--source' : '');
+      if (mode === 'source' || !text) {
+        body.textContent = text;
+        return;
+      }
+      body.innerHTML = renderMarkdown(text);
+    };
+    previewButton.addEventListener('click', () => apply('preview'));
+    sourceButton.addEventListener('click', () => apply('source'));
+    copy.addEventListener('click', () => {
+      void navigator.clipboard.writeText(text).catch(() => {});
+    });
+    panel.append(toolbar, body);
+    apply(preview.markdownMode);
+
+    // 分享的 .md 文件没有内联文本，按需读取同一预览路由，避免整目录预取。
+    if (!text) {
+      body.textContent = t('previewLoading');
+      void fetch(previewUrl(id, path), { cache: 'no-store' })
+        .then(response => {
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          return response.text();
+        })
+        .then(value => {
+          text = value;
+          if (body.isConnected) apply(preview.markdownMode);
+        })
+        .catch(() => {
+          if (body.isConnected) panel.replaceChildren(previewError(entry, id, path));
+        });
+    }
+    return panel;
+  }
+
+  function renderMarkdown(text) {
+    if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') return '';
+    const clean = DOMPurify.sanitize(marked.parse(text, { gfm: true }), {
+      FORBID_TAGS: ['style', 'iframe', 'form', 'input', 'object', 'embed'],
+      FORBID_ATTR: ['style', 'onerror', 'onclick']
+    });
+    const holder = document.createElement('div');
+    holder.innerHTML = clean;
+    // 分享范围外的相对图片不能读取；保留占位提示，避免静默空白。
+    holder.querySelectorAll('img').forEach(img => {
+      const src = img.getAttribute('src') || '';
+      if (!/^(https?:|data:image\/)/i.test(src)) {
+        const note = document.createElement('span');
+        note.className = 'preview-image-note';
+        note.textContent = '[图片：' + (img.getAttribute('alt') || '需从分享列表下载') + ']';
+        img.replaceWith(note);
+      }
+    });
+    holder.querySelectorAll('a').forEach(link => {
+      const href = link.getAttribute('href') || '';
+      if (!/^(https?:|mailto:|#)/i.test(href)) link.removeAttribute('href');
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+    });
+    if (typeof hljs !== 'undefined') {
+      holder.querySelectorAll('pre code').forEach(block => {
+        try {
+          hljs.highlightElement(block);
+        } catch (error) {
+          // 高亮失败时保留纯文本。
+        }
+      });
+    }
+    return holder.innerHTML;
+  }
+
+  function codePanel(entry, id, path, panel) {
+    const lang = CODE_LANG[extensionOf(entry.name)] || 'plaintext';
+    const bar = document.createElement('div');
+    bar.className = 'preview-code-bar';
+    const label = document.createElement('span');
+    label.className = 'preview-code-lang';
+    label.textContent = lang;
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'btn ghost';
+    copy.textContent = t('copyFull');
+    bar.append(label, copy);
+
+    const pre = document.createElement('pre');
+    pre.className = 'preview-code';
+    const code = document.createElement('code');
+    code.className = 'hljs';
+    pre.append(code);
+    panel.append(bar, pre);
+
+    const apply = text => {
+      code.textContent = text;
+      if (typeof hljs !== 'undefined') {
+        code.removeAttribute('data-highlighted');
+        try {
+          hljs.highlightElement(code);
+        } catch (error) {
+          // 高亮失败时保留纯文本，不影响阅读。
+        }
+      }
+    };
+    copy.addEventListener('click', () => {
+      void navigator.clipboard.writeText(code.textContent || '').catch(() => {});
+    });
+
+    code.textContent = t('previewLoading');
+    void fetch(previewUrl(id, path), { cache: 'no-store' })
+      .then(response => {
+        if (response.status === 413) throw new Error('too-large');
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return response.text();
+      })
+      .then(text => { if (code.isConnected) apply(text); })
+      .catch(error => {
+        if (!code.isConnected) return;
+        const reason = error && error.message === 'too-large'
+          ? t('previewTooLarge')
+          : t('previewError');
+        panel.replaceChildren(previewError(entry, id, path, reason));
+      });
+    return panel;
+  }
+
+  function openFullImage(entry, id, path) {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'preview-full';
+    const header = document.createElement('div');
+    header.className = 'preview-full-head';
+    const title = document.createElement('strong');
+    title.textContent = entry.name || t('imagePreview');
+    const actions = document.createElement('div');
+    actions.className = 'preview-full-actions';
+    const sizeButton = document.createElement('button');
+    sizeButton.type = 'button';
+    sizeButton.className = 'btn ghost';
+    sizeButton.textContent = t('zoom');
+    const closeButton = document.createElement('button');
+    closeButton.type = 'button';
+    closeButton.className = 'btn ghost';
+    closeButton.textContent = t('closePreview');
+    actions.append(sizeButton, closeButton);
+    header.append(title, actions);
+    const stage = document.createElement('div');
+    stage.className = 'preview-full-stage';
+    const img = document.createElement('img');
+    img.src = previewUrl(id, path);
+    img.alt = entry.name || '';
+    stage.append(img);
+    dialog.append(header, stage);
+    closeButton.addEventListener('click', () => dialog.close());
+    dialog.addEventListener('click', event => {
+      if (event.target === dialog) dialog.close();
+    });
+    dialog.addEventListener('close', () => dialog.remove());
+    sizeButton.addEventListener('click', () => {
+      stage.classList.toggle('is-actual');
+      sizeButton.textContent = stage.classList.contains('is-actual') ? t('fit') : t('zoom');
+    });
+    document.body.append(dialog);
+    preview.fullImage = dialog;
+    dialog.showModal();
+  }
+
+  function hideOpenPreview() {
+    if (!preview.openKey) return;
+    const panel = document.getElementById('preview-' + encodeURIComponent(preview.openKey));
+    if (panel) panel.dispatchEvent(new Event('preview-hide'));
+    preview.openKey = '';
+  }
+
   function renderList() {
-    clear(listEl);
-    if (state.loading) {
+    // 首次加载才显示骨架；后续刷新保留现有行，避免销毁播放器。
+    if (state.loading && !listEl.querySelector('.row')) {
+      clear(listEl);
       for (let index = 0; index < 3; index += 1) {
         const skeleton = document.createElement('div');
         skeleton.className = 'skeleton';
@@ -368,10 +980,12 @@
       }
       return;
     }
-    if (state.error) return;
+    if (state.error) { clear(listEl); return; }
 
     const entries = currentEntries();
     if (!entries.length) {
+      if (state.loading) return;
+      clear(listEl);
       const empty = document.createElement('div');
       empty.className = 'empty';
       if (state.query.trim()) empty.textContent = t('noMatch');
@@ -379,7 +993,56 @@
       listEl.append(empty);
       return;
     }
-    entries.forEach(entry => listEl.append(rowFor(entry, state.view === 'root')));
+
+    const root = state.view === 'root';
+    const existing = new Map();
+    Array.from(listEl.children).forEach(child => {
+      if (child.dataset.key) existing.set(child.dataset.key, child);
+      else child.remove();
+    });
+
+    const wanted = new Set();
+    const ordered = [];
+    entries.forEach(entry => {
+      const key = entryKey(entry, root);
+      wanted.add(key);
+      const current = existing.get(key);
+      const playing = current && Array.from(current.querySelectorAll('audio, video'))
+        .some(media => !media.paused && !media.ended);
+      const reusable = current && (playing || !needsPreviewRebuild(current, entry, key));
+      const node = reusable ? current : rowFor(entry, root);
+      node.dataset.key = key;
+      ordered.push({ node, playing: Boolean(playing) });
+    });
+
+    existing.forEach((node, key) => {
+      if (wanted.has(key)) return;
+      Array.from(node.querySelectorAll('audio, video')).forEach(media => media.pause());
+      node.remove();
+    });
+
+    const keep = new Set(ordered.map(item => item.node));
+    Array.from(listEl.children).forEach(child => {
+      if (!keep.has(child)) child.remove();
+    });
+
+    // 只在没有媒体播放时重排，避免移动节点打断播放；新行追加到末尾。
+    const anyPlaying = ordered.some(item => item.playing);
+    ordered.forEach(item => {
+      if (!item.node.isConnected) listEl.append(item.node);
+    });
+    if (!anyPlaying) {
+      ordered.forEach(item => listEl.append(item.node));
+    }
+  }
+
+  /** 行内容未变（名称、大小、时间、展开状态）时可原样复用，保留播放器实例。 */
+  function needsPreviewRebuild(node, entry, key) {
+    const link = node.querySelector('.row-link');
+    if (!link) return true;
+    if (link.getAttribute('aria-expanded') !== String(preview.openKey === key)) return true;
+    const name = node.querySelector('.name');
+    return !name || name.textContent !== (entry.text || entry.name || '');
   }
 
   function crumbButton(label, onClick, current) {
@@ -434,6 +1097,16 @@
     renderCrumbs();
     renderConn();
   }
+
+  /** 刷新后条目仍存在时保留展开项；否则收起，避免指向已删除内容。 */
+  function pruneOpenPreview() {
+    if (!preview.openKey) return;
+    const stillThere = state.entries.some(entry => {
+      const root = state.view === 'root';
+      return entryKey(entry, root) === preview.openKey;
+    });
+    if (!stillThere) hideOpenPreview();
+  }
   //#endregion
 
   //#region 数据与导航
@@ -446,7 +1119,8 @@
       modified: item.modified,
       text: item.text || null,
       path: '',
-      thumb: false
+      thumb: item.kind === 'file' && /\.(png|jpe?g|webp)$/i.test(item.name || ''),
+      preview: Boolean(item.preview)
     };
   }
 
@@ -470,6 +1144,7 @@
         state.entries = data.entries || [];
       }
       state.loading = false;
+      pruneOpenPreview();
       renderAll();
     } catch (error) {
       if (serial !== loadSerial) return;
@@ -498,6 +1173,7 @@
   }
 
   function navigate(id, path) {
+    hideOpenPreview();
     const params = new URLSearchParams();
     if (id) {
       params.set('id', String(id));
