@@ -39,34 +39,6 @@ jobs:
           workspaces: src-tauri -> target
       - run: pnpm test
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
-      - name: Diagnose Windows test startup failure
-        if: failure() && runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          python -m pip install pefile
-          @'
-          import ctypes, glob, os, pathlib, pefile
-          kernel = ctypes.WinDLL('kernel32', use_last_error=True)
-          kernel.GetProcAddress.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-          kernel.GetProcAddress.restype = ctypes.c_void_p
-          for exe in glob.glob('src-tauri/target/debug/deps/shrinkdrop_lib-*.exe'):
-              print('Checking imports:', exe, flush=True)
-              pe = pefile.PE(exe)
-              for entry in getattr(pe, 'DIRECTORY_ENTRY_IMPORT', []):
-                  name = entry.dll.decode()
-                  try:
-                      library = ctypes.WinDLL(name)
-                  except OSError as error:
-                      print('DLL LOAD FAILED:', name, str(error), flush=True)
-                      continue
-                  for symbol in entry.imports:
-                      if symbol.name and not kernel.GetProcAddress(library._handle, symbol.name):
-                          print('MISSING ENTRY:', name, symbol.name.decode(), flush=True)
-                  print('DLL checked:', name, flush=True)
-          '@ | python -u -
-          Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=(Get-Date).AddMinutes(-10)} -ErrorAction SilentlyContinue |
-            Where-Object { $_.Message -match 'shrinkdrop|Entry Point|entry point' } |
-            Format-List TimeCreated, ProviderName, Message
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
