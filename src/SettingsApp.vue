@@ -11,7 +11,7 @@ const session = createSettingsSession(createSettingsAdapter());
 type Section = 'general' | 'compression' | 'share' | 'about';
 const section = ref<Section>('general');
 const view = computed(() => session.state.view);
-// 防休眠依赖 macOS 的 caffeinate，仅在 Mac 上展示该开关。
+// 防休眠依赖 macOS 的 caffeinate 与 LaunchDaemon，仅在 Mac 上展示该设置。
 const isMac = /Mac/i.test(navigator.userAgent);
 async function applyWindowTitle() {
   try {

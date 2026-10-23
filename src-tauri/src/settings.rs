@@ -402,12 +402,11 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|_| "无法定位设置目录".to_string())
 }
 
-/// 防休眠标记文件：存在表示本应用把系统 `disablesleep` 设为 1，退出时需恢复。
-pub fn keep_awake_marker(app: &AppHandle) -> PathBuf {
+/// 防休眠状态目录：helper 的状态/PID/标记文件都放在这里。
+pub fn keep_awake_dir(app: &AppHandle) -> PathBuf {
     app.path()
         .app_config_dir()
-        .map(|dir| dir.join("keep-awake.lock"))
-        .unwrap_or_else(|_| std::env::temp_dir().join("shrinkdrop-keep-awake.lock"))
+        .unwrap_or_else(|_| std::env::temp_dir().join("shrinkdrop"))
 }
 
 pub fn load(app: &AppHandle) -> Settings {

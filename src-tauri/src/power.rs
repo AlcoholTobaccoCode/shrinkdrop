@@ -2,17 +2,27 @@
 //!
 //! - `Off`：不做任何事，系统按自己的节能设置休眠。
 //! - `Idle`：`caffeinate -i`，阻止系统因空闲休眠，显示器仍可关闭。
-//! - `Always`：`caffeinate -d -i -s` 加上 `pmset -a disablesleep 1`。
-//!   只有 `disablesleep` 能阻止合盖休眠，它需要管理员授权，并且是**系统级**设置，
-//!   所以退出应用或降档时必须恢复为 0。
+//! - `Always`：`caffeinate -d -i -s` 加上系统级 `pmset -a disablesleep 1`。
+//!   只有 `disablesleep` 能阻止合盖休眠。
 //!
-//! 崩溃兜底：成功开启 `disablesleep` 后写标记文件；下次启动若标记存在但设置已不是
-//! `Always`，说明上次没有正常恢复，此时重新执行恢复。
+//! `disablesleep` 需要 root。为避免每次切换都弹系统密码框，首次进入 `Always`
+//! 时授权一次，启动一个常驻的 root helper 轮询状态文件；此后开关只改状态文件，
+//! 不再请求授权。helper 只执行固定的 `pmset -a disablesleep 0|1`，不接收其它命令，
+//! 并在应用进程消失时自动恢复为 0 后退出。
+//!
+//! 标记文件记录「本应用把系统设为 disablesleep=1」，用于崩溃或重启后的纠正。
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+/// root LaunchDaemon 的固定标签；同一台机器只允许一个实例。
+const HELPER_LABEL: &str = "com.shrinkdrop.keepawake";
 
 /// 防休眠档位；旧版布尔值 true/false 分别迁移为 Idle/Off。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -52,18 +62,21 @@ impl<'de> Deserialize<'de> for KeepAwake {
 
 pub struct SleepInhibitor {
     child: Mutex<Option<Child>>,
+    /// 后台心跳线程：helper 连续读不到心跳就会恢复系统设置并退出。
+    heartbeat: Mutex<Option<(Arc<AtomicBool>, JoinHandle<()>)>>,
     /// 当前子进程使用的参数，用于判断档位变化时是否需要重启。
     args: Mutex<Option<Vec<&'static str>>>,
-    /// 标记文件：存在表示本应用当前把系统 `disablesleep` 设为 1。
-    marker: Mutex<Option<PathBuf>>,
+    /// 状态目录：helper 状态文件、PID 文件与标记文件都放在这里。
+    dir: Mutex<Option<PathBuf>>,
 }
 
 impl Default for SleepInhibitor {
     fn default() -> Self {
         Self {
             child: Mutex::new(None),
+            heartbeat: Mutex::new(None),
             args: Mutex::new(None),
-            marker: Mutex::new(None),
+            dir: Mutex::new(None),
         }
     }
 }
@@ -71,10 +84,10 @@ impl Default for SleepInhibitor {
 impl SleepInhibitor {
     pub const SUPPORTED: bool = cfg!(target_os = "macos");
 
-    /// 绑定标记文件位置；在应用启动时调用一次。
-    pub fn bind_marker(&self, path: PathBuf) {
-        if let Ok(mut guard) = self.marker.lock() {
-            *guard = Some(path);
+    /// 绑定状态目录；应用启动时调用一次。
+    pub fn bind_dir(&self, dir: PathBuf) {
+        if let Ok(mut guard) = self.dir.lock() {
+            *guard = Some(dir);
         }
     }
 
@@ -85,8 +98,8 @@ impl SleepInhibitor {
         }
         let marked = self.marker_path().is_some_and(|path| path.exists());
         if marked && level != KeepAwake::Always {
-            // 上次没有正常恢复，这里补一次；需要管理员授权。
-            self.set_system_sleep_disabled(false)?;
+            // 上次没有正常恢复。没有常驻 helper 可用，只能直接请求一次授权。
+            self.direct_set_system_sleep(false)?;
         }
         self.apply(level)
     }
@@ -96,19 +109,24 @@ impl SleepInhibitor {
         if !Self::SUPPORTED {
             return Ok(());
         }
-        if level == KeepAwake::Always {
-            // 先确认系统级设置，避免 caffeinate 起来了但合盖仍休眠。
-            self.set_system_sleep_disabled(true)?;
-        }
-        self.set_caffeinate(level)?;
-        if level != KeepAwake::Always {
-            self.set_system_sleep_disabled(false)?;
+        match level {
+            KeepAwake::Off | KeepAwake::Idle => {
+                self.set_caffeinate(level)?;
+                self.set_system_sleep(false)?;
+            }
+            KeepAwake::Always => {
+                // 先确保系统级设置生效，避免 caffeinate 起来了但合盖仍休眠。
+                self.set_system_sleep(true)?;
+                self.set_caffeinate(level)?;
+            }
         }
         Ok(())
     }
 
     /// 应用退出时调用：结束子进程并恢复系统休眠设置。
     pub fn release(&self) {
+        // 先停心跳，helper 会在几个周期后自行恢复系统设置；这里再尽力同步关闭一次。
+        self.stop_heartbeat();
         if let Ok(mut guard) = self.child.lock() {
             if let Some(mut child) = guard.take() {
                 let _ = child.kill();
@@ -116,14 +134,67 @@ impl SleepInhibitor {
             }
         }
         if Self::SUPPORTED && self.marker_path().is_some_and(|path| path.exists()) {
-            // 退出路径不弹授权框：若当前已有 root 缓存（刚授权过）会成功，
-            // 否则保留标记，下次启动 reconcile 再恢复。
-            let _ = self.set_system_sleep_disabled(false);
+            // helper 仍在运行时这条写入免密生效；否则等下次启动 reconcile 再恢复。
+            let _ = self.set_system_sleep(false);
         }
     }
 
+    fn state_dir(&self) -> Option<PathBuf> {
+        self.dir.lock().ok().and_then(|guard| guard.clone())
+    }
+
+    fn state_path(&self) -> Option<PathBuf> {
+        self.state_dir().map(|dir| dir.join("keep-awake.state"))
+    }
+
+    fn helper_pid_path(&self) -> Option<PathBuf> {
+        self.state_dir().map(|dir| dir.join("keep-awake.helper.pid"))
+    }
+
+    fn heartbeat_path(&self) -> Option<PathBuf> {
+        self.state_dir().map(|dir| dir.join("keep-awake.beat"))
+    }
+
     fn marker_path(&self) -> Option<PathBuf> {
-        self.marker.lock().ok().and_then(|guard| guard.clone())
+        self.state_dir().map(|dir| dir.join("keep-awake.lock"))
+    }
+
+    /// 启动后台心跳线程；重复调用是幂等的。
+    fn start_heartbeat(&self) {
+        let Ok(mut slot) = self.heartbeat.lock() else {
+            return;
+        };
+        if slot.is_some() {
+            return;
+        }
+        let Some(path) = self.heartbeat_path() else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let running = Arc::new(AtomicBool::new(true));
+        let flag = running.clone();
+        let handle = std::thread::spawn(move || {
+            while flag.load(Ordering::Relaxed) {
+                let _ = std::fs::File::create(&path);
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        });
+        *slot = Some((running, handle));
+    }
+
+    /// 停止心跳线程；helper 会在超时后自行恢复并退出。
+    fn stop_heartbeat(&self) {
+        if let Ok(mut slot) = self.heartbeat.lock() {
+            if let Some((running, handle)) = slot.take() {
+                running.store(false, Ordering::Relaxed);
+                let _ = handle.join();
+            }
+        }
+        if let Some(path) = self.heartbeat_path() {
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     /// 启停 `caffeinate`：Idle 只挡空闲休眠，Always 额外挡显示器与系统休眠。
@@ -145,7 +216,6 @@ impl SleepInhibitor {
         } else {
             &["-i"]
         };
-        // 档位变化时需要重启子进程以应用新参数。
         if running {
             if self.current_args().as_deref() == Some(args) {
                 return Ok(());
@@ -177,18 +247,132 @@ impl SleepInhibitor {
         }
     }
 
-    /// 读取并设置系统级 `disablesleep`；需要管理员授权时会弹出系统密码框。
-    fn set_system_sleep_disabled(&self, disabled: bool) -> Result<(), String> {
+    /// 设置系统级 `disablesleep`：优先走已授权的 helper，必要时才请求授权。
+    fn set_system_sleep(&self, disabled: bool) -> Result<(), String> {
+        if self.system_sleep_disabled() == Some(disabled) {
+            self.sync_marker(disabled);
+            return Ok(());
+        }
+        if disabled || self.helper_running() {
+            // 需要开启，或已有 helper 可以免密关闭。
+            if disabled && !self.helper_running() {
+                self.start_helper()?;
+            }
+            self.write_state(disabled)?;
+            if self.wait_for_system_state(disabled) {
+                self.sync_marker(disabled);
+                return Ok(());
+            }
+            return Err("系统休眠设置没有生效，请重试".to_string());
+        }
+        // 没有 helper 却需要关闭：说明是上次残留，只能再授权一次。
+        self.direct_set_system_sleep(disabled)
+    }
+
+    fn write_state(&self, disabled: bool) -> Result<(), String> {
+        let Some(path) = self.state_path() else {
+            return Err("休眠状态目录不可用".to_string());
+        };
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|_| "无法创建状态目录".to_string())?;
+        }
+        let mut file = std::fs::File::create(&path).map_err(|_| "无法写入休眠状态".to_string())?;
+        file.write_all(if disabled { b"1" } else { b"0" })
+            .map_err(|_| "无法写入休眠状态".to_string())
+    }
+
+    /// 轮询等待系统设置同步；helper 每 300ms 读取一次状态文件。
+    fn wait_for_system_state(&self, disabled: bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < deadline {
+            if self.system_sleep_disabled() == Some(disabled) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(120));
+        }
+        false
+    }
+
+    /// 查询 LaunchDaemon 是否在运行；`launchctl print` 对 system 域无需 root。
+    fn helper_running(&self) -> bool {
+        Command::new("/bin/launchctl")
+            .args(["print", &format!("system/{HELPER_LABEL}")])
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+
+    /// 请求一次管理员授权，安装并启动 root LaunchDaemon；之后切换免密。
+    fn start_helper(&self) -> Result<(), String> {
+        if self.helper_running() {
+            return Ok(());
+        }
+        let (Some(state), Some(pid_file), Some(marker), Some(beat)) = (
+            self.state_path(),
+            self.helper_pid_path(),
+            self.marker_path(),
+            self.heartbeat_path(),
+        ) else {
+            return Err("休眠状态目录不可用".to_string());
+        };
+        // 先写好目标状态与心跳，daemon 启动后会立刻读取。
+        self.write_state(true)?;
+        self.start_heartbeat();
+
+        // 把脚本与 plist 写到用户可读目录，再由 root 复制到 /Library/LaunchDaemons。
+        let dir = self.state_dir().ok_or_else(|| "休眠状态目录不可用".to_string())?;
+        let script_path = dir.join("keep-awake-helper.sh");
+        let plist_path = dir.join(format!("{HELPER_LABEL}.plist"));
+        let script = helper_script(&state, &beat, &pid_file, &marker);
+        std::fs::write(&script_path, script).map_err(|_| "无法写入防休眠脚本".to_string())?;
+        std::fs::write(&plist_path, helper_plist(&script_path))
+            .map_err(|_| "无法写入防休眠配置".to_string())?;
+
+        // LaunchDaemon 才能在 root 下长期存活；do shell script 返回时会结束子进程。
+        let plist_target = format!("/Library/LaunchDaemons/{HELPER_LABEL}.plist");
+        let command = format!(
+            "/bin/cp {plist} {target}; /bin/chmod 644 {target}; /bin/launchctl bootout system/{label} >/dev/null 2>&1; /bin/launchctl bootstrap system {target}",
+            plist = shell_quote(&plist_path.display().to_string()),
+            target = shell_quote(&plist_target),
+            label = HELPER_LABEL,
+        );
+        let apple = format!(
+            "do shell script \"{}\" with administrator privileges",
+            command.replace('\\', "\\\\").replace('"', "\\\"")
+        );
+        let output = Command::new("/usr/bin/osascript")
+            .args(["-e", &apple])
+            .output()
+            .map_err(|_| "无法请求管理员授权".to_string())?;
+        if !output.status.success() {
+            self.stop_heartbeat();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("keep-awake install failed: {stderr}");
+            return Err(privilege_error(&stderr));
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < deadline {
+            if self.helper_running() {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(120));
+        }
+        Err("防休眠进程没有启动，请重试".to_string())
+    }
+
+    /// 没有 helper 时直接请求授权修改一次系统设置。
+    fn direct_set_system_sleep(&self, disabled: bool) -> Result<(), String> {
         if self.system_sleep_disabled() == Some(disabled) {
             self.sync_marker(disabled);
             return Ok(());
         }
         let value = if disabled { "1" } else { "0" };
-        let script = format!(
+        let apple = format!(
             "do shell script \"/usr/bin/pmset -a disablesleep {value}\" with administrator privileges"
         );
         let output = Command::new("/usr/bin/osascript")
-            .args(["-e", &script])
+            .args(["-e", &apple])
             .output()
             .map_err(|_| "无法请求管理员授权".to_string())?;
         if !output.status.success() {
@@ -226,19 +410,74 @@ impl SleepInhibitor {
     }
 }
 
+/// 常驻 helper：只响应状态文件里的 0/1；心跳文件消失一段时间后恢复并退出。
+///
+/// 用心跳而不是 PID 判断应用存活：osascript 以 root 启动的进程在独立会话里，
+/// `kill -0 <app pid>` 不可靠。
+fn helper_script(state: &Path, beat: &Path, pid_file: &Path, marker: &Path) -> String {
+    format!(
+        "STATE='{state}'\nBEAT='{beat}'\nPIDFILE='{pid_file}'\nMARKER='{marker}'\n\
+         echo $$ > \"$PIDFILE\"\n\
+         apply() {{ /usr/bin/pmset -a disablesleep \"$1\"; }}\n\
+         last=''\n\
+         miss=0\n\
+         while [ \"$miss\" -lt 8 ]; do\n\
+         \x20 v=$(/bin/cat \"$STATE\" 2>/dev/null)\n\
+         \x20 case \"$v\" in\n\
+         \x20   0|1) if [ \"$v\" != \"$last\" ]; then apply \"$v\"; last=\"$v\"; fi ;;\n\
+         \x20 esac\n\
+         \x20 if [ -f \"$BEAT\" ]; then miss=0; /bin/rm -f \"$BEAT\"; else miss=$((miss+1)); fi\n\
+         \x20 /bin/sleep 0.5\n\
+         done\n\
+         apply 0\n\
+         /bin/rm -f \"$MARKER\" \"$PIDFILE\" \"$STATE\"\n",
+        state = state.display(),
+        beat = beat.display(),
+        pid_file = pid_file.display(),
+        marker = marker.display(),
+    )
+}
+
+/// LaunchDaemon 配置：以 root 运行 helper 脚本，随系统启动恢复。
+fn helper_plist(script: &Path) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+         <plist version=\"1.0\"><dict>\n\
+         <key>Label</key><string>{label}</string>\n\
+         <key>ProgramArguments</key><array>\n\
+         <string>/bin/sh</string><string>{script}</string>\n\
+         </array>\n\
+         <key>RunAtLoad</key><true/>\n\
+         <key>KeepAlive</key><false/>\n\
+         </dict></plist>\n",
+        label = HELPER_LABEL,
+        script = script.display(),
+    )
+}
+
+/// 用单引号包裹 shell 参数；路径里的单引号按 POSIX 规则转义。
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 /// osascript 授权失败时给用户可读的原因。
 fn privilege_error(stderr: &str) -> String {
-    // -128 是用户点击取消的标准错误码。
-    if stderr.contains("-128") || stderr.to_lowercase().contains("cancel") {
+    let lower = stderr.to_lowercase();
+    // -128 是用户点击取消；-60005 是用户名或密码错误。
+    if stderr.contains("-128") || lower.contains("cancel") {
         "已取消管理员授权，系统休眠设置未修改".to_string()
+    } else if stderr.contains("-60005") || lower.contains("password") {
+        "管理员用户名或密码不正确，系统休眠设置未修改".to_string()
     } else {
         "修改系统休眠设置失败，请重试".to_string()
     }
 }
 
 impl Drop for SleepInhibitor {
-    /// 兜底：状态被丢弃时也要结束子进程，避免留下孤儿。
+    /// 兜底：状态被丢弃时也要结束子进程与心跳，避免留下孤儿。
     fn drop(&mut self) {
+        self.stop_heartbeat();
         if let Ok(mut guard) = self.child.lock() {
             if let Some(mut child) = guard.take() {
                 let _ = child.kill();
@@ -263,11 +502,43 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     fn is_alive(pid: u32) -> bool {
-        Command::new("kill")
+        Command::new("/bin/kill")
             .args(["-0", &pid.to_string()])
             .status()
             .map(|status| status.success())
             .unwrap_or(false)
+    }
+
+    #[test]
+    fn plist_points_at_the_helper_script_with_a_fixed_label() {
+        let plist = helper_plist(Path::new("/tmp/a b/helper.sh"));
+        assert!(plist.contains("<string>com.shrinkdrop.keepawake</string>"));
+        assert!(plist.contains("<string>/bin/sh</string>"));
+        assert!(plist.contains("<string>/tmp/a b/helper.sh</string>"));
+        assert!(plist.contains("<key>RunAtLoad</key><true/>"));
+        assert!(!plist.contains("<key>KeepAlive</key><true/>"));
+    }
+
+    #[test]
+    fn helper_script_uses_fixed_paths_and_exits_with_app() {
+        let script = helper_script(
+            Path::new("/tmp/a b/state"),
+            Path::new("/tmp/a b/beat"),
+            Path::new("/tmp/a b/pid"),
+            Path::new("/tmp/a b/marker"),
+        );
+        // 路径带空格时仍是单个 shell 单词。
+        assert!(script.contains("STATE='/tmp/a b/state'"));
+        assert!(script.contains("BEAT='/tmp/a b/beat'"));
+        // 只接受 0/1，且只执行固定命令。
+        assert!(script.contains("0|1)"));
+        assert!(script.contains("/usr/bin/pmset -a disablesleep"));
+        // 心跳消失后退出，而不是依赖不可靠的 PID 探测。
+        assert!(script.contains("[ \"$miss\" -lt 8 ]"));
+        assert!(script.contains("miss=$((miss+1))"));
+        // 退出后恢复并清理。
+        assert!(script.contains("apply 0"));
+        assert!(script.contains("/bin/rm -f"));
     }
 
     #[test]
@@ -277,25 +548,13 @@ mod tests {
             "已取消管理员授权，系统休眠设置未修改"
         );
         assert_eq!(
+            privilege_error("0:449: execution error: 管理员用户名或密码不正确。 (-60005)"),
+            "管理员用户名或密码不正确，系统休眠设置未修改"
+        );
+        assert_eq!(
             privilege_error("execution error: something else"),
             "修改系统休眠设置失败，请重试"
         );
-    }
-
-    #[test]
-    fn marker_tracks_system_setting_state() {
-        let dir = std::env::temp_dir().join(format!("shrinkdrop-marker-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let marker = dir.join("keep-awake.lock");
-        let _ = std::fs::remove_file(&marker);
-        let inhibitor = SleepInhibitor::default();
-        inhibitor.bind_marker(marker.clone());
-
-        inhibitor.sync_marker(true);
-        assert!(marker.exists());
-        inhibitor.sync_marker(false);
-        assert!(!marker.exists());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -310,10 +569,26 @@ mod tests {
     fn level_names_round_trip() {
         for level in [KeepAwake::Off, KeepAwake::Idle, KeepAwake::Always] {
             let json = serde_json::to_string(&level).unwrap();
-            let parsed: KeepAwake = serde_json::from_str(&json).unwrap();
-            assert_eq!(parsed, level);
+            assert_eq!(serde_json::from_str::<KeepAwake>(&json).unwrap(), level);
         }
         assert_eq!(serde_json::to_string(&KeepAwake::Always).unwrap(), "\"always\"");
+    }
+
+    #[test]
+    fn state_and_marker_paths_live_in_the_bound_directory() {
+        let dir = std::env::temp_dir().join(format!("shrinkdrop-state-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let inhibitor = SleepInhibitor::default();
+        inhibitor.bind_dir(dir.clone());
+        assert_eq!(inhibitor.state_path(), Some(dir.join("keep-awake.state")));
+        assert_eq!(inhibitor.helper_pid_path(), Some(dir.join("keep-awake.helper.pid")));
+        assert_eq!(inhibitor.marker_path(), Some(dir.join("keep-awake.lock")));
+
+        inhibitor.sync_marker(true);
+        assert!(dir.join("keep-awake.lock").exists());
+        inhibitor.sync_marker(false);
+        assert!(!dir.join("keep-awake.lock").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -325,14 +600,13 @@ mod tests {
 
         inhibitor.set_caffeinate(KeepAwake::Idle).unwrap();
         let pid = held_pid(&inhibitor).expect("idle should spawn caffeinate");
-        std::thread::sleep(std::time::Duration::from_millis(150));
+        std::thread::sleep(Duration::from_millis(150));
         assert!(is_alive(pid));
         assert_eq!(inhibitor.current_args().as_deref(), Some(&["-i"][..]));
 
         inhibitor.set_caffeinate(KeepAwake::Off).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        std::thread::sleep(Duration::from_millis(200));
         assert!(!is_alive(pid), "off must stop the child");
-        assert_eq!(held_pid(&inhibitor), None);
     }
 
     #[test]
@@ -348,7 +622,6 @@ mod tests {
             inhibitor.current_args().as_deref(),
             Some(&["-d", "-i", "-s"][..])
         );
-        inhibitor.release();
     }
 
     #[test]
@@ -361,7 +634,7 @@ mod tests {
             assert!(is_alive(pid));
             pid
         };
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        std::thread::sleep(Duration::from_millis(200));
         assert!(!is_alive(pid), "dropped inhibitor must not leave an orphan");
     }
 

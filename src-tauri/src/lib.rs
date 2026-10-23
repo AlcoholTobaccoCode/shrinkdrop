@@ -20,7 +20,7 @@ pub fn run() {
             let loaded = settings::load(&app.handle());
             // 启动时恢复防休眠档位；若上次异常退出留下了系统级设置，这里一并纠正。
             let inhibitor = app.state::<power::SleepInhibitor>();
-            inhibitor.bind_marker(settings::keep_awake_marker(&app.handle()));
+            inhibitor.bind_dir(settings::keep_awake_dir(&app.handle()));
             let _ = inhibitor.reconcile(loaded.general.keep_awake);
             app.state::<settings::SettingsState>().replace(loaded);
             Ok(())
