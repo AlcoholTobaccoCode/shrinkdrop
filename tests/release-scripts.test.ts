@@ -235,6 +235,34 @@ describe('release scripts with isolated local remotes', () => {
     expect(f.state()).toEqual(before);
   }, 30_000);
 
+  it('warns that synced commits need a version bump when the current version is already tagged', () => {
+    const f = fixture();
+    const publisher = f.publisher(f.org, 'publisher');
+    f.commitFile(publisher, 'later.txt', 'New work after the release\n');
+    f.git(['push', 'origin', 'main'], publisher);
+    // 公共仓库已有 v1.2.3 标签，说明该版本已经发布过。
+    f.git(['tag', '-a', 'v1.2.3', '-m', 'Already published'], f.origin);
+
+    const result = f.sync('--yes');
+
+    expectSuccess(result);
+    expect(result.stdout).toContain('已有发布标签 v1.2.3');
+    expect(result.stdout).toContain('pnpm release patch --dry-run');
+  }, 30_000);
+
+  it('points to the release command when the current version has no tag yet', () => {
+    const f = fixture();
+    const publisher = f.publisher(f.org, 'publisher');
+    f.commitFile(publisher, 'first.txt', 'First public work\n');
+    f.git(['push', 'origin', 'main'], publisher);
+
+    const result = f.sync('--yes');
+
+    expectSuccess(result);
+    expect(result.stdout).toContain('尚未打标发布');
+    expect(result.stdout).toContain('pnpm release 1.2.3');
+  }, 30_000);
+
   it('fetches the latest organization commit during a sync dry-run without changing public main or local work', () => {
     const f = fixture();
     const publisher = f.publisher(f.org, 'publisher');
