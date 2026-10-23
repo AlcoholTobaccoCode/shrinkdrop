@@ -169,6 +169,8 @@ const en: Record<string, string> = {
     'Prevents idle system sleep. The display still follows your energy settings. Good when someone is downloading nearby.',
   '同时阻止空闲与合盖休眠。合盖需要管理员授权修改系统电源设置，退出应用或切回其它档位时自动恢复。':
     'Prevents idle and lid-close sleep. Lid-close sleep needs administrator approval to change a system power setting, which is restored when you quit or switch levels.',
+  '彻底不休眠会更耗电：屏幕常亮、风扇与网络持续工作，笔记本合盖放进包里仍会发热。用完请及时切回「关闭」或退出应用。':
+    'Never sleep drains the battery faster: the display stays on and the machine keeps networking and heating up even inside a bag. Switch back to Off or quit the app when done.',
   '按系统节能设置休眠；合盖后局域网分享会中断。':
     'Sleep follows your energy settings. Closing the lid ends LAN sharing.',
   '已取消管理员授权，系统休眠设置未修改': 'Administrator approval was cancelled; the system sleep setting is unchanged',

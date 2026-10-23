@@ -275,6 +275,9 @@ function clearGroupPin(group: { id: string }) {
                 </div>
               </div>
               <p v-if="isMac" class="settings-hint">{{ keepAwakeHint }}</p>
+              <p v-if="isMac && view.general.keepAwake === 'always'" class="settings-hint settings-hint--warning" role="note">
+                {{ t('彻底不休眠会更耗电：屏幕常亮、风扇与网络持续工作，笔记本合盖放进包里仍会发热。用完请及时切回「关闭」或退出应用。') }}
+              </p>
             </section>
 
             <section v-else-if="section === 'compression'" class="settings-section">
