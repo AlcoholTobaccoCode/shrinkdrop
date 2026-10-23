@@ -1,59 +1,244 @@
-//! macOS 合盖/空闲休眠抑制。
+//! macOS 休眠抑制，三档：
 //!
-//! 通过 `caffeinate -i` 子进程阻止空闲休眠：它只阻止系统因空闲进入睡眠，
-//! 不改变用户的节能设置，也不拦截屏幕锁定。进程随开关或应用退出结束。
+//! - `Off`：不做任何事，系统按自己的节能设置休眠。
+//! - `Idle`：`caffeinate -i`，阻止系统因空闲休眠，显示器仍可关闭。
+//! - `Always`：`caffeinate -d -i -s` 加上 `pmset -a disablesleep 1`。
+//!   只有 `disablesleep` 能阻止合盖休眠，它需要管理员授权，并且是**系统级**设置，
+//!   所以退出应用或降档时必须恢复为 0。
+//!
+//! 崩溃兜底：成功开启 `disablesleep` 后写标记文件；下次启动若标记存在但设置已不是
+//! `Always`，说明上次没有正常恢复，此时重新执行恢复。
 
-use std::process::{Child, Command, Stdio};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::Mutex;
 
-/// 空闲休眠抑制器；非 macOS 平台上所有操作都是空操作。
+/// 防休眠档位；旧版布尔值 true/false 分别迁移为 Idle/Off。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KeepAwake {
+    Off,
+    Idle,
+    Always,
+}
+
+impl Default for KeepAwake {
+    fn default() -> Self {
+        KeepAwake::Off
+    }
+}
+
+impl<'de> Deserialize<'de> for KeepAwake {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // 兼容旧版 `keepAwake: true|false`，以及新版的字符串档位。
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Flag(bool),
+            Level(String),
+        }
+        Ok(match Raw::deserialize(deserializer)? {
+            Raw::Flag(true) => KeepAwake::Idle,
+            Raw::Flag(false) => KeepAwake::Off,
+            Raw::Level(value) => match value.as_str() {
+                "idle" => KeepAwake::Idle,
+                "always" => KeepAwake::Always,
+                _ => KeepAwake::Off,
+            },
+        })
+    }
+}
+
 pub struct SleepInhibitor {
     child: Mutex<Option<Child>>,
+    /// 当前子进程使用的参数，用于判断档位变化时是否需要重启。
+    args: Mutex<Option<Vec<&'static str>>>,
+    /// 标记文件：存在表示本应用当前把系统 `disablesleep` 设为 1。
+    marker: Mutex<Option<PathBuf>>,
 }
 
 impl Default for SleepInhibitor {
     fn default() -> Self {
         Self {
             child: Mutex::new(None),
+            args: Mutex::new(None),
+            marker: Mutex::new(None),
         }
     }
 }
 
 impl SleepInhibitor {
-    /// 当前平台是否支持该功能。
     pub const SUPPORTED: bool = cfg!(target_os = "macos");
 
-    /// 按设置启用或停用；重复调用是幂等的。
-    pub fn apply(&self, enabled: bool) -> Result<(), String> {
+    /// 绑定标记文件位置；在应用启动时调用一次。
+    pub fn bind_marker(&self, path: PathBuf) {
+        if let Ok(mut guard) = self.marker.lock() {
+            *guard = Some(path);
+        }
+    }
+
+    /// 应用启动时调用：若上次异常退出留下了 `disablesleep`，按当前档位纠正。
+    pub fn reconcile(&self, level: KeepAwake) -> Result<(), String> {
         if !Self::SUPPORTED {
             return Ok(());
         }
-        let mut guard = self.child.lock().map_err(|_| "休眠状态不可用".to_string())?;
-        if enabled {
-            if guard.as_mut().is_some_and(|child| matches!(child.try_wait(), Ok(None))) {
-                return Ok(());
-            }
-            // 上一个进程已退出（例如被系统回收），先清理再重启。
-            *guard = None;
-            let child = Command::new("/usr/bin/caffeinate")
-                .arg("-i")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .map_err(|_| "无法启动系统防休眠进程".to_string())?;
-            *guard = Some(child);
+        let marked = self.marker_path().is_some_and(|path| path.exists());
+        if marked && level != KeepAwake::Always {
+            // 上次没有正常恢复，这里补一次；需要管理员授权。
+            self.set_system_sleep_disabled(false)?;
+        }
+        self.apply(level)
+    }
+
+    /// 切换到指定档位；重复调用是幂等的。
+    pub fn apply(&self, level: KeepAwake) -> Result<(), String> {
+        if !Self::SUPPORTED {
             return Ok(());
         }
-        if let Some(mut child) = guard.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+        if level == KeepAwake::Always {
+            // 先确认系统级设置，避免 caffeinate 起来了但合盖仍休眠。
+            self.set_system_sleep_disabled(true)?;
+        }
+        self.set_caffeinate(level)?;
+        if level != KeepAwake::Always {
+            self.set_system_sleep_disabled(false)?;
         }
         Ok(())
     }
 
-    /// 应用退出时调用，确保不留下孤儿进程。
+    /// 应用退出时调用：结束子进程并恢复系统休眠设置。
     pub fn release(&self) {
+        if let Ok(mut guard) = self.child.lock() {
+            if let Some(mut child) = guard.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+        if Self::SUPPORTED && self.marker_path().is_some_and(|path| path.exists()) {
+            // 退出路径不弹授权框：若当前已有 root 缓存（刚授权过）会成功，
+            // 否则保留标记，下次启动 reconcile 再恢复。
+            let _ = self.set_system_sleep_disabled(false);
+        }
+    }
+
+    fn marker_path(&self) -> Option<PathBuf> {
+        self.marker.lock().ok().and_then(|guard| guard.clone())
+    }
+
+    /// 启停 `caffeinate`：Idle 只挡空闲休眠，Always 额外挡显示器与系统休眠。
+    fn set_caffeinate(&self, level: KeepAwake) -> Result<(), String> {
+        let mut guard = self.child.lock().map_err(|_| "休眠状态不可用".to_string())?;
+        let running = guard
+            .as_mut()
+            .is_some_and(|child| matches!(child.try_wait(), Ok(None)));
+        if level == KeepAwake::Off {
+            if let Some(mut child) = guard.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            self.remember_args(&[]);
+            return Ok(());
+        }
+        let args: &[&str] = if level == KeepAwake::Always {
+            &["-d", "-i", "-s"]
+        } else {
+            &["-i"]
+        };
+        // 档位变化时需要重启子进程以应用新参数。
+        if running {
+            if self.current_args().as_deref() == Some(args) {
+                return Ok(());
+            }
+            if let Some(mut child) = guard.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+        let child = Command::new("/usr/bin/caffeinate")
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|_| "无法启动系统防休眠进程".to_string())?;
+        self.remember_args(args);
+        *guard = Some(child);
+        Ok(())
+    }
+
+    fn current_args(&self) -> Option<Vec<&'static str>> {
+        self.args.lock().ok().and_then(|guard| guard.clone())
+    }
+
+    fn remember_args(&self, args: &[&'static str]) {
+        if let Ok(mut guard) = self.args.lock() {
+            *guard = Some(args.to_vec());
+        }
+    }
+
+    /// 读取并设置系统级 `disablesleep`；需要管理员授权时会弹出系统密码框。
+    fn set_system_sleep_disabled(&self, disabled: bool) -> Result<(), String> {
+        if self.system_sleep_disabled() == Some(disabled) {
+            self.sync_marker(disabled);
+            return Ok(());
+        }
+        let value = if disabled { "1" } else { "0" };
+        let script = format!(
+            "do shell script \"/usr/bin/pmset -a disablesleep {value}\" with administrator privileges"
+        );
+        let output = Command::new("/usr/bin/osascript")
+            .args(["-e", &script])
+            .output()
+            .map_err(|_| "无法请求管理员授权".to_string())?;
+        if !output.status.success() {
+            return Err(privilege_error(&String::from_utf8_lossy(&output.stderr)));
+        }
+        if self.system_sleep_disabled() != Some(disabled) {
+            return Err("系统休眠设置没有生效，请重试".to_string());
+        }
+        self.sync_marker(disabled);
+        Ok(())
+    }
+
+    /// 读取 `pmset -g` 中的 SleepDisabled；读不到时返回 None。
+    fn system_sleep_disabled(&self) -> Option<bool> {
+        let Output { stdout, status, .. } = Command::new("/usr/bin/pmset").arg("-g").output().ok()?;
+        if !status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&stdout);
+        text.lines()
+            .find_map(|line| line.trim().strip_prefix("SleepDisabled"))
+            .and_then(|rest| rest.trim().parse::<u32>().ok())
+            .map(|value| value == 1)
+    }
+
+    fn sync_marker(&self, disabled: bool) {
+        let Some(path) = self.marker_path() else {
+            return;
+        };
+        if disabled {
+            let _ = std::fs::write(&path, b"1");
+        } else {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
+/// osascript 授权失败时给用户可读的原因。
+fn privilege_error(stderr: &str) -> String {
+    // -128 是用户点击取消的标准错误码。
+    if stderr.contains("-128") || stderr.to_lowercase().contains("cancel") {
+        "已取消管理员授权，系统休眠设置未修改".to_string()
+    } else {
+        "修改系统休眠设置失败，请重试".to_string()
+    }
+}
+
+impl Drop for SleepInhibitor {
+    /// 兜底：状态被丢弃时也要结束子进程，避免留下孤儿。
+    fn drop(&mut self) {
         if let Ok(mut guard) = self.child.lock() {
             if let Some(mut child) = guard.take() {
                 let _ = child.kill();
@@ -63,21 +248,17 @@ impl SleepInhibitor {
     }
 }
 
-impl Drop for SleepInhibitor {
-    /// 兜底：进程退出或状态被丢弃时也要结束子进程，避免留下孤儿。
-    fn drop(&mut self) {
-        self.release();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// 读取当前持有的子进程 PID；没有子进程时为 None。
     fn held_pid(inhibitor: &SleepInhibitor) -> Option<u32> {
-        let guard = inhibitor.child.lock().unwrap();
-        guard.as_ref().map(|child| child.id())
+        inhibitor
+            .child
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|child| child.id())
     }
 
     #[cfg(target_os = "macos")]
@@ -90,55 +271,83 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_os = "macos")]
-    fn enabling_spawns_one_inhibitor_and_disabling_removes_it() {
-        let inhibitor = SleepInhibitor::default();
-        inhibitor.apply(false).unwrap();
-        assert_eq!(held_pid(&inhibitor), None);
-
-        inhibitor.apply(true).unwrap();
-        let pid = held_pid(&inhibitor).expect("inhibitor should be running");
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        assert!(is_alive(pid));
-
-        // 重复启用不应再起第二个进程。
-        inhibitor.apply(true).unwrap();
-        assert_eq!(held_pid(&inhibitor), Some(pid));
-
-        inhibitor.apply(false).unwrap();
-        assert_eq!(held_pid(&inhibitor), None);
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        assert!(!is_alive(pid), "disabled inhibitor must not linger");
+    fn cancelled_authorization_is_reported_separately() {
+        assert_eq!(
+            privilege_error("execution error: User canceled. (-128)"),
+            "已取消管理员授权，系统休眠设置未修改"
+        );
+        assert_eq!(
+            privilege_error("execution error: something else"),
+            "修改系统休眠设置失败，请重试"
+        );
     }
 
     #[test]
-    #[cfg(target_os = "macos")]
-    fn release_cleans_up_without_explicit_disable() {
+    fn marker_tracks_system_setting_state() {
+        let dir = std::env::temp_dir().join(format!("shrinkdrop-marker-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("keep-awake.lock");
+        let _ = std::fs::remove_file(&marker);
         let inhibitor = SleepInhibitor::default();
-        inhibitor.apply(true).unwrap();
-        let pid = held_pid(&inhibitor).expect("inhibitor should be running");
-        inhibitor.release();
-        assert_eq!(held_pid(&inhibitor), None);
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        assert!(!is_alive(pid), "released inhibitor must not linger");
+        inhibitor.bind_marker(marker.clone());
+
+        inhibitor.sync_marker(true);
+        assert!(marker.exists());
+        inhibitor.sync_marker(false);
+        assert!(!marker.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    #[cfg(target_os = "macos")]
-    fn exited_child_is_replaced_on_reenable() {
-        let inhibitor = SleepInhibitor::default();
-        inhibitor.apply(true).unwrap();
-        let first = held_pid(&inhibitor).expect("inhibitor should be running");
-        // 模拟子进程被系统回收。
-        if let Ok(mut guard) = inhibitor.child.lock() {
-            if let Some(mut child) = guard.take() {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
+    fn legacy_boolean_setting_migrates_to_idle() {
+        let legacy_true: KeepAwake = serde_json::from_str("true").unwrap();
+        let legacy_false: KeepAwake = serde_json::from_str("false").unwrap();
+        assert_eq!(legacy_true, KeepAwake::Idle);
+        assert_eq!(legacy_false, KeepAwake::Off);
+    }
+
+    #[test]
+    fn level_names_round_trip() {
+        for level in [KeepAwake::Off, KeepAwake::Idle, KeepAwake::Always] {
+            let json = serde_json::to_string(&level).unwrap();
+            let parsed: KeepAwake = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, level);
         }
-        inhibitor.apply(true).unwrap();
-        let second = held_pid(&inhibitor).expect("inhibitor should restart");
-        assert_ne!(first, second);
+        assert_eq!(serde_json::to_string(&KeepAwake::Always).unwrap(), "\"always\"");
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn idle_level_runs_one_caffeinate_and_off_removes_it() {
+        let inhibitor = SleepInhibitor::default();
+        inhibitor.set_caffeinate(KeepAwake::Off).unwrap();
+        assert_eq!(held_pid(&inhibitor), None);
+
+        inhibitor.set_caffeinate(KeepAwake::Idle).unwrap();
+        let pid = held_pid(&inhibitor).expect("idle should spawn caffeinate");
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        assert!(is_alive(pid));
+        assert_eq!(inhibitor.current_args().as_deref(), Some(&["-i"][..]));
+
+        inhibitor.set_caffeinate(KeepAwake::Off).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!is_alive(pid), "off must stop the child");
+        assert_eq!(held_pid(&inhibitor), None);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn switching_from_idle_to_always_restarts_with_display_flags() {
+        let inhibitor = SleepInhibitor::default();
+        inhibitor.set_caffeinate(KeepAwake::Idle).unwrap();
+        let idle_pid = held_pid(&inhibitor).unwrap();
+        inhibitor.set_caffeinate(KeepAwake::Always).unwrap();
+        let always_pid = held_pid(&inhibitor).unwrap();
+        assert_ne!(idle_pid, always_pid, "flags changed so the child must restart");
+        assert_eq!(
+            inhibitor.current_args().as_deref(),
+            Some(&["-d", "-i", "-s"][..])
+        );
         inhibitor.release();
     }
 
@@ -147,8 +356,8 @@ mod tests {
     fn dropping_the_inhibitor_ends_the_child() {
         let pid = {
             let inhibitor = SleepInhibitor::default();
-            inhibitor.apply(true).unwrap();
-            let pid = held_pid(&inhibitor).expect("inhibitor should be running");
+            inhibitor.set_caffeinate(KeepAwake::Idle).unwrap();
+            let pid = held_pid(&inhibitor).expect("child should be running");
             assert!(is_alive(pid));
             pid
         };
@@ -162,8 +371,7 @@ mod tests {
             return;
         }
         let inhibitor = SleepInhibitor::default();
-        assert!(inhibitor.apply(true).is_ok());
-        assert!(inhibitor.apply(false).is_ok());
-        inhibitor.release();
+        assert!(inhibitor.apply(KeepAwake::Always).is_ok());
+        assert!(inhibitor.apply(KeepAwake::Off).is_ok());
     }
 }

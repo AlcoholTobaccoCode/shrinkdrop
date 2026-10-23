@@ -18,10 +18,10 @@ pub fn run() {
         .manage(power::SleepInhibitor::default())
         .setup(|app| {
             let loaded = settings::load(&app.handle());
-            // 启动时恢复用户上次选择的防休眠状态。
-            let _ = app
-                .state::<power::SleepInhibitor>()
-                .apply(loaded.general.keep_awake);
+            // 启动时恢复防休眠档位；若上次异常退出留下了系统级设置，这里一并纠正。
+            let inhibitor = app.state::<power::SleepInhibitor>();
+            inhibitor.bind_marker(settings::keep_awake_marker(&app.handle()));
+            let _ = inhibitor.reconcile(loaded.general.keep_awake);
             app.state::<settings::SettingsState>().replace(loaded);
             Ok(())
         })

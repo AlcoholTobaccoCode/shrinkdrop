@@ -1,4 +1,6 @@
 export type StartFace = 'last' | 'compress' | 'share';
+/** macOS 防休眠档位：关 / 阻止空闲休眠 / 彻底不休眠（含合盖）。 */
+export type KeepAwake = 'off' | 'idle' | 'always';
 export type Face = 'compress' | 'share';
 export type Language = 'auto' | 'zh' | 'en';
 export type Protection = 'link' | 'pin' | 'accounts';
@@ -36,7 +38,7 @@ export interface GroupAccessPatch {
 }
 
 export interface SettingsView {
-  general: { startFace: StartFace; lastFace: Face; language: Language; keepAwake: boolean };
+  general: { startFace: StartFace; lastFace: Face; language: Language; keepAwake: KeepAwake };
   compression: { autoCompress: boolean; concurrency: number; saveDir: string | null };
   share: {
     port: number;
@@ -97,7 +99,7 @@ export interface SettingsAdapter {
 
 export function defaultSettings(): SettingsView {
   return {
-    general: { startFace: 'last', lastFace: 'compress', language: 'auto', keepAwake: false },
+    general: { startFace: 'last', lastFace: 'compress', language: 'auto', keepAwake: 'off' },
     compression: { autoCompress: false, concurrency: 5, saveDir: null },
     share: {
       port: 5421,

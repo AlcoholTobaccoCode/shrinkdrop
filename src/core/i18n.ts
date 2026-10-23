@@ -161,9 +161,20 @@ const en: Record<string, string> = {
   '语言': 'Language',
   '语言修改会立即同步到桌面端与访客页。':
     'Language changes apply to the desktop and visitor page immediately.',
-  '合盖不休眠': 'Stay awake with lid closed',
-  '开启后使用系统防休眠，笔记本合盖或空闲时不会进入睡眠；关闭应用或此开关即恢复。':
-    'Uses the system sleep inhibitor so the laptop keeps running when the lid is closed or idle. Turn this off or quit the app to restore normal sleep.',
+  '防休眠': 'Sleep prevention',
+  '关闭': 'Off',
+  '空闲不休眠': 'Stay awake when idle',
+  '彻底不休眠': 'Never sleep',
+  '阻止系统空闲休眠，屏幕仍会按节能设置关闭；适合有人在旁边扫码下载。':
+    'Prevents idle system sleep. The display still follows your energy settings. Good when someone is downloading nearby.',
+  '同时阻止空闲与合盖休眠。合盖需要管理员授权修改系统电源设置，退出应用或切回其它档位时自动恢复。':
+    'Prevents idle and lid-close sleep. Lid-close sleep needs administrator approval to change a system power setting, which is restored when you quit or switch levels.',
+  '按系统节能设置休眠；合盖后局域网分享会中断。':
+    'Sleep follows your energy settings. Closing the lid ends LAN sharing.',
+  '已取消管理员授权，系统休眠设置未修改': 'Administrator approval was cancelled; the system sleep setting is unchanged',
+  '修改系统休眠设置失败，请重试': 'Could not change the system sleep setting. Try again.',
+  '系统休眠设置没有生效，请重试': 'The system sleep setting did not apply. Try again.',
+  '防休眠设置未生效': 'Sleep prevention did not take effect',
   '设置保存在应用配置目录；PIN 使用哈希，账号口令明文保存在本地。':
     'Settings live in the app config folder; PIN is hashed and account passwords are stored in plain text locally.',
   '正在取消': 'Canceling',

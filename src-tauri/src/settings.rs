@@ -74,8 +74,9 @@ pub struct General {
     pub last_face: Face,
     #[serde(default, alias = "visitorLang")]
     pub language: Language,
-    /// macOS 上阻止空闲休眠，便于访客在合盖/待机期间继续下载。
-    pub keep_awake: bool,
+    /// macOS 防休眠档位；见 power::KeepAwake。
+    #[serde(default)]
+    pub keep_awake: crate::power::KeepAwake,
 }
 
 impl Default for General {
@@ -84,7 +85,7 @@ impl Default for General {
             start_face: StartFace::Last,
             last_face: Face::Compress,
             language: Language::Auto,
-            keep_awake: false,
+            keep_awake: crate::power::KeepAwake::Off,
         }
     }
 }
@@ -401,6 +402,14 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|_| "无法定位设置目录".to_string())
 }
 
+/// 防休眠标记文件：存在表示本应用把系统 `disablesleep` 设为 1，退出时需恢复。
+pub fn keep_awake_marker(app: &AppHandle) -> PathBuf {
+    app.path()
+        .app_config_dir()
+        .map(|dir| dir.join("keep-awake.lock"))
+        .unwrap_or_else(|_| std::env::temp_dir().join("shrinkdrop-keep-awake.lock"))
+}
+
 pub fn load(app: &AppHandle) -> Settings {
     let Ok(path) = settings_path(app) else {
         return Settings::default();
@@ -472,14 +481,20 @@ async fn commit(
     restart: bool,
 ) -> Result<SettingsMutation, String> {
     validate(&settings)?;
+    let previous = state.get();
     state.replace(settings.clone());
     persist(app, &settings)?;
-    // 防休眠只影响系统电源状态，失败不回滚设置，避免开关看起来"没生效"却已保存。
+    // 第三档需要管理员授权：授权失败时回滚档位，避免界面显示"已开启"但系统仍在休眠。
     if let Err(error) = app
         .state::<crate::power::SleepInhibitor>()
         .apply(settings.general.keep_awake)
     {
+        let mut rolled_back = settings.clone();
+        rolled_back.general.keep_awake = previous.general.keep_awake;
+        state.replace(rolled_back.clone());
+        persist(app, &rolled_back)?;
         let _ = app.emit("settings-toast", error);
+        return Err("防休眠设置未生效".to_string());
     }
     let restarted = if restart {
         restart_if_running(app, manager, &settings).await

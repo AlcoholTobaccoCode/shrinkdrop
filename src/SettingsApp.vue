@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { createSettingsSession } from './core/settings/session';
 import { createSettingsAdapter } from './platform';
 import { setLanguage, t } from './core/i18n';
-import type { Language, Permissions, Protection, StartFace } from './core/settings/types';
+import type { KeepAwake, Language, Permissions, Protection, StartFace } from './core/settings/types';
 import { version as appVersion } from '../package.json';
 
 const session = createSettingsSession(createSettingsAdapter());
@@ -67,10 +67,27 @@ function setAutoCompress(event: Event) {
   update(draft => { draft.compression.autoCompress = checked; });
 }
 
-function setKeepAwake(event: Event) {
-  const checked = (event.target as HTMLInputElement).checked;
-  update(draft => { draft.general.keepAwake = checked; });
+function setKeepAwake(level: KeepAwake) {
+  if (view.value.general.keepAwake === level) return;
+  update(draft => { draft.general.keepAwake = level; });
 }
+
+const keepAwakeOptions = computed(() => [
+  { value: 'off' as KeepAwake, label: t('关闭') },
+  { value: 'idle' as KeepAwake, label: t('空闲不休眠') },
+  { value: 'always' as KeepAwake, label: t('彻底不休眠') }
+]);
+
+const keepAwakeHint = computed(() => {
+  switch (view.value.general.keepAwake) {
+    case 'idle':
+      return t('阻止系统空闲休眠，屏幕仍会按节能设置关闭；适合有人在旁边扫码下载。');
+    case 'always':
+      return t('同时阻止空闲与合盖休眠。合盖需要管理员授权修改系统电源设置，退出应用或切回其它档位时自动恢复。');
+    default:
+      return t('按系统节能设置休眠；合盖后局域网分享会中断。');
+  }
+});
 
 function setConcurrency(event: Event) {
   const value = Number((event.target as HTMLInputElement).value);
@@ -249,13 +266,15 @@ function clearGroupPin(group: { id: string }) {
               </label>
               <p class="settings-hint">{{ t('语言修改会立即同步到桌面端与访客页。') }}</p>
               <div v-if="isMac" class="settings-row settings-row--switch">
-                <span>{{ t('合盖不休眠') }}</span>
-                <label class="switch">
-                  <input type="checkbox" :checked="view.general.keepAwake" @change="setKeepAwake" />
-                  <span class="switch-track" aria-hidden="true"><span /></span>
-                </label>
+                <span>{{ t('防休眠') }}</span>
+                <div class="keep-awake-steps" role="radiogroup" :aria-label="t('防休眠')">
+                  <button v-for="option in keepAwakeOptions" :key="option.value" type="button" role="radio"
+                    class="keep-awake-step" :aria-checked="view.general.keepAwake === option.value"
+                    :class="{ 'is-active': view.general.keepAwake === option.value }"
+                    @click="setKeepAwake(option.value)">{{ option.label }}</button>
+                </div>
               </div>
-              <p v-if="isMac" class="settings-hint">{{ t('开启后使用系统防休眠，笔记本合盖或空闲时不会进入睡眠；关闭应用或此开关即恢复。') }}</p>
+              <p v-if="isMac" class="settings-hint">{{ keepAwakeHint }}</p>
             </section>
 
             <section v-else-if="section === 'compression'" class="settings-section">
