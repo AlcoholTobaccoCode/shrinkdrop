@@ -63,13 +63,24 @@ pnpm tauri build
 
 ## 自动打包与下载
 
-公共仓库的 [Desktop installers 流水线](https://github.com/AlcoholTobaccoCode/shrinkdrop/actions/workflows/release.yml) 会在推送到 `main` 或推送 `v*` 标签时自动运行，也可在 Actions 页面点击 **Run workflow** 手动触发。相同工作流在私有仓库中会跳过打包。
+公共仓库的 [Desktop installers 流水线](https://github.com/AlcoholTobaccoCode/shrinkdrop/actions/workflows/release.yml) 会在推送到 `main` 或推送 `v*` 标签时自动运行，也可在 Actions 页面点击 **Run workflow** 手动触发。
 
-每次构建先运行前端和 Rust 测试，再并行生成 Windows x64（`.exe`、`.msi`）与 macOS 通用（`.dmg`，支持 Intel 和 Apple Silicon）安装包。成功后进入该次运行页面，在 **Artifacts** 下载对应平台压缩包；通常需要登录 GitHub。
+普通用户请前往 [最新正式版下载](https://github.com/AlcoholTobaccoCode/shrinkdrop/releases/latest)，在 **Assets** 中直接下载 Windows x64（`.exe`、`.msi`）或 macOS 通用（`.dmg`，支持 Intel 和 Apple Silicon）安装包，无需登录 GitHub。安装包暂未配置开发者签名及 macOS 公证。
 
-产物名为 `shrinkdrop-<版本>-<平台>-<运行编号>-<重跑次数>`，每个平台包内还包含 `SHA256SUMS.txt` 和记录提交、版本及构建链接的 `build-info.json`。每次运行的产物单独保留 **90 天**，到期由 GitHub 自动删除；长期使用请下载到本地。流水线不自动发布 GitHub Release，安装包暂未配置开发者签名及 macOS 公证。
+每次构建先检查 `package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 和 `Cargo.lock` 的应用版本一致，再运行前端和 Rust 测试并生成安装包。`main` 构建保存在 Actions 的 **Artifacts**；产物名为 `shrinkdrop-<版本>-<平台>-<运行编号>-<重跑次数>`，包含安装包、`SHA256SUMS.txt` 和记录提交、版本及构建链接的 `build-info.json`。这些 Actions 产物保留 **90 天**，下载通常需要登录 GitHub。
 
-默认 `git push` 只推私有仓库；需要触发公共仓库自动打包时，执行 `git push origin main`。推送标签到公共仓库可使用 `git push origin v0.1.0`（标签需提前创建）。
+推送与应用版本一致的 `v<版本>` 标签后，流水线会在双平台构建和校验全部成功后，自动创建并公开发布同名 GitHub Release，将三个安装包、合并的校验文件和构建信息附在 Assets 中。Release 附件不受 Actions 的 90 天保留期限制。含 `-` 的预发布版本会标记为 Pre-release，正式版本会设为 Latest。重跑同一标签会更新同名 Release 的附件。
+
+发布新版本时，先同步修改上述版本配置（并更新 Cargo.lock），提交代码，再按版本号创建标签并推送到公共仓库：
+
+```bash
+git push origin main
+VERSION=$(node -p 'require("./package.json").version')
+git tag -a "v$VERSION" -m "shrinkdrop $VERSION"
+git push origin "v$VERSION"
+```
+
+标签必须指向包含对应版本代码和发布流水线的提交。标签与项目版本不一致会立即失败；不要移动已发布版本的标签，后续更新请递增版本号。
 
 ## 文档
 

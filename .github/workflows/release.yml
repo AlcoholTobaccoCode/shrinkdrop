@@ -10,8 +10,33 @@ permissions:
   contents: read
 
 jobs:
-  tauri:
+  version:
     if: github.repository == 'AlcoholTobaccoCode/shrinkdrop'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate app and tag versions
+        id: version
+        shell: python
+        run: |
+          import json, os, re, tomllib
+          from pathlib import Path
+          version = json.loads(Path('package.json').read_text())['version']
+          tauri = json.loads(Path('src-tauri/tauri.conf.json').read_text())['version']
+          cargo = tomllib.loads(Path('src-tauri/Cargo.toml').read_text())['package']['version']
+          lock = tomllib.loads(Path('src-tauri/Cargo.lock').read_text())
+          locked = next(p['version'] for p in lock['package'] if p['name'] == 'shrinkdrop' and 'source' not in p)
+          assert re.fullmatch(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', version), f'Invalid version: {version}'
+          assert version == tauri == cargo == locked, f'Version mismatch: {version}, {tauri}, {cargo}, {locked}'
+          if os.environ['GITHUB_REF_TYPE'] == 'tag':
+              assert os.environ['GITHUB_REF_NAME'] == f'v{version}', 'Tag must match app version'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\n')
+
+  tauri:
+    needs: version
     name: Build ${{ matrix.artifact }}
     timeout-minutes: 45
     strategy:
@@ -45,11 +70,6 @@ jobs:
           workspaces: src-tauri -> target
       - run: pnpm test
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
-      - name: Read app version
-        id: app
-        shell: bash
-        run: |
-          node -e "const fs = require('node:fs'); fs.appendFileSync(process.env.GITHUB_OUTPUT, 'version=' + require('./package.json').version + '\n')"
       - uses: tauri-apps/tauri-action@v0
         with:
           args: ${{ matrix.args }} --ci -- --locked
@@ -58,8 +78,72 @@ jobs:
         run: node scripts/collect-installers.mjs "${{ matrix.bundle-directory }}" "dist/installers/ci/${{ matrix.artifact }}" "${{ matrix.artifact }}"
       - uses: actions/upload-artifact@v4
         with:
-          name: shrinkdrop-${{ steps.app.outputs.version }}-${{ matrix.artifact }}-${{ github.run_number }}-${{ github.run_attempt }}
+          name: shrinkdrop-${{ needs.version.outputs.version }}-${{ matrix.artifact }}-${{ github.run_number }}-${{ github.run_attempt }}
           path: dist/installers/ci/${{ matrix.artifact }}/
           if-no-files-found: error
           retention-days: 90
           compression-level: 0
+
+  release:
+    name: Publish GitHub Release
+    needs: [version, tauri]
+    if: github.repository == 'AlcoholTobaccoCode/shrinkdrop' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    concurrency:
+      group: publish-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select latest successful platform artifacts
+        id: installers
+        uses: actions/github-script@v7
+        env:
+          APP_VERSION: ${{ needs.version.outputs.version }}
+        with:
+          result-encoding: string
+          script: |
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              ...context.repo,
+              run_id: context.runId,
+              per_page: 100,
+            });
+            const ids = ['macos-universal', 'windows-x64'].map(platform => {
+              const prefix = `shrinkdrop-${process.env.APP_VERSION}-${platform}-${context.runNumber}-`;
+              const artifact = artifacts
+                .filter(item => !item.expired && item.name.startsWith(prefix) && /^\d+$/.test(item.name.slice(prefix.length)))
+                .sort((a, b) => b.id - a.id)[0];
+              if (!artifact) throw new Error(`Missing artifact for ${platform}`);
+              return artifact.id;
+            });
+            return ids.join(',');
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.installers.outputs.result }}
+          path: dist/release-input
+      - name: Verify and prepare release assets
+        run: node scripts/prepare-release.mjs dist/release-input dist/release
+      - name: Publish installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          APP_VERSION: ${{ needs.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "$RELEASE_TAG" --json isDraft > dist/release-state.json; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "shrinkdrop $APP_VERSION" --notes-file dist/release/RELEASE_NOTES.md
+          fi
+          gh release upload "$RELEASE_TAG" dist/release/*.dmg dist/release/*.exe dist/release/*.msi dist/release/SHA256SUMS.txt dist/release/build-info.json --clobber
+          prerelease=false
+          latest=true
+          if [[ "$APP_VERSION" == *-* ]]; then
+            prerelease=true
+            latest=false
+          fi
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease="$prerelease" --latest="$latest" --title "shrinkdrop $APP_VERSION" --notes-file dist/release/RELEASE_NOTES.md
+          echo "### [Download shrinkdrop $APP_VERSION](https://github.com/$GH_REPO/releases/tag/$RELEASE_TAG)" >> "$GITHUB_STEP_SUMMARY"
