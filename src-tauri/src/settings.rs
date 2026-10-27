@@ -844,22 +844,32 @@ pub fn settings_close(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// 打开独立的设置窗口。
+///
+/// 必须是 async 命令：Tauri 的同步命令在主线程执行，而 Windows 上
+/// `WebviewWindowBuilder::build` 需要主线程消息循环才能创建 WebView2，
+/// 同步调用会死锁（窗口白屏、整个进程无法响应/关闭）。
 #[tauri::command]
-pub fn settings_open(app: AppHandle) -> Result<(), String> {
+pub async fn settings_open(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("settings") {
         let _ = window.show();
         let _ = window.set_focus();
         return Ok(());
     }
-    WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
-        .title("设置 · shrinkdrop")
-        .inner_size(760.0, 680.0)
-        .center()
-        .resizable(false)
-        .maximizable(false)
-        .build()
-        .map(|_| ())
-        .map_err(|_| "无法打开设置窗口".to_string())
+    let window =
+        WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
+            .title("设置 · shrinkdrop")
+            .inner_size(760.0, 680.0)
+            .center()
+            .resizable(false)
+            .maximizable(false)
+            .build()
+            .map_err(|_| "无法打开设置窗口".to_string())?;
+    // 创建期间主窗口可能已关闭；此时不要让残留的设置窗口拖住进程退出。
+    if app.get_webview_window("main").is_none() {
+        let _ = window.close();
+    }
+    Ok(())
 }
 
 #[cfg(test)]
