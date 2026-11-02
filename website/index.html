@@ -1,0 +1,1892 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title id="pageTitle">shrinkdrop — 让图片轻一点</title>
+<meta id="pageDesc" name="description" content="shrinkdrop 是一个只做图片压缩的桌面客户端：PNG、JPG、WebP 一次拖入，最多 5 张并发；还能把文件直接分享给同一 Wi-Fi 下的人，不经云中转。" />
+<meta name="theme-color" content="#04100b" />
+<meta id="ogTitle" property="og:title" content="shrinkdrop — 让图片轻一点" />
+<meta id="ogDesc" property="og:description" content="桌面图片压缩 + 局域网文件分享。TinyPNG 提供压缩能力，文件分享不经云中转。" />
+<meta property="og:type" content="website" />
+<link rel="icon" href="assets/favicon.png" />
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+<style>
+/* ============================================================
+   shrinkdrop — landing
+   ============================================================ */
+:root {
+  --stage: #04100b;
+  --stage-2: #06170f;
+  --panel: rgba(10, 32, 22, .72);
+  --line: rgba(160, 255, 196, .14);
+  --line-strong: rgba(160, 255, 196, .28);
+  --cream: #f0f7f2;
+  --muted: #93ac9f;
+  --faint: #628073;
+  --lime: #b9ff5e;
+  --emerald: #35e38c;
+  --mint: #7dffc4;
+  --deep: #082017;
+  --warn: #ffcf70;
+  --font-sans: "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --nav-h: 72px;
+  --max: 1240px;
+  --ease: cubic-bezier(.22, 1, .36, 1);
+  --ease-in-out: cubic-bezier(.65, 0, .35, 1);
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; overflow-x: clip; }
+section[id], .shrink[id] { scroll-margin-top: calc(var(--nav-h) + 16px); }
+body {
+  margin: 0;
+  background: var(--stage);
+  color: var(--cream);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.6;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+::selection { background: var(--lime); color: #06170f; }
+a { color: inherit; text-decoration: none; }
+button { font: inherit; color: inherit; }
+img { max-width: 100%; display: block; }
+:focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; border-radius: 6px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ---------- atmosphere ---------- */
+.aurora {
+  position: fixed; inset: -20vh -10vw auto; height: 120vh;
+  pointer-events: none; z-index: 0; filter: blur(90px); opacity: .55;
+  background:
+    radial-gradient(38% 32% at 18% 24%, rgba(53, 227, 140, .28), transparent 70%),
+    radial-gradient(30% 30% at 82% 18%, rgba(185, 255, 94, .16), transparent 70%),
+    radial-gradient(42% 40% at 55% 68%, rgba(18, 120, 80, .30), transparent 72%);
+  animation: drift 18s var(--ease-in-out) infinite alternate;
+}
+@keyframes drift {
+  0% { transform: translate3d(-2%, -1%, 0) scale(1); }
+  100% { transform: translate3d(3%, 2%, 0) scale(1.08); }
+}
+.grain {
+  position: fixed; inset: 0; z-index: 60; pointer-events: none; opacity: .05;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");
+  mix-blend-mode: overlay;
+}
+.spotlight {
+  position: fixed; width: 520px; height: 520px; z-index: 1; pointer-events: none;
+  border-radius: 50%; opacity: 0; transition: opacity .4s ease;
+  background: radial-gradient(circle, rgba(125, 255, 196, .10), transparent 62%);
+  transform: translate(-50%, -50%);
+  mix-blend-mode: screen;
+}
+@media (hover: hover) { .spotlight.on { opacity: 1; } }
+
+/* ---------- nav ---------- */
+.nav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+  height: var(--nav-h);
+  display: flex; align-items: center;
+  padding: 0 clamp(18px, 4vw, 48px);
+  transition: background .35s ease, border-color .35s ease, backdrop-filter .35s ease;
+  border-bottom: 1px solid transparent;
+}
+.nav.scrolled {
+  background: rgba(4, 16, 11, .72);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border-bottom-color: var(--line);
+}
+.nav-inner { width: 100%; max-width: var(--max); margin: 0 auto; display: flex; align-items: center; gap: 26px; }
+.brand { display: flex; align-items: center; gap: 11px; font-weight: 700; letter-spacing: -.02em; font-size: 17px; }
+.brand img { width: 32px; height: 32px; border-radius: 9px; box-shadow: 0 6px 18px rgba(0,0,0,.45), 0 0 0 1px rgba(255,255,255,.08); }
+.brand span { opacity: .92; }
+.nav-links { display: flex; align-items: center; gap: 4px; margin-left: 16px; }
+.nav-links a {
+  padding: 8px 12px; border-radius: 999px; font-size: 13.5px; color: var(--muted);
+  transition: color .2s ease, background .2s ease;
+}
+.nav-links a:hover { color: var(--cream); background: rgba(255,255,255,.05); }
+.nav-spacer { flex: 1; }
+.nav-actions { display: flex; align-items: center; gap: 10px; }
+.lang-toggle {
+  display: inline-flex; align-items: center; gap: 5px; height: 34px; padding: 0 11px;
+  border-radius: 999px; border: 1px solid var(--line); background: rgba(255,255,255,.02);
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .06em; color: var(--faint);
+  cursor: pointer; transition: border-color .2s ease, color .2s ease;
+}
+.lang-toggle:hover { border-color: var(--line-strong); color: var(--muted); }
+.lang-toggle .opt { transition: color .2s ease; }
+.lang-toggle .opt.on { color: var(--lime); }
+.lang-toggle .sep { opacity: .35; }
+.icon-link {
+  display: inline-flex; align-items: center; gap: 7px; padding: 8px 13px; border-radius: 999px;
+  font-size: 13px; color: var(--muted); border: 1px solid transparent; transition: .2s ease;
+}
+.icon-link:hover { color: var(--cream); border-color: var(--line); }
+.icon-link svg { width: 16px; height: 16px; }
+.btn {
+  --btn-bg: var(--lime); --btn-fg: #06170f;
+  position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+  height: 44px; padding: 0 20px; border-radius: 999px; border: 0;
+  background: var(--btn-bg); color: var(--btn-fg);
+  font-size: 14px; font-weight: 650; letter-spacing: .01em; cursor: pointer;
+  overflow: hidden; isolation: isolate;
+  transition: transform .25s var(--ease), box-shadow .25s ease, background .2s ease;
+  box-shadow: 0 0 0 0 rgba(185, 255, 94, 0);
+  will-change: transform;
+}
+.btn::after {
+  content: ""; position: absolute; inset: 0; z-index: -1;
+  background: linear-gradient(105deg, transparent 30%, rgba(255,255,255,.55) 48%, transparent 62%);
+  transform: translateX(-120%); transition: transform .7s var(--ease);
+}
+.btn:hover { box-shadow: 0 10px 40px -8px rgba(185, 255, 94, .55); }
+.btn:hover::after { transform: translateX(120%); }
+.btn svg { width: 16px; height: 16px; }
+.btn.ghost { --btn-bg: transparent; --btn-fg: var(--cream); border: 1px solid var(--line-strong); box-shadow: none; }
+.btn.ghost:hover { background: rgba(255,255,255,.06); box-shadow: none; }
+.btn.big { height: 52px; padding: 0 26px; font-size: 15px; }
+
+/* ---------- hero ---------- */
+.hero {
+  position: relative; z-index: 2;
+  min-height: 100svh;
+  padding: calc(var(--nav-h) + clamp(40px, 9vh, 110px)) clamp(18px, 4vw, 48px) 60px;
+  display: flex; flex-direction: column; justify-content: center;
+}
+.hero-inner { width: 100%; max-width: var(--max); margin: 0 auto; }
+.kicker {
+  display: inline-flex; align-items: center; gap: 10px;
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--lime); padding: 7px 13px 7px 10px; border: 1px solid var(--line); border-radius: 999px;
+  background: rgba(6, 30, 20, .55); backdrop-filter: blur(8px);
+}
+.kicker .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 12px var(--lime); animation: pulse 2.4s ease infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; transform: scale(1);} 50% { opacity: .35; transform: scale(.7);} }
+.hero-grid {
+  display: grid; grid-template-columns: minmax(0, 1.02fr) minmax(0, .98fr);
+  gap: clamp(30px, 5vw, 70px); align-items: center; margin-top: 26px;
+}
+.display {
+  font-size: clamp(54px, 8.4vw, 116px);
+  line-height: 1; letter-spacing: -.045em; font-weight: 800;
+  margin: 0; text-wrap: balance;
+}
+html[data-lang="en"] .display { font-size: clamp(52px, 6.8vw, 96px); letter-spacing: -.05em; }
+.display .line { display: block; overflow: hidden; white-space: nowrap; }
+.display .line > span { display: block; transform: translateY(110%); opacity: 0; }
+.loaded .display .line > span { transform: none; opacity: 1; transition: transform 1s var(--ease), opacity .8s ease; }
+.display .line:nth-child(2) > span { transition-delay: .12s; }
+.display .line:nth-child(3) > span { transition-delay: .24s; }
+.display em {
+  font-style: normal;
+  background: linear-gradient(96deg, var(--mint) 0%, var(--lime) 46%, #eaffb8 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 0 26px rgba(185, 255, 94, .28));
+}
+.display .thin { font-weight: 300; letter-spacing: -.05em; color: #cfe3d7; }
+.hero-sub {
+  margin: 26px 0 0; max-width: 40ch; color: var(--muted); font-size: clamp(15px, 1.2vw, 17px); line-height: 1.85;
+  opacity: 0; transform: translateY(14px);
+}
+.loaded .hero-sub { opacity: 1; transform: none; transition: .9s var(--ease) .4s; }
+.hero-sub b { color: var(--cream); font-weight: 600; }
+.hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; opacity: 0; transform: translateY(14px); }
+.loaded .hero-actions { opacity: 1; transform: none; transition: .9s var(--ease) .52s; }
+.hero-meta { margin-top: 22px; display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 12.5px; color: var(--faint); opacity: 0; }
+.loaded .hero-meta { opacity: 1; transition: 1s ease .7s; }
+.hero-meta span { display: inline-flex; align-items: center; gap: 7px; }
+.hero-meta svg { width: 14px; height: 14px; color: var(--emerald); }
+
+/* hero visual: app window */
+.hero-visual { position: relative; perspective: 1400px; opacity: 0; transform: translateY(24px) scale(.97); }
+.loaded .hero-visual { opacity: 1; transform: none; transition: 1.2s var(--ease) .5s; }
+.app-window {
+  position: relative; border-radius: 18px; overflow: hidden;
+  background: linear-gradient(165deg, rgba(16, 40, 29, .96), rgba(7, 22, 15, .98));
+  border: 1px solid rgba(160, 255, 196, .16);
+  box-shadow: 0 40px 90px -30px rgba(0,0,0,.85), 0 0 0 1px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.06);
+  transform: rotateX(var(--rx, 4deg)) rotateY(var(--ry, -7deg)) translateZ(0);
+  transition: transform .4s ease-out;
+  will-change: transform;
+}
+.app-window::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 3;
+  background: radial-gradient(70% 50% at 70% -10%, rgba(185,255,94,.12), transparent 60%);
+}
+.win-bar {
+  display: flex; align-items: center; gap: 10px; padding: 12px 14px;
+  border-bottom: 1px solid rgba(160,255,196,.10); background: rgba(255,255,255,.02);
+}
+.traffic { display: flex; gap: 6px; margin-right: 4px; }
+.traffic i { width: 9px; height: 9px; border-radius: 50%; background: #31473b; }
+.traffic i:first-child { background: #ff5f57; } .traffic i:nth-child(2) { background: #febc2e; } .traffic i:nth-child(3) { background: #28c840; }
+.win-tabs { display: flex; gap: 4px; padding: 3px; border-radius: 9px; background: rgba(0,0,0,.28); border: 1px solid rgba(160,255,196,.08); }
+.win-tabs span { font-size: 10.5px; padding: 3px 10px; border-radius: 6px; color: var(--faint); }
+.win-tabs span.on { background: rgba(185,255,94,.13); color: var(--lime); }
+.win-bar .win-spacer { flex: 1; }
+.win-pill { font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px; }
+.win-body { padding: 12px; display: grid; gap: 8px; }
+.file-row {
+  position: relative; overflow: hidden; border-radius: 10px;
+  display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 10px;
+  padding: 10px 11px; background: rgba(255,255,255,.028); border: 1px solid rgba(160,255,196,.07);
+}
+.file-row .thumb { width: 30px; height: 30px; border-radius: 7px; background: linear-gradient(140deg, #1d5c41, #0b2c1e); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); }
+.file-row:nth-child(2) .thumb { background: linear-gradient(140deg, #2b6c4a, #123a28); }
+.file-row:nth-child(3) .thumb { background: linear-gradient(140deg, #3a7a52, #163f2b); }
+.file-row:nth-child(4) .thumb { background: linear-gradient(140deg, #235f44, #0e2f20); }
+.file-name { font-size: 11.5px; color: #dcece2; letter-spacing: .01em; }
+.file-meta { font-size: 10px; color: var(--faint); margin-top: 1px; font-family: var(--font-mono); }
+.file-delta { font-size: 10.5px; font-family: var(--font-mono); color: var(--lime); }
+.file-row .fill {
+  position: absolute; left: 0; bottom: 0; height: 2px; width: var(--p, 0%);
+  background: linear-gradient(90deg, rgba(53,227,140,.2), var(--emerald) 55%, var(--lime));
+  box-shadow: 0 0 14px rgba(185,255,94,.5);
+  animation: fill 3.4s var(--ease) infinite alternate;
+}
+.file-row:nth-child(2) .fill { animation-delay: .5s; --p: 92%; }
+.file-row:nth-child(3) .fill { animation-delay: 1s; --p: 64%; animation-direction: alternate-reverse; }
+.file-row:nth-child(4) .fill { animation-delay: 1.4s; --p: 100%; }
+@keyframes fill { from { width: 8%; } to { width: var(--p); } }
+.win-foot { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px 13px; border-top: 1px solid rgba(160,255,196,.09); font-size: 10px; color: var(--faint); }
+.win-foot .saved { color: var(--lime); font-family: var(--font-mono); }
+.float-chip {
+  position: absolute; display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px 8px 9px; border-radius: 999px; font-size: 11px; color: var(--cream);
+  background: rgba(9, 30, 20, .86); border: 1px solid var(--line-strong);
+  backdrop-filter: blur(14px); box-shadow: 0 18px 40px -18px rgba(0,0,0,.9);
+  font-family: var(--font-mono); letter-spacing: .02em;
+}
+.float-chip img { width: 22px; height: 22px; border-radius: 6px; }
+.float-chip.a { top: -18px; right: 26px; animation: bob 6s ease-in-out infinite; }
+.float-chip.b { bottom: -56px; left: -14px; animation: bob 7s ease-in-out infinite reverse; }
+.float-chip .ok { width: 6px; height: 6px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 8px var(--lime); }
+@keyframes bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-9px); } }
+.hero-glow {
+  position: absolute; inset: 12% -6% -12% 20%; z-index: -1;
+  background: radial-gradient(closest-side, rgba(53,227,140,.22), transparent 72%);
+  filter: blur(40px);
+}
+.scroll-cue {
+  position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .22em; color: var(--faint);
+}
+.scroll-cue .line { width: 1px; height: 42px; background: linear-gradient(var(--lime), transparent); animation: cue 2.2s ease infinite; }
+@keyframes cue { 0% { transform: scaleY(.2); transform-origin: top; opacity: 0; } 40% { opacity: 1; } 100% { transform: scaleY(1); transform-origin: top; opacity: 0; } }
+
+/* ---------- marquee ---------- */
+.marquee {
+  position: relative; z-index: 3; border-block: 1px solid var(--line);
+  background: rgba(5, 20, 13, .6); overflow: hidden; padding: 14px 0;
+  mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+}
+.marquee-track { display: flex; width: max-content; animation: slide 34s linear infinite; }
+.marquee:hover .marquee-track { animation-play-state: paused; }
+.marquee ul { display: flex; align-items: center; gap: 34px; margin: 0; padding: 0 17px; list-style: none; }
+.marquee li { display: flex; align-items: center; gap: 34px; font-family: var(--font-mono); font-size: 11px; letter-spacing: .2em; text-transform: uppercase; color: #a9c3b5; white-space: nowrap; }
+.marquee li::after { content: "✳"; color: var(--lime); font-size: 10px; opacity: .7; }
+@keyframes slide { to { transform: translateX(-50%); } }
+
+/* ---------- sections ---------- */
+.section { position: relative; z-index: 2; padding: clamp(72px, 8.5vw, 118px) clamp(18px, 4vw, 48px); }
+.wrap { width: 100%; max-width: var(--max); margin: 0 auto; }
+.eyebrow {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 18px;
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .24em; text-transform: uppercase; color: var(--lime);
+}
+.eyebrow::before { content: ""; width: 24px; height: 1px; background: var(--lime); opacity: .6; }
+h2 {
+  font-size: clamp(34px, 4.6vw, 62px); line-height: 1.02; letter-spacing: -.035em;
+  font-weight: 780; margin: 0; text-wrap: balance;
+}
+h2 .dim { color: #7f9a8c; }
+.lede { margin: 20px 0 0; max-width: 56ch; color: var(--muted); font-size: 15.5px; line-height: 1.9; }
+.section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 30px; flex-wrap: wrap; }
+[data-reveal] { opacity: 0; transform: translateY(28px); transition: opacity .9s var(--ease), transform .9s var(--ease); transition-delay: var(--d, 0s); }
+[data-reveal].in { opacity: 1; transform: none; }
+
+/* ---------- sticky compression scene ---------- */
+.shrink { position: relative; height: 260vh; z-index: 2; }
+.shrink-sticky { position: sticky; top: 0; height: 100svh; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.shrink-stage { width: min(1100px, 100%); padding: 0 clamp(18px, 4vw, 48px); display: grid; grid-template-columns: .9fr 1.1fr; gap: clamp(24px, 5vw, 70px); align-items: center; }
+.shrink-copy { position: relative; }
+.shrink-copy h2 { font-size: clamp(32px, 4vw, 54px); }
+.shrink-copy .steps { margin: 28px 0 0; padding: 0; list-style: none; display: grid; gap: 14px; }
+.shrink-copy .steps li {
+  display: flex; gap: 12px; align-items: baseline; color: var(--faint); font-size: 13px;
+  font-family: var(--font-mono); letter-spacing: .04em; transition: color .3s ease;
+}
+.shrink-copy .steps li .idx { color: rgba(160,255,196,.35); }
+.shrink-copy .steps li.active { color: var(--cream); }
+.shrink-copy .steps li.active .idx { color: var(--lime); }
+.shrink-visual { position: relative; min-height: 430px; display: grid; place-items: center; }
+.ghost-grid {
+  position: absolute; inset: 6% 0; z-index: 0; opacity: .5;
+  background-image: linear-gradient(rgba(160,255,196,.06) 1px, transparent 1px), linear-gradient(90deg, rgba(160,255,196,.06) 1px, transparent 1px);
+  background-size: 46px 46px;
+  mask-image: radial-gradient(closest-side, #000 30%, transparent 100%);
+  -webkit-mask-image: radial-gradient(closest-side, #000 30%, transparent 100%);
+}
+.stack { position: relative; width: min(330px, 78%); aspect-ratio: 4/3; }
+.stack-card {
+  position: absolute; inset: 0; border-radius: 16px; overflow: hidden;
+  border: 1px solid rgba(160,255,196,.2);
+  background: linear-gradient(150deg, #103526, #071a11);
+  box-shadow: 0 30px 70px -30px rgba(0,0,0,.9);
+  transform: translate3d(var(--x, 0), var(--y, 0), 0) rotate(var(--r, 0deg)) scale(var(--s, 1));
+  transition: transform .18s linear;
+  display: flex; flex-direction: column;
+}
+.stack-card .tc { flex: 1; position: relative; overflow: hidden; }
+.stack-card .tc::before {
+  content: ""; position: absolute; inset: 0;
+  background:
+    radial-gradient(60% 80% at 30% 20%, rgba(185,255,94,.55), transparent 60%),
+    radial-gradient(50% 60% at 75% 70%, rgba(53,227,140,.5), transparent 65%),
+    conic-gradient(from 210deg at 55% 55%, #0b3a26, #1d6c46, #0e2e1e, #0b3a26);
+  filter: saturate(1.1);
+}
+.stack-card .tc::after {
+  content: ""; position: absolute; inset: 0;
+  background-image: linear-gradient(rgba(0,0,0,.18) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,.18) 1px, transparent 1px);
+  background-size: 16px 16px; opacity: .25;
+}
+.stack-card .cap { display: flex; align-items: center; justify-content: space-between; padding: 10px 13px; font-family: var(--font-mono); font-size: 10px; color: #b8d3c5; background: rgba(3,13,8,.7); border-top: 1px solid rgba(160,255,196,.1); }
+.stack-card.c2 .cap, .stack-card.c3 .cap { visibility: hidden; }
+.stack-card.c2 { --r: -5deg; --x: -14px; --y: 16px; --s: .94; opacity: .8; }
+.stack-card.c3 { --r: 6deg; --x: 18px; --y: 8px; --s: .88; opacity: .55; }
+.stack-card.c1 { z-index: 2; }
+.stack-badge {
+  position: absolute; z-index: 4; right: -8px; top: -20px;
+  padding: 10px 14px; border-radius: 12px; font-family: var(--font-mono);
+  background: rgba(6, 26, 17, .92); border: 1px solid rgba(185,255,94,.4);
+  box-shadow: 0 20px 50px -20px rgba(0,0,0,.9), 0 0 0 1px rgba(0,0,0,.3);
+  text-align: right;
+}
+.stack-badge .big { display: block; font-size: 26px; color: var(--lime); line-height: 1; letter-spacing: -.02em; }
+.stack-badge .small { display: block; margin-top: 5px; font-size: 9px; letter-spacing: .16em; color: var(--faint); text-transform: uppercase; }
+.size-line {
+  position: absolute; bottom: -34px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: baseline; gap: 10px; font-family: var(--font-mono); white-space: nowrap;
+}
+.size-line .was { color: var(--faint); font-size: 13px; text-decoration: line-through; text-decoration-color: rgba(255,255,255,.25); }
+.size-line .arrow { color: var(--faint); }
+.size-line .now { color: var(--lime); font-size: 22px; letter-spacing: -.02em; }
+.progress-rail {
+  position: absolute; left: 0; right: 0; bottom: -62px; height: 3px; border-radius: 999px;
+  background: rgba(160,255,196,.12); overflow: hidden;
+}
+.progress-rail i {
+  display: block; height: 100%; width: 0%;
+  background: linear-gradient(90deg, rgba(53,227,140,.35), var(--emerald) 50%, var(--lime));
+  box-shadow: 0 0 18px rgba(185,255,94,.7);
+}
+.shrink-hint { position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%); font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .22em; color: rgba(147,172,159,.5); }
+
+/* ---------- demo lab ---------- */
+.lab { background: linear-gradient(180deg, transparent, rgba(6,24,16,.55) 30%, transparent); }
+.lab-panel {
+  margin-top: 46px; border-radius: 24px; border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(12, 34, 24, .8), rgba(6, 20, 14, .9));
+  overflow: hidden; position: relative;
+  box-shadow: 0 60px 120px -60px rgba(0,0,0,.9), inset 0 1px 0 rgba(255,255,255,.05);
+}
+.lab-panel::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(60% 50% at 80% 0%, rgba(185,255,94,.08), transparent 65%);
+}
+.lab-head { display: flex; align-items: center; gap: 14px; padding: 16px 20px; border-bottom: 1px solid var(--line); font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .16em; color: var(--faint); text-transform: uppercase; }
+.lab-head .lights { display: flex; gap: 6px; }
+.lab-head .lights i { width: 8px; height: 8px; border-radius: 50%; background: #2a4437; }
+.lab-head .tag { margin-left: auto; color: var(--lime); border: 1px solid rgba(185,255,94,.3); padding: 3px 9px; border-radius: 999px; flex: none; white-space: nowrap; }
+.lab-head > span:not(.tag) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lab-grid { display: grid; grid-template-columns: .86fr 1.14fr; }
+.lab-side { padding: 26px; border-right: 1px solid var(--line); }
+.drop {
+  border: 1px dashed rgba(160,255,196,.28); border-radius: 16px; padding: 26px 18px;
+  text-align: center; cursor: pointer; transition: .25s ease; background: rgba(255,255,255,.015);
+}
+.drop:hover, .drop.over { border-color: var(--lime); background: rgba(185,255,94,.05); }
+.drop svg { width: 30px; height: 30px; color: var(--lime); margin: 0 auto 12px; }
+.drop strong { display: block; font-size: 14px; font-weight: 600; }
+.drop small { display: block; margin-top: 6px; color: var(--faint); font-size: 11.5px; line-height: 1.6; }
+.lab-note { margin: 16px 0 0; font-size: 11px; line-height: 1.8; color: var(--faint); }
+.lab-status { margin: 12px 0 0; font-size: 11.5px; line-height: 1.7; color: #ffcb8c; }
+.lab-status[hidden] { display: none; }
+.metrics { margin-top: 22px; display: grid; gap: 2px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.metric { display: flex; align-items: center; justify-content: space-between; padding: 12px 15px; background: rgba(255,255,255,.02); font-size: 12px; }
+.metric + .metric { border-top: 1px solid rgba(160,255,196,.08); }
+.metric span:first-child { color: var(--faint); font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .08em; }
+.metric span:last-child { font-family: var(--font-mono); color: var(--cream); }
+.metric.hl span:last-child { color: var(--lime); font-size: 15px; }
+.metric.hl.up span:last-child { color: #ffb86b; }
+.lab-view { position: relative; min-height: 420px; background: #030c08; overflow: hidden; }
+.compare { position: absolute; inset: 0; }
+.compare img, .compare canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.compare .after { clip-path: inset(0 0 0 var(--cut, 50%)); }
+.compare .divider {
+  position: absolute; top: 0; bottom: 0; left: var(--cut, 50%); width: 1px; background: rgba(255,255,255,.85);
+  box-shadow: 0 0 20px rgba(185,255,94,.8); z-index: 3; pointer-events: none;
+}
+.compare .divider::after {
+  content: "⇔"; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--lime); color: #06170f; font-size: 14px; font-weight: 700;
+  box-shadow: 0 0 0 6px rgba(185,255,94,.14);
+}
+.compare .label {
+  position: absolute; top: 14px; z-index: 4; font-family: var(--font-mono); font-size: 9.5px;
+  letter-spacing: .16em; text-transform: uppercase; padding: 5px 9px; border-radius: 5px;
+  background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.14); color: #dcece2;
+  backdrop-filter: blur(6px);
+}
+.compare .label.l { left: 14px; }
+.compare .label.r { right: 14px; color: var(--lime); border-color: rgba(185,255,94,.35); }
+.compare input[type="range"] {
+  position: absolute; inset: auto 0 0; width: 100%; height: 100%; opacity: 0; margin: 0; cursor: ew-resize; z-index: 5;
+}
+.lab-caption { position: absolute; bottom: 14px; left: 14px; right: 14px; z-index: 4; display: flex; justify-content: space-between; gap: 10px; font-family: var(--font-mono); font-size: 9.5px; color: rgba(230,242,235,.85); pointer-events: none; }
+.lab-caption span { background: rgba(3,13,8,.55); border: 1px solid rgba(255,255,255,.08); padding: 4px 7px; border-radius: 4px; backdrop-filter: blur(6px); }
+
+/* ---------- bento ---------- */
+.bento { margin-top: 48px; display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; }
+.cell {
+  position: relative; border-radius: 18px; border: 1px solid var(--line);
+  background: linear-gradient(165deg, rgba(13, 36, 26, .72), rgba(6, 20, 14, .82));
+  padding: 24px; overflow: hidden; min-height: 210px;
+  transition: border-color .3s ease, transform .3s var(--ease);
+}
+.cell::before {
+  content: ""; position: absolute; inset: 0; opacity: 0; transition: opacity .35s ease; pointer-events: none;
+  background: radial-gradient(420px circle at var(--mx, 50%) var(--my, 50%), rgba(185,255,94,.10), transparent 45%);
+}
+.cell:hover { border-color: rgba(185,255,94,.3); transform: translateY(-3px); }
+.cell:hover::before { opacity: 1; }
+.cell h3 { margin: 16px 0 8px; font-size: 17px; font-weight: 650; letter-spacing: -.01em; }
+.cell p { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.8; }
+.cell .glyph { width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center; background: rgba(185,255,94,.09); border: 1px solid rgba(185,255,94,.2); color: var(--lime); }
+.cell .glyph svg { width: 19px; height: 19px; }
+.cell .num { position: absolute; top: 20px; right: 22px; font-family: var(--font-mono); font-size: 10px; color: rgba(160,255,196,.35); letter-spacing: .1em; }
+.cell.wide { grid-column: span 7; }
+.cell.third { grid-column: span 4; }
+.cell.half { grid-column: span 6; }
+.cell.full { grid-column: span 12; }
+.cell.tall { grid-column: span 5; grid-row: span 2; min-height: 430px; display: flex; flex-direction: column; }
+.cell .status-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px; background: rgba(53,227,140,.1); border: 1px solid rgba(53,227,140,.25); color: var(--mint); font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .08em; }
+.cell .status-pill i { width: 5px; height: 5px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 8px var(--mint); }
+.mini-rows { margin-top: auto; display: grid; gap: 7px; }
+.mini-row { position: relative; display: flex; align-items: center; gap: 9px; padding: 9px 10px; border-radius: 9px; background: rgba(255,255,255,.03); border: 1px solid rgba(160,255,196,.07); font-family: var(--font-mono); font-size: 9.5px; color: #cfe3d7; overflow: hidden; }
+.mini-row .mini-bar { position: absolute; left: 0; bottom: 0; height: 1.5px; background: linear-gradient(90deg, var(--emerald), var(--lime)); width: var(--w); }
+.mini-row .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+.mini-row.done .dot { background: var(--lime); box-shadow: 0 0 6px var(--lime); }
+.mini-row .sz { margin-left: auto; color: var(--faint); }
+.mini-row .sz b { color: var(--lime); font-weight: 500; }
+.perm-list { display: grid; gap: 8px; margin-top: 18px; }
+.perm { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-radius: 9px; background: rgba(255,255,255,.025); border: 1px solid rgba(160,255,196,.08); font-size: 11.5px; }
+.perm .toggle { width: 28px; height: 16px; border-radius: 999px; background: rgba(185,255,94,.18); position: relative; }
+.perm .toggle::after { content: ""; position: absolute; top: 2px; right: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--lime); }
+.perm.off .toggle { background: rgba(255,255,255,.08); }
+.perm.off .toggle::after { right: auto; left: 2px; background: #56705f; }
+
+.audio-mock {
+  margin-top: 18px; display: flex; align-items: center; gap: 12px;
+  padding: 11px 12px; border-radius: 11px;
+  background: rgba(0,0,0,.26); border: 1px solid rgba(160,255,196,.1);
+}
+.audio-mock .play {
+  flex: none; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--lime); color: #06170f; box-shadow: 0 0 18px rgba(185,255,94,.35);
+}
+.audio-mock .play svg { width: 12px; height: 12px; margin-left: 2px; }
+.audio-mock .wave { flex: 1; display: flex; align-items: center; gap: 2.5px; height: 26px; overflow: hidden; }
+.audio-mock .wave i {
+  flex: 1; height: var(--h); border-radius: 1.5px;
+  background: linear-gradient(180deg, var(--lime), rgba(53,227,140,.35));
+  animation: eq 1.6s ease-in-out infinite alternate;
+}
+.audio-mock .wave i:nth-child(3n) { animation-delay: -.5s; }
+.audio-mock .wave i:nth-child(4n) { animation-delay: -.9s; }
+.audio-mock .wave i:nth-child(5n) { animation-delay: -1.3s; }
+@keyframes eq { from { transform: scaleY(.55); } to { transform: scaleY(1); } }
+.audio-mock .time { flex: none; font-family: var(--font-mono); font-size: 9.5px; color: var(--faint); white-space: nowrap; }
+.audio-mock .rate { flex: none; font-family: var(--font-mono); font-size: 9.5px; color: var(--lime); border: 1px solid rgba(185,255,94,.25); padding: 4px 7px; border-radius: 5px; }
+
+/* ---------- share / lan ---------- */
+.share { position: relative; overflow: hidden; }
+.share::before {
+  content: ""; position: absolute; inset: 10% -20% auto; height: 70%; z-index: 0;
+  background: radial-gradient(45% 55% at 60% 45%, rgba(53,227,140,.14), transparent 70%);
+  filter: blur(40px); pointer-events: none;
+}
+.share-grid { display: grid; grid-template-columns: 1.05fr .95fr; gap: clamp(30px, 5vw, 70px); align-items: center; }
+.share-copy .checks { margin: 28px 0 0; padding: 0; list-style: none; display: grid; gap: 14px; }
+.share-copy .checks li { display: flex; gap: 12px; align-items: flex-start; font-size: 13.5px; color: #c6dacd; line-height: 1.7; }
+.share-copy .checks svg { flex: none; width: 17px; height: 17px; margin-top: 2px; color: var(--lime); }
+.share-copy .checks b { color: var(--cream); font-weight: 600; }
+.share-stage { position: relative; display: grid; place-items: center; min-height: 520px; }
+.signal {
+  position: absolute; width: 320px; height: 320px; border-radius: 50%;
+  border: 1px solid rgba(185,255,94,.16); animation: signal 4s ease-out infinite;
+}
+.signal:nth-child(2) { animation-delay: 1.3s; }
+.signal:nth-child(3) { animation-delay: 2.6s; }
+@keyframes signal { 0% { transform: scale(.4); opacity: 0; } 30% { opacity: .8; } 100% { transform: scale(1.35); opacity: 0; } }
+.phone {
+  position: relative; z-index: 2; width: 300px; border-radius: 36px; padding: 9px;
+  background: linear-gradient(160deg, #1a2b22, #070f0b 60%);
+  border: 1px solid rgba(255,255,255,.12);
+  box-shadow: 0 50px 100px -40px rgba(0,0,0,.95), inset 0 0 0 1px rgba(0,0,0,.6);
+  transform: rotate(-4deg);
+}
+.phone-screen { border-radius: 28px; overflow: hidden; background: #06120c; border: 1px solid rgba(255,255,255,.05); }
+.phone-notch { height: 24px; display: flex; align-items: center; justify-content: center; }
+.phone-notch i { width: 66px; height: 6px; border-radius: 999px; background: #0b1710; }
+.phone-head { padding: 2px 17px 12px; display: flex; align-items: center; justify-content: space-between; font-family: var(--font-mono); font-size: 9px; color: var(--faint); }
+.phone-title { padding: 0 17px 11px; display: flex; align-items: center; justify-content: space-between; }
+.phone-title strong { font-size: 15px; font-weight: 600; }
+.phone-title span { font-size: 9px; color: var(--lime); border: 1px solid rgba(185,255,94,.25); padding: 2px 7px; border-radius: 4px; font-family: var(--font-mono); }
+.phone-list { padding: 0 11px 11px; display: grid; gap: 7px; }
+.ph-row { display: flex; align-items: center; gap: 9px; padding: 9px; border-radius: 9px; background: rgba(255,255,255,.03); border: 1px solid rgba(160,255,196,.06); }
+.ph-thumb { width: 30px; height: 30px; border-radius: 6px; flex: none; background: linear-gradient(140deg, #2e7d55, #0d2b1c); }
+.ph-row:nth-child(2) .ph-thumb { background: linear-gradient(140deg, #4a8a63, #123a26); }
+.ph-row:nth-child(3) .ph-thumb { background: linear-gradient(140deg, #256b48, #0a2417); }
+.ph-row:nth-child(4) .ph-thumb { background: linear-gradient(140deg, #39795a, #0f2f1f); }
+.ph-meta { flex: 1; min-width: 0; }
+.ph-meta b { display: block; font-size: 10px; font-weight: 500; color: #e4f1e9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ph-meta span { display: block; margin-top: 1px; font-size: 8px; color: var(--faint); font-family: var(--font-mono); }
+.ph-row svg { width: 13px; height: 13px; color: var(--faint); }
+.phone-foot { margin: 4px 11px 13px; padding: 9px; border-radius: 8px; border: 1px dashed rgba(185,255,94,.25); text-align: center; font-size: 8.5px; color: var(--mint); font-family: var(--font-mono); }
+.lan-card {
+  position: absolute; z-index: 3; right: -36px; bottom: -14px; width: 216px;
+  border-radius: 14px; padding: 14px; background: rgba(6, 24, 16, .92);
+  border: 1px solid var(--line-strong); backdrop-filter: blur(16px);
+  box-shadow: 0 30px 60px -24px rgba(0,0,0,.95);
+  font-family: var(--font-mono);
+}
+.lan-card .cap { font-size: 8.5px; letter-spacing: .18em; color: var(--faint); text-transform: uppercase; }
+.lan-card .url { margin-top: 8px; font-size: 11.5px; color: var(--lime); letter-spacing: -.01em; }
+.lan-card .row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; font-size: 9px; color: var(--faint); }
+.lan-card .row .on { color: var(--mint); }
+.lan-card .bar { height: 2px; margin-top: 10px; background: rgba(160,255,196,.12); border-radius: 2px; overflow: hidden; }
+.lan-card .bar i { display: block; width: 76%; height: 100%; background: linear-gradient(90deg, var(--emerald), var(--lime)); }
+
+/* ---------- download ---------- */
+.download-grid { margin-top: 44px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.dl-card {
+  position: relative; border-radius: 20px; padding: 28px; overflow: hidden;
+  border: 1px solid var(--line); background: linear-gradient(160deg, rgba(14, 38, 27, .8), rgba(6, 19, 13, .9));
+  transition: .35s var(--ease);
+}
+.dl-card:hover { border-color: rgba(185,255,94,.32); transform: translateY(-4px); }
+.dl-card.best { border-color: rgba(185,255,94,.4); box-shadow: 0 0 0 1px rgba(185,255,94,.08), 0 30px 80px -40px rgba(53,227,140,.4); }
+.dl-card .os { display: flex; align-items: center; gap: 10px; font-family: var(--font-mono); font-size: 10px; letter-spacing: .18em; color: var(--faint); text-transform: uppercase; }
+.dl-card .os svg { width: 16px; height: 16px; }
+.dl-card .best-tag { position: absolute; top: 18px; right: 18px; font-family: var(--font-mono); font-size: 8.5px; letter-spacing: .12em; color: #06170f; background: var(--lime); padding: 3px 8px; border-radius: 999px; }
+.dl-card h3 { margin: 18px 0 6px; font-size: 23px; letter-spacing: -.02em; }
+.dl-card p { margin: 0 0 20px; color: var(--muted); font-size: 12.5px; line-height: 1.7; }
+.dl-card .files { display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; }
+.dl-card .files span { font-family: var(--font-mono); font-size: 9.5px; color: var(--faint); border: 1px solid var(--line); padding: 4px 8px; border-radius: 5px; }
+.dl-foot { margin-top: 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; font-size: 11.5px; color: var(--faint); }
+.dl-foot a { color: var(--muted); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: rgba(147,172,159,.35); }
+.dl-foot a:hover { color: var(--lime); }
+
+/* ---------- faq ---------- */
+.faq { margin-top: 40px; border-top: 1px solid var(--line); }
+.faq details { border-bottom: 1px solid var(--line); }
+.faq summary {
+  list-style: none; cursor: pointer; padding: 22px 40px 22px 0; position: relative;
+  font-size: 16px; font-weight: 550; letter-spacing: -.01em; color: var(--cream);
+}
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary::after {
+  content: "+"; position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  font-family: var(--font-mono); font-size: 20px; font-weight: 300; color: var(--lime);
+  transition: transform .3s var(--ease);
+}
+.faq details[open] summary::after { transform: translateY(-50%) rotate(45deg); }
+.faq details p { margin: 0; padding: 0 0 24px; max-width: 76ch; color: var(--muted); font-size: 13.5px; line-height: 1.9; }
+
+/* ---------- footer ---------- */
+footer {
+  position: relative; z-index: 2; border-top: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(4,16,11,.4), rgba(2,9,6,.95));
+  padding: 60px clamp(18px, 4vw, 48px) 34px;
+}
+.foot { max-width: var(--max); margin: 0 auto; display: grid; grid-template-columns: 1.4fr .6fr .6fr; gap: 40px; }
+.foot-brand { display: flex; align-items: center; gap: 12px; }
+.foot-brand img { width: 36px; height: 36px; border-radius: 10px; }
+.foot-brand b { font-size: 16px; letter-spacing: -.01em; }
+.foot-tag { margin: 14px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.8; max-width: 34ch; }
+.foot-col h4 { margin: 0 0 14px; font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .2em; color: var(--faint); text-transform: uppercase; }
+.foot-col ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; }
+.foot-col a { color: var(--muted); font-size: 12.5px; transition: color .2s ease; }
+.foot-col a:hover { color: var(--lime); }
+.credit {
+  max-width: var(--max); margin: 46px auto 0; padding: 20px 22px;
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  border-radius: 14px; border: 1px solid var(--line);
+  background: rgba(8, 26, 18, .55);
+}
+.credit .tp { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: #cfe1d5; }
+.credit .tp svg { width: 18px; height: 18px; color: var(--lime); flex: none; }
+.credit .tp a { color: var(--lime); border-bottom: 1px solid rgba(185,255,94,.4); padding-bottom: 1px; }
+.credit .tp a:hover { color: #dcffab; }
+.credit .fine { margin-left: auto; color: var(--faint); font-size: 10.5px; line-height: 1.7; max-width: 52ch; }
+.credit .fine a { color: var(--muted); border-bottom: 1px solid rgba(147,172,159,.3); }
+.credit .fine a:hover { color: var(--lime); }
+.scroll-progress {
+  position: fixed; top: 0; left: 0; right: 0; height: 2px; z-index: 55;
+  background: rgba(185,255,94,.08); pointer-events: none;
+}
+.scroll-progress i {
+  display: block; height: 100%; width: 100%; transform: scaleX(0); transform-origin: 0 50%;
+  background: linear-gradient(90deg, rgba(53,227,140,.3), var(--emerald) 45%, var(--lime));
+  box-shadow: 0 0 12px rgba(185,255,94,.65);
+}
+.legal { max-width: var(--max); margin: 22px auto 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; color: rgba(120,145,130,.65); font-size: 10.5px; }
+.legal .dots { display: flex; gap: 16px; flex-wrap: wrap; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 1020px) {
+  .hero-grid { grid-template-columns: 1fr; gap: 46px; }
+  .hero { padding-top: calc(var(--nav-h) + 56px); }
+  .hero-visual { max-width: 560px; margin-inline: auto; width: 100%; }
+  .shrink-stage { grid-template-columns: 1fr; gap: 40px; }
+  .shrink-copy { text-align: center; }
+  .shrink-copy .steps { justify-content: center; text-align: left; display: inline-grid; }
+  .lab-grid { grid-template-columns: 1fr; }
+  .lab-side { border-right: 0; border-bottom: 1px solid var(--line); }
+  .share-grid { grid-template-columns: 1fr; }
+  .share-stage { min-height: 460px; }
+  .foot { grid-template-columns: 1fr 1fr; }
+  .foot-brand { grid-column: span 2; }
+  .cell.wide, .cell.half, .cell.third, .cell.full, .cell.tall { grid-column: span 12; grid-row: auto; min-height: 0; }
+  .bento { gap: 12px; }
+}
+@media (min-width: 1021px) and (max-height: 800px) {
+  .hero { padding-top: calc(var(--nav-h) + 34px); padding-bottom: 34px; }
+  .hero-grid { margin-top: 18px; }
+  .hero-sub { margin-top: 18px; line-height: 1.7; }
+  .hero-actions { margin-top: 22px; }
+  .hero-meta { margin-top: 14px; }
+  .win-body { padding: 10px; gap: 6px; }
+  .file-row { padding: 8px 10px; }
+  .scroll-cue { display: none; }
+}
+@media (max-width: 860px) {
+  .nav-links { display: none; }
+  .download-grid { grid-template-columns: 1fr; }
+  .section { padding-block: 72px; }
+  .scroll-cue { display: none; }
+  .shrink { height: 220vh; }
+  .shrink-visual { min-height: 360px; }
+  .shrink-hint { display: none; }
+}
+@media (max-width: 560px) {
+  .hero { padding-bottom: 48px; }
+  .display { font-size: clamp(46px, 14vw, 62px); }
+  .hero-actions { flex-wrap: wrap; }
+  .hero-actions .btn { flex: 1 1 100%; white-space: nowrap; }
+  .hero-meta { gap: 8px 14px; font-size: 11px; }
+  .app-window { transform: none; }
+  .float-chip.a { right: 6px; top: -14px; }
+  .float-chip.b { left: -6px; bottom: -44px; }
+  .lab-side { padding: 20px; }
+  .lab-view { min-height: 300px; }
+  .share-stage { min-height: 430px; }
+  .phone { width: 258px; }
+  .lan-card { right: -2px; bottom: -6px; width: 194px; }
+  .credit { padding: 18px; }
+  .credit .fine { margin-left: 0; }
+  .foot { grid-template-columns: 1fr; gap: 30px; }
+  .nav-actions .icon-link { display: none; }
+  .nav-inner { gap: 12px; }
+  .nav-actions { gap: 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
+  [data-reveal] { opacity: 1; transform: none; }
+  .display .line > span { transform: none; opacity: 1; }
+}
+</style>
+<noscript><style>
+.display .line > span, .hero-sub, .hero-actions, .hero-meta, .hero-visual { opacity: 1; transform: none; }
+[data-reveal] { opacity: 1; transform: none; }
+.shrink { height: auto; }
+.shrink-sticky { position: relative; height: auto; padding: 90px 0; }
+</style></noscript>
+</head>
+<body>
+<div class="aurora" aria-hidden="true"></div>
+<div class="grain" aria-hidden="true"></div>
+<div class="spotlight" id="spotlight" aria-hidden="true"></div>
+<div class="scroll-progress" aria-hidden="true"><i id="scrollFill"></i></div>
+
+<header class="nav" id="nav">
+  <div class="nav-inner">
+    <a class="brand" href="#top" aria-label="shrinkdrop 首页" data-i18n-aria="nav.home">
+      <img src="assets/app-icon-256.png" alt="" width="32" height="32" />
+      <span>shrinkdrop</span>
+    </a>
+    <nav class="nav-links" aria-label="主导航" data-i18n-aria="nav.aria">
+      <a href="#compress" data-i18n="nav.compress">压缩</a>
+      <a href="#lab" data-i18n="nav.try">试一试</a>
+      <a href="#share" data-i18n="nav.share">分享</a>
+      <a href="#download" data-i18n="nav.download">下载</a>
+      <a href="#faq" data-i18n="nav.faq">问答</a>
+    </nav>
+    <div class="nav-spacer"></div>
+    <div class="nav-actions">
+      <button class="lang-toggle" id="langToggle" type="button" aria-label="切换语言" data-i18n-aria="nav.langAria">
+        <span class="opt on" data-lang-opt="zh">中</span>
+        <span class="sep">/</span>
+        <span class="opt" data-lang-opt="en">EN</span>
+      </button>
+      <a class="icon-link" href="https://github.com/AlcoholTobaccoCode/shrinkdrop" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.7a10.3 10.3 0 0 0-3.26 20.07c.52.1.71-.22.71-.5v-1.9c-2.87.62-3.48-1.22-3.48-1.22-.47-1.2-1.15-1.52-1.15-1.52-.94-.64.07-.63.07-.63 1.04.08 1.59 1.07 1.59 1.07.92 1.58 2.42 1.12 3.01.86.1-.67.36-1.13.66-1.39-2.3-.26-4.71-1.15-4.71-5.11 0-1.13.4-2.05 1.07-2.78-.11-.26-.46-1.31.1-2.73 0 0 .87-.28 2.85 1.06a9.9 9.9 0 0 1 5.19 0c1.98-1.34 2.85-1.06 2.85-1.06.56 1.42.21 2.47.1 2.73.67.73 1.07 1.65 1.07 2.78 0 3.97-2.42 4.85-4.72 5.1.37.32.7.95.7 1.92v2.85c0 .28.19.6.72.5A10.3 10.3 0 0 0 12 1.7Z"/></svg>
+        <span>GitHub</span>
+      </a>
+      <a class="btn" href="#download">
+        <span data-i18n="nav.cta">下载</span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5M4 19h16"/></svg>
+      </a>
+    </div>
+  </div>
+</header>
+
+<main id="top">
+  <!-- HERO -->
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="hero-inner">
+      <span class="kicker"><i class="dot" aria-hidden="true"></i> <span data-i18n="hero.kicker">桌面图片压缩 · 局域网分享</span></span>
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <h1 class="display" id="hero-title">
+            <span class="line"><span data-i18n="hero.line1">让图片</span></span>
+            <span class="line"><span data-i18n-html="hero.line2"><em>轻</em>一点。</span></span>
+          </h1>
+          <p class="hero-sub" data-i18n-html="hero.sub">
+            PNG、JPG、WebP 一次拖进来，最多 <b>5 张并发</b>，单张可到 <b>&#50;&#48;&#160;MB</b>。
+            压完直接存副本或确认覆盖原图；想给同事传文件，切到分享面，同一 Wi-Fi 下扫码就能取。
+          </p>
+          <div class="hero-actions">
+            <a class="btn big" href="#download">
+              <span data-i18n="hero.cta1">免费下载</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m0 0-5-5m5 5-5 5"/></svg>
+            </a>
+            <a class="btn big ghost" href="#lab">
+              <span data-i18n="hero.cta2">先试一下压缩</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v14m0 0 5-5m-5 5-5-5M4 21h16"/></svg>
+            </a>
+          </div>
+          <div class="hero-meta">
+            <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg> Windows x64</span>
+            <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg> <span data-i18n="hero.mac">macOS 通用版</span></span>
+            <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg> <span data-i18n="hero.noKey">无需 API Key</span></span>
+            <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg> <span data-i18n="hero.noCloud">分享不经云中转</span></span>
+          </div>
+        </div>
+
+        <div class="hero-visual" aria-hidden="true">
+          <div class="hero-glow"></div>
+          <div class="app-window" id="appWindow">
+            <div class="win-bar">
+              <div class="traffic"><i></i><i></i><i></i></div>
+              <div class="win-tabs"><span class="on" data-i18n="mock.tabCompress">压缩</span><span data-i18n="mock.tabShare">分享</span></div>
+              <div class="win-spacer"></div>
+              <span class="win-pill" data-i18n="mock.autoOn">自动压缩 · 开</span>
+            </div>
+            <div class="win-body">
+              <div class="file-row"><div class="thumb"></div><div><div class="file-name">summer-cover.png</div><div class="file-meta">4.8 MB → 1.1 MB</div></div><div class="file-delta">−77%</div><i class="fill" style="--p:100%"></i></div>
+              <div class="file-row"><div class="thumb"></div><div><div class="file-name">product-shot.jpg</div><div class="file-meta">2.6 MB → 640 KB</div></div><div class="file-delta">−75%</div><i class="fill" style="--p:92%"></i></div>
+              <div class="file-row"><div class="thumb"></div><div><div class="file-name">hero-banner.webp</div><div class="file-meta">1.9 MB → 512 KB</div></div><div class="file-delta">−73%</div><i class="fill" style="--p:64%"></i></div>
+              <div class="file-row"><div class="thumb"></div><div><div class="file-name">screenshot-01.png</div><div class="file-meta" data-i18n="mock.uploading">上传中…</div></div><div class="file-delta">···</div><i class="fill" style="--p:34%"></i></div>
+            </div>
+            <div class="win-foot"><span data-i18n="mock.queue">并发 5 · 队列 1</span><span class="saved" data-i18n="mock.saved">已节省 7.4 MB</span></div>
+          </div>
+          <div class="float-chip a"><span class="ok"></span><span data-i18n="mock.ready">压缩服务就绪</span></div>
+          <div class="float-chip b"><img src="assets/app-icon-256.png" alt="" /><span data-i18n="mock.lanOnline">局域网分享 · 在线</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="scroll-cue" aria-hidden="true"><span>SCROLL</span><span class="line"></span></div>
+  </section>
+
+  <div class="marquee" aria-hidden="true">
+    <div class="marquee-track">
+      <ul>
+        <li>PNG</li><li>JPG</li><li>WEBP</li><li data-i18n="mock.m1">5× 并发</li><li data-i18n="mock.m2">20 MB / 张</li><li data-i18n="mock.m3">TINYPNG 提供压缩</li><li data-i18n="mock.m4">局域网直传</li><li data-i18n="mock.m5">无需 API KEY</li><li data-i18n="mock.m6">覆盖前确认</li>
+      </ul>
+      <ul>
+        <li>PNG</li><li>JPG</li><li>WEBP</li><li data-i18n="mock.m1">5× 并发</li><li data-i18n="mock.m2">20 MB / 张</li><li data-i18n="mock.m3">TINYPNG 提供压缩</li><li data-i18n="mock.m4">局域网直传</li><li data-i18n="mock.m5">无需 API KEY</li><li data-i18n="mock.m6">覆盖前确认</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- SCROLL COMPRESSION -->
+  <section class="shrink" id="compress" aria-labelledby="compress-title">
+    <div class="shrink-sticky">
+      <div class="shrink-stage">
+        <div class="shrink-copy">
+          <span class="eyebrow" data-i18n="shrink.eyebrow">01 — compression</span>
+          <h2 id="compress-title" data-i18n-html="shrink.title">体积一路<br /><span class="dim">往下掉。</span></h2>
+          <p class="lede" data-i18n="shrink.lede">上传、压缩、下载、校验，每一步都有背景进度和结果数字。不是玄学百分比，是能看见的字节变化。</p>
+          <ul class="steps" id="shrinkSteps">
+            <li data-step="0"><span class="idx">01</span> <span data-i18n="shrink.s1">上传原图到压缩服务</span></li>
+            <li data-step="1"><span class="idx">02</span> <span data-i18n="shrink.s2">TinyPNG 服务压缩</span></li>
+            <li data-step="2"><span class="idx">03</span> <span data-i18n="shrink.s3">下载结果并校验</span></li>
+            <li data-step="3"><span class="idx">04</span> <span data-i18n="shrink.s4">保存副本，或确认覆盖</span></li>
+          </ul>
+        </div>
+        <div class="shrink-visual" aria-hidden="true">
+          <div class="ghost-grid"></div>
+          <div class="stack" id="stack">
+            <div class="stack-card c3"><div class="tc"></div><div class="cap"><span data-i18n="shrink.original">原始文件</span><span>12.4 MB</span></div></div>
+            <div class="stack-card c2"><div class="tc"></div><div class="cap"><span data-i18n="shrink.original">原始文件</span><span>12.4 MB</span></div></div>
+            <div class="stack-card c1"><div class="tc"></div><div class="cap"><span>shrinkdrop</span><span id="livePct">0%</span></div></div>
+            <div class="stack-badge"><span class="big" id="savedPct">0%</span><span class="small" data-i18n="shrink.saved">体积减少</span></div>
+            <div class="size-line"><span class="was">12.4 MB</span><span class="arrow">→</span><span class="now" id="liveSize">12.4 MB</span></div>
+            <div class="progress-rail"><i id="railFill"></i></div>
+          </div>
+        </div>
+      </div>
+      <div class="shrink-hint" data-i18n="shrink.hint">滚动，看它变小</div>
+    </div>
+  </section>
+
+  <!-- DEMO -->
+  <section class="section lab" id="lab" aria-labelledby="lab-title">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow" data-i18n="lab.eyebrow">02 — try it</span>
+          <h2 id="lab-title" data-i18n-html="lab.title">现在，<span class="dim">丢一张图进来。</span></h2>
+        </div>
+        <p class="lede" style="margin:0;max-width:38ch" data-i18n="lab.lede">不用安装，也不用上传。这个演示完全在浏览器本地跑，拖入图片即可对比压缩前后。</p>
+      </div>
+
+      <div class="lab-panel" data-reveal>
+        <div class="lab-head">
+          <div class="lights" aria-hidden="true"><i></i><i></i><i></i></div>
+          <span>local-compression / demo</span>
+          <span class="tag" data-i18n="lab.noUpload">不上传</span>
+        </div>
+        <div class="lab-grid">
+          <div class="lab-side">
+            <div class="drop" id="drop" role="button" tabindex="0" aria-label="选择或拖入图片" data-i18n-aria="lab.dropAria">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4m0 0 4 4m-4-4L8 8"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+              <strong id="dropTitle" data-i18n="lab.dropTitle">拖入图片，或点击选择</strong>
+              <small id="dropHint" data-i18n="lab.dropHint">PNG / JPG / WebP · 只在浏览器内处理</small>
+            </div>
+            <input type="file" id="file" accept="image/png,image/jpeg,image/webp" class="sr" />
+            <div class="metrics" id="metrics">
+              <div class="metric"><span data-i18n="lab.original">原图</span><span id="mOriginal">—</span></div>
+              <div class="metric"><span data-i18n="lab.compressed">本地结果</span><span id="mCompressed">—</span></div>
+              <div class="metric hl"><span data-i18n="lab.saved">体积变化</span><span id="mSaved">—</span></div>
+            </div>
+            <p class="lab-status" id="labStatus" role="status" aria-live="polite" hidden></p>
+            <p class="lab-note" data-i18n="lab.note">
+              演示在浏览器本地重新编码：优先 WebP，不支持时回退为 PNG 或 JPEG，实际格式见结果标签。桌面应用使用 TinyPNG 服务，输出可能不同。
+            </p>
+          </div>
+          <div class="lab-view">
+            <div class="compare" id="compare" style="--cut:50%">
+              <img class="before" id="imgBefore" alt="原图预览" data-i18n-alt="lab.beforeAlt" />
+              <img class="after" id="imgAfter" alt="本地结果预览" data-i18n-alt="lab.afterAlt" />
+              <span class="label l" data-i18n="lab.before">原图</span>
+              <span class="label r" data-i18n="lab.after">本地结果</span>
+              <div class="divider" id="divider"></div>
+              <input type="range" min="0" max="100" value="50" id="cut" aria-label="对比压缩前后" data-i18n-aria="lab.compareAria" />
+              <div class="lab-caption"><span id="capBefore">—</span><span id="capAfter">—</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- BENTO -->
+  <section class="section" id="features" aria-labelledby="features-title">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">03 — inside</span>
+          <h2 id="features-title" data-i18n-html="feat.title">小工具，<span class="dim">但不将就。</span></h2>
+        </div>
+        <p class="lede" style="margin:0;max-width:40ch" data-i18n="feat.lede">只做图片压缩这一件事，顺手把局域网分享也做到能天天用。</p>
+      </div>
+
+      <div class="bento">
+        <article class="cell tall" data-reveal>
+          <div class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17V7m5 10V4m5 13v-6m5 6V9"/></svg></div>
+          <span class="num">/ 01</span>
+          <h3 data-i18n="feat.c1t">五张一起跑</h3>
+          <p data-i18n="feat.c1p">并发数可在 1–5 之间调，队列、进度和结果各自独立。来一张压一张，也可以等凑齐再开始。</p>
+          <div class="mini-rows">
+            <div class="mini-row done"><span class="dot"></span>cover.png<span class="sz">4.8 MB → <b>1.1 MB</b></span><i class="mini-bar" style="--w:100%"></i></div>
+            <div class="mini-row done"><span class="dot"></span>shot.jpg<span class="sz">2.6 MB → <b>640 KB</b></span><i class="mini-bar" style="--w:100%"></i></div>
+            <div class="mini-row"><span class="dot"></span>banner.webp<span class="sz" data-i18n="feat.compressing">压缩中…</span><i class="mini-bar" style="--w:58%"></i></div>
+            <div class="mini-row"><span class="dot"></span>waiting-04.png<span class="sz" data-i18n="feat.queued">排队中</span><i class="mini-bar" style="--w:0%"></i></div>
+          </div>
+          <div style="margin-top:18px"><span class="status-pill"><i></i><span data-i18n="feat.count">3 / 5 并发</span></span></div>
+        </article>
+
+        <article class="cell wide" data-reveal style="--d:.06s">
+          <div class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 5 3.4 8.2 8 9 4.6-.8 8-4 8-9V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg></div>
+          <span class="num">/ 02</span>
+          <h3 data-i18n="feat.c2t">覆盖之前，先问你</h3>
+          <p data-i18n="feat.c2p">每次写回原图都二次确认，并校验原图是否被别的程序改过。只读、移动、被占用，都会拦下来。也可以选择保存副本。</p>
+        </article>
+
+        <article class="cell wide" data-reveal style="--d:.1s">
+          <div class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5a7 7 0 0 1 14 0"/><path d="M8.5 15.5a3.5 3.5 0 0 1 7 0"/><circle cx="12" cy="19" r="1"/><path d="M2 9a12 12 0 0 1 20 0"/></svg></div>
+          <span class="num">/ 03</span>
+          <h3 data-i18n="feat.c3t">同一 Wi-Fi，直接取文件</h3>
+          <p data-i18n="feat.c3p">电脑上选好文件，手机扫码或打开局域网地址即可浏览、搜索、下载。无需云账号，也不经云中转；可选本地分享账号保护访问。</p>
+        </article>
+
+        <article class="cell half" data-reveal style="--d:.04s">
+          <div class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></div>
+          <span class="num">/ 04</span>
+          <h3 data-i18n="feat.c4t">链接、PIN、本地账号，三档权限</h3>
+          <div class="perm-list" aria-hidden="true">
+            <div class="perm"><span data-i18n="feat.c4p1">链接直达</span><span class="toggle"></span></div>
+            <div class="perm"><span data-i18n="feat.c4p2">链接 + 6 位 PIN</span><span class="toggle"></span></div>
+            <div class="perm off"><span data-i18n="feat.c4p3">本地账号登录（下载 / 上传 / 文字）</span><span class="toggle"></span></div>
+          </div>
+        </article>
+
+        <article class="cell half" data-reveal style="--d:.08s">
+          <div class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v5h5"/><path d="M9.5 13h6M9.5 16.5h4"/></svg></div>
+          <span class="num">/ 05</span>
+          <h3 data-i18n="feat.c5t">在条目下就地预览</h3>
+          <p data-i18n="feat.c5p">图片、音频、视频、文本都可以在分享列表里展开看。音频可拖进度、15 秒快进后退、变速播放；长文本折叠后不再撑爆页面。</p>
+          <div class="audio-mock" aria-hidden="true">
+            <span class="play"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l11-6.5-11-6.5Z"/></svg></span>
+            <span class="wave">
+              <i style="--h:34%"></i><i style="--h:62%"></i><i style="--h:88%"></i><i style="--h:48%"></i><i style="--h:74%"></i><i style="--h:96%"></i><i style="--h:56%"></i><i style="--h:80%"></i><i style="--h:42%"></i><i style="--h:68%"></i><i style="--h:92%"></i><i style="--h:52%"></i><i style="--h:38%"></i><i style="--h:70%"></i><i style="--h:84%"></i><i style="--h:46%"></i><i style="--h:60%"></i><i style="--h:78%"></i><i style="--h:36%"></i><i style="--h:66%"></i><i style="--h:90%"></i><i style="--h:50%"></i><i style="--h:72%"></i><i style="--h:44%"></i>
+            </span>
+            <span class="time">00:12 / 03:40</span>
+            <span class="rate">1.5×</span>
+          </div>
+        </article>
+
+        <article class="cell full" data-reveal style="--d:.12s">
+          <div style="display:flex;align-items:flex-start;gap:20px;flex-wrap:wrap">
+            <div class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18Z"/></svg></div>
+            <div style="flex:1;min-width:240px">
+              <span class="num" style="position:static;display:block;margin-bottom:8px">/ 06</span>
+              <h3 style="margin-top:0" data-i18n="feat.c6t">文件走了哪条路，页面写清楚</h3>
+              <p data-i18n="feat.c6p">压缩图片会上传到 TinyPNG / TinyJPG / Tinify 的匿名服务；分享的文件只在你的电脑和同一网络的访问者之间传输。两件事分开说，不混淆。</p>
+            </div>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- SHARE -->
+  <section class="section share" id="share" aria-labelledby="share-title">
+    <div class="wrap">
+      <div class="share-grid">
+        <div class="share-copy">
+          <span class="eyebrow">04 — file share</span>
+          <h2 id="share-title" data-i18n-html="share.title">把文件丢到<br /><span class="dim">同一张网里。</span></h2>
+          <p class="lede" data-i18n="share.lede">不用微信压缩包，不用网盘中转。shrinkdrop 在电脑上开一个本地服务，同一 Wi-Fi 下的手机、平板、另一台电脑直接打开链接。</p>
+          <ul class="checks">
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 12 5 5L20 6"/></svg><span data-i18n-html="share.c1"><b>目录浏览 + 搜索 + 实时刷新</b>，新丢进去的文件马上出现在列表里。</span></li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 12 5 5L20 6"/></svg><span data-i18n-html="share.c2"><b>可收可发</b>：允许访客上传后可接收文件；文件夹上传需在设置中单独开启，并使用支持目录选择的浏览器。</span></li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 12 5 5L20 6"/></svg><span data-i18n-html="share.c3"><b>随时停止</b>：点一下释放端口，旧链接立即失效，不留后台服务。</span></li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 12 5 5L20 6"/></svg><span data-i18n-html="share.c4"><b>本地账号</b>：账号只保存在这台电脑的设置里，用来分配下载、上传和发文字权限；不需要注册云账号，也不同步到其他设备。</span></li>
+          </ul>
+          <div style="margin-top:30px"><a class="btn ghost" href="https://github.com/AlcoholTobaccoCode/shrinkdrop#局域网分享file-share" target="_blank" rel="noopener"><span data-i18n="share.docs">看分享功能说明</span> <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7m0 0H8m9 0v9"/></svg></a></div>
+        </div>
+
+        <div class="share-stage" aria-hidden="true">
+          <div class="signal"></div><div class="signal"></div><div class="signal"></div>
+          <div class="phone">
+            <div class="phone-screen">
+              <div class="phone-notch"><i></i></div>
+              <div class="phone-head"><span>9:41</span><span>Wi-Fi · 5 GHz</span></div>
+              <div class="phone-title"><strong data-i18n="share.sharedFiles">共享文件</strong><span data-i18n="share.online">在线</span></div>
+              <div class="phone-list">
+                <div class="ph-row"><div class="ph-thumb"></div><div class="ph-meta"><b data-i18n="share.f1">设计稿-终版.png</b><span>1.1 MB</span></div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 20h16"/></svg></div>
+                <div class="ph-row"><div class="ph-thumb"></div><div class="ph-meta"><b data-i18n="share.f2">产品视频.mp4</b><span>24.8 MB</span></div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 20h16"/></svg></div>
+                <div class="ph-row"><div class="ph-thumb"></div><div class="ph-meta"><b data-i18n="share.f3">会议录音.m4a</b><span>8.2 MB</span></div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 20h16"/></svg></div>
+                <div class="ph-row"><div class="ph-thumb"></div><div class="ph-meta"><b data-i18n="share.f4">说明.txt</b><span>2 KB</span></div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 20h16"/></svg></div>
+              </div>
+              <div class="phone-foot" data-i18n="share.upload">+ 上传照片 / 文件</div>
+            </div>
+          </div>
+          <div class="lan-card">
+            <div class="cap">LAN ADDRESS</div>
+            <div class="url">192.168.1.23:5421</div>
+            <div class="row"><span data-i18n="share.pin">PIN 保护</span><span class="on" data-i18n="share.pinOn">已开启</span></div>
+            <div class="row"><span data-i18n="share.relay">云中转</span><span>0 B</span></div>
+            <div class="bar"><i></i></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DOWNLOAD -->
+  <section class="section" id="download" aria-labelledby="download-title">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">05 — download</span>
+          <h2 id="download-title" data-i18n-html="dl.title">选你的平台，<span class="dim">装上就用。</span></h2>
+        </div>
+        <p class="lede" style="margin:0;max-width:36ch" data-i18n="dl.lede">前往 GitHub Releases 页面，在 Assets 中选择适合平台的安装包下载。</p>
+      </div>
+      <div class="download-grid">
+        <article class="dl-card" id="dl-win" data-reveal>
+          <span class="best-tag" hidden data-i18n="dl.rec">推荐</span>
+          <div class="os"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 5.5 10.2 4v7.2H3V5.5Zm0 13L10.2 20v-7.2H3v5.7ZM11.4 3.8 21 2.5v8.7h-9.6V3.8Zm0 9.2H21v8.7l-9.6-1.3V13Z"/></svg> Windows x64</div>
+          <h3 data-i18n="dl.winTitle">Windows 安装包</h3>
+          <p data-i18n="dl.winDesc">提供 EXE 安装器和 MSI。需 Windows 10 及以上。</p>
+          <div class="files"><span>.exe</span><span>.msi</span><span>x64</span></div>
+          <a class="btn" href="https://github.com/AlcoholTobaccoCode/shrinkdrop/releases/latest" target="_blank" rel="noopener"><span data-i18n="dl.get">前往 Releases 页面</span> <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7m0 0H8m9 0v9"/></svg></a>
+        </article>
+        <article class="dl-card" id="dl-mac" data-reveal style="--d:.08s">
+          <span class="best-tag" hidden data-i18n="dl.rec">推荐</span>
+          <div class="os"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.4 12.8c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9-.7 0-1.9-.8-3-.8-1.6 0-3 .9-3.8 2.3-1.6 2.8-.4 7 1.2 9.3.8 1.1 1.7 2.3 2.9 2.3 1.2-.1 1.6-.8 3.1-.8 1.4 0 1.8.8 3 .7 1.3 0 2.1-1.1 2.9-2.3.9-1.3 1.3-2.6 1.3-2.7-.1 0-2.7-1-2.7-3.6ZM14.3 5.5c.6-.8 1-1.9.9-3-.9 0-2 .6-2.7 1.4-.6.7-1.1 1.8-1 2.9 1 .1 2-.5 2.8-1.3Z"/></svg> macOS Universal</div>
+          <h3 data-i18n="dl.macTitle">Mac 通用安装包</h3>
+          <p data-i18n="dl.macDesc">一个包同时支持 Apple Silicon 与 Intel。也可下载 DMG 拖入 Applications。</p>
+          <div class="files"><span>.pkg</span><span>.dmg</span><span>arm64 + x64</span></div>
+          <a class="btn" href="https://github.com/AlcoholTobaccoCode/shrinkdrop/releases/latest" target="_blank" rel="noopener"><span data-i18n="dl.get">前往 Releases 页面</span> <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7m0 0H8m9 0v9"/></svg></a>
+        </article>
+      </div>
+      <div class="dl-foot">
+        <span><span data-i18n="dl.all">所有版本：</span><a href="https://github.com/AlcoholTobaccoCode/shrinkdrop/releases" target="_blank" rel="noopener">GitHub Releases</a><span data-i18n="dl.source"> · 源码：</span><a href="https://github.com/AlcoholTobaccoCode/shrinkdrop" target="_blank" rel="noopener">far-domain/shrinkdrop</a></span>
+        <span data-i18n="dl.versionNote">当前版本以 Releases 页面为准</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="section" id="faq" aria-labelledby="faq-title">
+    <div class="wrap" style="max-width:900px">
+      <span class="eyebrow">06 — questions</span>
+      <h2 id="faq-title" data-i18n-html="faq.title">大家常问的<span class="dim">几件事。</span></h2>
+      <div class="faq">
+        <details>
+          <summary data-i18n="faq.q1">压缩后的图片会上传到哪？</summary>
+          <p data-i18n="faq.a1">会通过 HTTPS 上传到 TinyPNG、TinyJPG 或 Tinify 的匿名压缩服务，结果随后下载回本机。客户端不需要 API Key，也不启动自建服务器；厂商侧的处理和保留规则以其政策为准。</p>
+        </details>
+        <details>
+          <summary data-i18n="faq.q2">分享文件也会经过云端吗？</summary>
+          <p data-i18n="faq.a2">不会。分享由电脑上的本地服务提供，访问者和电脑在同一局域网内直连，文件不经过任何云中转。停止分享后端口立即释放。</p>
+        </details>
+        <details>
+          <summary data-i18n="faq.q3">支持多大的图片、多少张一起压？</summary>
+          <p data-i18n="faq.a3">支持 PNG、JPG、WebP，单张不超过 20 MB，宽高各不超过 32,768 像素，总像素不超过 6,400 万；并发数可在 1–5 之间调整，超出并发的任务会排队。</p>
+        </details>
+        <details>
+          <summary data-i18n="faq.q4">覆盖会改坏原图吗？</summary>
+          <p data-i18n="faq.a4">覆盖前会二次确认，并校验原图是否被其他程序修改、移动或设为只读；任一情况都会阻止覆盖。确认成功后才会写回，且无法撤销。更稳妥的做法是保存副本。</p>
+        </details>
+        <details>
+          <summary data-i18n="faq.q5">访客能在分享页里预览文件吗？</summary>
+          <p data-i18n="faq.a5">可以。图片、音频、视频和支持的文本文件都能在条目下方展开预览；音频支持拖动进度、前后 15 秒和倍速播放，长文本折叠后按需展开。</p>
+        </details>
+        <details>
+          <summary data-i18n="faq.q6">需要账号或云同步吗？</summary>
+          <p data-i18n="faq.a6">无需云账号，也没有云同步。局域网分享可选用本地账号控制访问权限；应用没有历史记录数据库，退出后会清理本机临时结果。</p>
+        </details>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="foot">
+    <div>
+      <div class="foot-brand">
+        <img src="assets/app-icon-256.png" alt="" width="36" height="36" />
+        <b>shrinkdrop</b>
+      </div>
+      <p class="foot-tag" data-i18n="foot.tag">一个只做图片压缩的桌面客户端，外加一个不绕云的局域网分享面。Windows 与 macOS。</p>
+    </div>
+    <div class="foot-col">
+      <h4 data-i18n="foot.product">产品</h4>
+      <ul>
+        <li><a href="#compress" data-i18n="foot.compress">压缩</a></li>
+        <li><a href="#lab" data-i18n="foot.demo">本地演示</a></li>
+        <li><a href="#share" data-i18n="foot.share">局域网分享</a></li>
+        <li><a href="#download" data-i18n="foot.download">下载</a></li>
+      </ul>
+    </div>
+    <div class="foot-col">
+      <h4 data-i18n="foot.project">项目</h4>
+      <ul>
+        <li><a href="https://github.com/AlcoholTobaccoCode/shrinkdrop" target="_blank" rel="noopener">GitHub</a></li>
+        <li><a href="https://github.com/AlcoholTobaccoCode/shrinkdrop/releases" target="_blank" rel="noopener">Releases</a></li>
+        <li><a href="https://github.com/AlcoholTobaccoCode/shrinkdrop/blob/main/docs/privacy.md" target="_blank" rel="noopener" data-i18n="foot.privacy">隐私说明</a></li>
+        <li><a href="https://github.com/AlcoholTobaccoCode/shrinkdrop/issues" target="_blank" rel="noopener" data-i18n="foot.feedback">反馈问题</a></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="credit">
+    <div class="tp">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4l6 6M20 4l-6 6M4 20l6-6M20 20l-6-6M12 4v4M12 20v-4M4 12h4M20 12h-4"/></svg>
+      <span><span data-i18n="credit.by">图片压缩由</span> <a href="https://tinypng.com/" target="_blank" rel="noopener">TinyPNG</a> <span data-i18n="credit.support">提供支持</span></span>
+    </div>
+    <p class="fine"><span data-i18n="credit.fine">压缩通过 TinyPNG / Tinify 的匿名接口完成，原图会上传至其服务处理。感谢 TinyPNG 让这个小工具不需要自建压缩服务。</span> <a class="fine-link" href="https://tinypng.com/" target="_blank" rel="noopener" data-i18n="credit.official">国际版官网 ↗</a></p>
+  </div>
+
+  <div class="legal">
+    <span>© <span id="year">2026</span> shrinkdrop · far-domain</span>
+    <span class="dots">
+      <a href="https://github.com/AlcoholTobaccoCode/shrinkdrop" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://tinypng.com/" target="_blank" rel="noopener">TinyPNG</a>
+      <a href="https://github.com/AlcoholTobaccoCode/shrinkdrop/blob/main/docs/privacy.md" target="_blank" rel="noopener" data-i18n="foot.privacyShort">隐私</a>
+    </span>
+  </div>
+</footer>
+
+<script>
+(() => {
+  "use strict";
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+  const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
+  const fmt = (n) => {
+    if (!Number.isFinite(n)) return "—";
+    if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(n >= 10 * 1024 * 1024 ? 1 : 2) + " MB";
+    if (n >= 1024) return Math.round(n / 1024) + " KB";
+    return n + " B";
+  };
+
+  let onLanguageChange = null;
+
+  const I18N = {
+    zh: {
+      "meta.title": "shrinkdrop — 让图片轻一点",
+      "meta.desc": "shrinkdrop 是一个只做图片压缩的桌面客户端：PNG、JPG、WebP 一次拖入，最多 5 张并发；还能把文件直接分享给同一 Wi-Fi 下的人，不经云中转。",
+      "meta.ogDesc": "桌面图片压缩 + 局域网文件分享。TinyPNG 提供压缩能力，文件分享不经云中转。",
+      "nav.home": "shrinkdrop 首页",
+      "nav.aria": "主导航",
+      "nav.compress": "压缩",
+      "nav.try": "试一试",
+      "nav.share": "分享",
+      "nav.download": "下载",
+      "nav.faq": "问答",
+      "nav.cta": "下载",
+      "nav.langAria": "切换语言",
+      "hero.kicker": "桌面图片压缩 · 局域网分享",
+      "hero.line1": "让图片",
+      "hero.line2": "<em>轻</em>一点。",
+      "hero.sub": "PNG、JPG、WebP 一次拖进来，最多 <b>5 张并发</b>，单张可到 <b>20\u00a0MB</b>。压完直接存副本或确认覆盖原图；想给同事传文件，切到分享面，同一 Wi-Fi 下扫码就能取。",
+      "hero.cta1": "免费下载",
+      "hero.cta2": "先试一下压缩",
+      "hero.mac": "macOS 通用版",
+      "hero.noKey": "无需 API Key",
+      "hero.noCloud": "分享不经云中转",
+      "mock.tabCompress": "压缩",
+      "mock.tabShare": "分享",
+      "mock.autoOn": "自动压缩 · 开",
+      "mock.uploading": "上传中…",
+      "mock.queue": "并发 5 · 队列 1",
+      "mock.saved": "已节省 7.4 MB",
+      "mock.ready": "压缩服务就绪",
+      "mock.lanOnline": "局域网分享 · 在线",
+      "mock.m1": "5× 并发",
+      "mock.m2": "20 MB / 张",
+      "mock.m3": "TINYPNG 提供压缩",
+      "mock.m4": "局域网直传",
+      "mock.m5": "无需 API KEY",
+      "mock.m6": "覆盖前确认",
+      "shrink.eyebrow": "01 — compression",
+      "shrink.title": "体积一路<br /><span class=\"dim\">往下掉。</span>",
+      "shrink.lede": "上传、压缩、下载、校验，每一步都有背景进度和结果数字。不是玄学百分比，是能看见的字节变化。",
+      "shrink.s1": "上传原图到压缩服务",
+      "shrink.s2": "TinyPNG 服务压缩",
+      "shrink.s3": "下载结果并校验",
+      "shrink.s4": "保存副本，或确认覆盖",
+      "shrink.original": "原始文件",
+      "shrink.saved": "体积减少",
+      "shrink.hint": "滚动，看它变小",
+      "lab.eyebrow": "02 — try it",
+      "lab.title": "现在，<span class=\"dim\">丢一张图进来。</span>",
+      "lab.lede": "不用安装，也不用上传。这个演示完全在浏览器本地跑，拖入图片即可对比压缩前后。",
+      "lab.noUpload": "不上传",
+      "lab.dropAria": "选择或拖入图片",
+      "lab.dropTitle": "拖入图片，或点击选择",
+      "lab.dropHint": "PNG / JPG / WebP · 只在浏览器内处理",
+      "lab.original": "原图",
+      "lab.compressed": "本地结果",
+      "lab.saved": "体积变化",
+      "lab.note": "演示在浏览器本地重新编码：优先 WebP，不支持时回退为 PNG 或 JPEG，实际格式见结果标签。桌面应用使用 TinyPNG 服务，输出可能不同。",
+      "lab.before": "原图",
+      "lab.after": "本地结果",
+      "lab.beforeAlt": "原图预览",
+      "lab.afterAlt": "本地结果预览",
+      "lab.compareAria": "对比压缩前后",
+      "feat.title": "小工具，<span class=\"dim\">但不将就。</span>",
+      "feat.lede": "只做图片压缩这一件事，顺手把局域网分享也做到能天天用。",
+      "feat.c1t": "五张一起跑",
+      "feat.c1p": "并发数可在 1–5 之间调，队列、进度和结果各自独立。来一张压一张，也可以等凑齐再开始。",
+      "feat.compressing": "压缩中…",
+      "feat.queued": "排队中",
+      "feat.count": "3 / 5 并发",
+      "feat.c2t": "覆盖之前，先问你",
+      "feat.c2p": "每次写回原图都二次确认，并校验原图是否被别的程序改过。只读、移动、被占用，都会拦下来。也可以选择保存副本。",
+      "feat.c3t": "同一 Wi-Fi，直接取文件",
+      "feat.c3p": "电脑上选好文件，手机扫码或打开局域网地址即可浏览、搜索、下载。无需云账号，也不经云中转；可选本地分享账号保护访问。",
+      "feat.c4t": "链接、PIN、本地账号，三档权限",
+      "feat.c4p1": "链接直达",
+      "feat.c4p2": "链接 + 6 位 PIN",
+      "feat.c4p3": "本地账号登录（下载 / 上传 / 文字）",
+      "feat.c5t": "在条目下就地预览",
+      "feat.c5p": "图片、音频、视频、文本都可以在分享列表里展开看。音频可拖进度、15 秒快进后退、变速播放；长文本折叠后不再撑爆页面。",
+      "feat.c6t": "文件走了哪条路，页面写清楚",
+      "feat.c6p": "压缩图片会上传到 TinyPNG / TinyJPG / Tinify 的匿名服务；分享的文件只在你的电脑和同一网络的访问者之间传输。两件事分开说，不混淆。",
+      "share.title": "把文件丢到<br /><span class=\"dim\">同一张网里。</span>",
+      "share.lede": "不用微信压缩包，不用网盘中转。shrinkdrop 在电脑上开一个本地服务，同一 Wi-Fi 下的手机、平板、另一台电脑直接打开链接。",
+      "share.c1": "<b>目录浏览 + 搜索 + 实时刷新</b>，新丢进去的文件马上出现在列表里。",
+      "share.c2": "<b>可收可发</b>：允许访客上传后可接收文件；文件夹上传需在设置中单独开启，并使用支持目录选择的浏览器。",
+      "share.c3": "<b>随时停止</b>：点一下释放端口，旧链接立即失效，不留后台服务。",
+      "share.c4": "<b>本地账号</b>：账号只保存在这台电脑的设置里，用来分配下载、上传和发文字权限；不需要注册云账号，也不同步到其他设备。",
+      "share.docs": "看分享功能说明",
+      "share.sharedFiles": "共享文件",
+      "share.online": "在线",
+      "share.f1": "设计稿-终版.png",
+      "share.f2": "产品视频.mp4",
+      "share.f3": "会议录音.m4a",
+      "share.f4": "说明.txt",
+      "share.upload": "+ 上传照片 / 文件",
+      "share.pin": "PIN 保护",
+      "share.pinOn": "已开启",
+      "share.relay": "云中转",
+      "dl.title": "选你的平台，<span class=\"dim\">装上就用。</span>",
+      "dl.lede": "前往 GitHub Releases 页面，在 Assets 中选择适合平台的安装包下载。",
+      "dl.rec": "推荐",
+      "dl.winTitle": "Windows 安装包",
+      "dl.winDesc": "提供 EXE 安装器和 MSI。需 Windows 10 及以上。",
+      "dl.macTitle": "Mac 通用安装包",
+      "dl.macDesc": "一个包同时支持 Apple Silicon 与 Intel。也可下载 DMG 拖入 Applications。",
+      "dl.get": "前往 Releases 页面",
+      "dl.all": "所有版本：",
+      "dl.source": " · 源码：",
+      "dl.versionNote": "当前版本以 Releases 页面为准",
+      "faq.title": "大家常问的<span class=\"dim\">几件事。</span>",
+      "faq.q1": "压缩后的图片会上传到哪？",
+      "faq.a1": "会通过 HTTPS 上传到 TinyPNG、TinyJPG 或 Tinify 的匿名压缩服务，结果随后下载回本机。客户端不需要 API Key，也不启动自建服务器；厂商侧的处理和保留规则以其政策为准。",
+      "faq.q2": "分享文件也会经过云端吗？",
+      "faq.a2": "不会。分享由电脑上的本地服务提供，访问者和电脑在同一局域网内直连，文件不经过任何云中转。停止分享后端口立即释放。",
+      "faq.q3": "支持多大的图片、多少张一起压？",
+      "faq.a3": "支持 PNG、JPG、WebP，单张不超过 20 MB，宽高各不超过 32,768 像素，总像素不超过 6,400 万；并发数可在 1–5 之间调整，超出并发的任务会排队。",
+      "faq.q4": "覆盖会改坏原图吗？",
+      "faq.a4": "覆盖前会二次确认，并校验原图是否被其他程序修改、移动或设为只读；任一情况都会阻止覆盖。确认成功后才会写回，且无法撤销。更稳妥的做法是保存副本。",
+      "faq.q5": "访客能在分享页里预览文件吗？",
+      "faq.a5": "可以。图片、音频、视频和支持的文本文件都能在条目下方展开预览；音频支持拖动进度、前后 15 秒和倍速播放，长文本折叠后按需展开。",
+      "faq.q6": "需要账号或云同步吗？",
+      "faq.a6": "无需云账号，也没有云同步。局域网分享可选用本地账号控制访问权限；应用没有历史记录数据库，退出后会清理本机临时结果。",
+      "foot.tag": "一个只做图片压缩的桌面客户端，外加一个不绕云的局域网分享面。Windows 与 macOS。",
+      "foot.product": "产品",
+      "foot.compress": "压缩",
+      "foot.demo": "本地演示",
+      "foot.share": "局域网分享",
+      "foot.download": "下载",
+      "foot.project": "项目",
+      "foot.privacy": "隐私说明",
+      "foot.feedback": "反馈问题",
+      "foot.privacyShort": "隐私",
+      "credit.by": "图片压缩由",
+      "credit.support": "提供支持",
+      "credit.fine": "压缩通过 TinyPNG / Tinify 的匿名接口完成，原图会上传至其服务处理。感谢 TinyPNG 让这个小工具不需要自建压缩服务。",
+      "credit.official": "国际版官网 ↗",
+      "js.compressing": "正在本地压缩…",
+      "js.badImage": "这张图读不出来，换一张试试",
+      "js.badType": "请选择 PNG、JPG 或 WebP 图片",
+      "js.noSupport": "浏览器无法完成本地图片处理，请更换浏览器",
+      "js.noEncoding": "浏览器无法编码这张图片，请更换浏览器或图片",
+      "js.tryAnother": "换一张图试试",
+      "js.localOnly": "仍只在浏览器内处理，不会上传",
+      "js.compat": "当前浏览器不支持 createImageBitmap，演示会使用兼容方式解码。",
+      "js.fallback": "编码器未使用 WebP，已回退为 {format}。",
+      "js.larger": "编码结果比原图大，保留原图更合适。",
+      "js.unchanged": "大小不变",
+      "js.capOriginal": "原图",
+      "js.capLocal": "本地",
+      "js.waiting": "等待上传",
+      "js.processing": "处理中…",
+      "js.verified": "已校验 ✓"
+    },
+    en: {
+      "meta.title": "shrinkdrop — make images lighter",
+      "meta.desc": "shrinkdrop is a desktop image compressor: drop in PNG, JPG or WebP, up to five at once, and share files with anyone on the same Wi-Fi — no cloud relay.",
+      "meta.ogDesc": "Desktop image compression + LAN file sharing. Compression by TinyPNG, sharing without a cloud relay.",
+      "nav.home": "shrinkdrop home",
+      "nav.aria": "Main navigation",
+      "nav.compress": "Compress",
+      "nav.try": "Try it",
+      "nav.share": "Share",
+      "nav.download": "Download",
+      "nav.faq": "FAQ",
+      "nav.cta": "Download",
+      "nav.langAria": "Switch language",
+      "hero.kicker": "Image compression · LAN sharing",
+      "hero.line1": "Make images",
+      "hero.line2": "<em>lighter</em>.",
+      "hero.sub": "Drop in PNG, JPG or WebP — up to <b>five at once</b>, <b>20\u00a0MB</b> each. Save a copy or confirm an overwrite. Need to pass a file to someone nearby? Flip to the share face and let them scan the code on the same Wi-Fi.",
+      "hero.cta1": "Download free",
+      "hero.cta2": "Try compression",
+      "hero.mac": "macOS universal",
+      "hero.noKey": "No API key",
+      "hero.noCloud": "No cloud relay",
+      "mock.tabCompress": "Compress",
+      "mock.tabShare": "Share",
+      "mock.autoOn": "Auto-compress · on",
+      "mock.uploading": "Uploading…",
+      "mock.queue": "5 in flight · 1 queued",
+      "mock.saved": "7.4 MB saved",
+      "mock.ready": "Compression ready",
+      "mock.lanOnline": "LAN sharing · online",
+      "mock.m1": "5× CONCURRENT",
+      "mock.m2": "20 MB / IMAGE",
+      "mock.m3": "POWERED BY TINYPNG",
+      "mock.m4": "LAN DIRECT",
+      "mock.m5": "NO API KEY",
+      "mock.m6": "CONFIRM OVERWRITE",
+      "shrink.eyebrow": "01 — compression",
+      "shrink.title": "Down goes<br /><span class=\"dim\">the file size.</span>",
+      "shrink.lede": "Upload, compress, download, verify — every stage has a progress bar and real numbers. Not a magic percentage: bytes you can see.",
+      "shrink.s1": "Upload the original",
+      "shrink.s2": "TinyPNG service compresses it",
+      "shrink.s3": "Download and verify",
+      "shrink.s4": "Save a copy, or confirm overwrite",
+      "shrink.original": "Original",
+      "shrink.saved": "smaller",
+      "shrink.hint": "Scroll to shrink it",
+      "lab.eyebrow": "02 — try it",
+      "lab.title": "Drop an image <span class=\"dim\">right here.</span>",
+      "lab.lede": "No install, no upload. This demo runs entirely in your browser — drop an image and compare before and after.",
+      "lab.noUpload": "NO UPLOAD",
+      "lab.dropAria": "Choose or drop an image",
+      "lab.dropTitle": "Drop an image, or click to choose",
+      "lab.dropHint": "PNG / JPG / WebP · processed in your browser",
+      "lab.original": "Original",
+      "lab.compressed": "Local result",
+      "lab.saved": "Size change",
+      "lab.note": "This demo re-encodes locally in your browser, preferring WebP and falling back to PNG or JPEG when unavailable. The result label shows the actual format. The desktop app uses TinyPNG, so results may differ.",
+      "lab.before": "Original",
+      "lab.after": "Local result",
+      "lab.beforeAlt": "Original preview",
+      "lab.afterAlt": "Local result preview",
+      "lab.compareAria": "Compare before and after compression",
+      "feat.title": "Small tool. <span class=\"dim\">No compromises.</span>",
+      "feat.lede": "It compresses images — and makes LAN sharing good enough to use every day.",
+      "feat.c1t": "Five at a time",
+      "feat.c1p": "Set concurrency from 1–5. Queues, progress and results stay independent: start each file as it arrives, or wait and batch.",
+      "feat.compressing": "Compressing…",
+      "feat.queued": "Queued",
+      "feat.count": "3 / 5 in flight",
+      "feat.c2t": "Ask before overwrite",
+      "feat.c2p": "Every write-back asks first and checks whether the original changed underneath. Read-only, moved or locked files are blocked. You can also save a copy.",
+      "feat.c3t": "Same Wi-Fi, direct fetch",
+      "feat.c3p": "Pick files on your computer; scan the code or open the LAN address on your phone to browse, search and download. No cloud account or relay is needed; a local sharing account can optionally protect access.",
+      "feat.c4t": "Link, PIN, local account",
+      "feat.c4p1": "Direct link",
+      "feat.c4p2": "Link + 6-digit PIN",
+      "feat.c4p3": "Local account sign-in (download / upload / text)",
+      "feat.c5t": "Preview in place",
+      "feat.c5p": "Images, audio, video and text expand right under the row. Audio scrubs, jumps 15 seconds and changes speed; long text folds instead of stretching the page.",
+      "feat.c6t": "Every file path, spelled out",
+      "feat.c6p": "Compressed images go to TinyPNG / TinyJPG / Tinify anonymous services. Shared files travel only between your computer and devices on the same network. Two separate stories, never blurred.",
+      "share.title": "Put files on<br /><span class=\"dim\">the same network.</span>",
+      "share.lede": "No chat-app zip files, no cloud-drive round trip. shrinkdrop runs a local service on your computer; phones, tablets and other computers on the same Wi-Fi open the link directly.",
+      "share.c1": "<b>Browse, search, live refresh</b> — files you add appear in the list immediately.",
+      "share.c2": "<b>Send and receive</b> — allow guests to upload files. Folder uploads must also be enabled separately in settings and require a browser that supports folder selection.",
+      "share.c3": "<b>Stop anytime</b> — one click releases the port, old links die immediately, nothing stays running.",
+      "share.c4": "<b>Local accounts</b> — accounts live in this computer's settings and only grant download, upload or text permissions. There is no cloud account to register and nothing syncs to other devices.",
+      "share.docs": "Read the sharing docs",
+      "share.sharedFiles": "Shared files",
+      "share.online": "online",
+      "share.f1": "design-final.png",
+      "share.f2": "product-video.mp4",
+      "share.f3": "meeting-audio.m4a",
+      "share.f4": "readme.txt",
+      "share.upload": "+ Upload photos / files",
+      "share.pin": "PIN",
+      "share.pinOn": "On",
+      "share.relay": "Cloud relay",
+      "dl.title": "Pick a platform. <span class=\"dim\">Install and go.</span>",
+      "dl.lede": "Open the GitHub Releases page and choose the installer for your platform under Assets.",
+      "dl.rec": "Recommended",
+      "dl.winTitle": "Windows installer",
+      "dl.winDesc": "EXE installer and MSI. Windows 10 or newer.",
+      "dl.macTitle": "Mac universal build",
+      "dl.macDesc": "One package for Apple Silicon and Intel. A DMG is also available for Applications.",
+      "dl.get": "Go to Releases",
+      "dl.all": "All versions: ",
+      "dl.source": " · Source: ",
+      "dl.versionNote": "The latest version lives on the Releases page",
+      "faq.title": "The details <span class=\"dim\">people ask about.</span>",
+      "faq.q1": "Where do compressed images go?",
+      "faq.a1": "They are uploaded over HTTPS to the anonymous compression services of TinyPNG, TinyJPG or Tinify, then the result is downloaded back to your machine. No API key and no self-hosted server; vendor-side processing and retention follow their policies.",
+      "faq.q2": "Do shared files go through the cloud?",
+      "faq.a2": "No. Sharing is served by a local process on your computer; visitors connect directly over the LAN and files never pass through a cloud relay. Stopping the share frees the port immediately.",
+      "faq.q3": "How large can images be, and how many at once?",
+      "faq.a3": "PNG, JPG and WebP up to 20 MB each, with width and height each at most 32,768 pixels and a maximum of 64 million pixels total. Concurrency is adjustable from 1–5; extra jobs queue.",
+      "faq.q4": "Can overwriting damage the original?",
+      "faq.a4": "It asks for confirmation and verifies that the original was not modified, moved or made read-only; any of those blocks the write. Only then is the result written back, and it cannot be undone. Saving a copy is safer.",
+      "faq.q5": "Can visitors preview files?",
+      "faq.a5": "Yes. Images, audio, video and supported text files expand under their row; audio supports scrubbing, ±15 seconds and speed control, and long text folds on demand.",
+      "faq.q6": "Do I need an account or cloud sync?",
+      "faq.a6": "No cloud account or cloud sync is needed. LAN sharing can optionally use local accounts to control access. The app has no history database and cleans up temporary results on exit.",
+      "foot.tag": "A desktop client that only compresses images, plus a LAN share face that never detours through the cloud. Windows and macOS.",
+      "foot.product": "Product",
+      "foot.compress": "Compress",
+      "foot.demo": "Local demo",
+      "foot.share": "LAN sharing",
+      "foot.download": "Download",
+      "foot.project": "Project",
+      "foot.privacy": "Privacy",
+      "foot.feedback": "Report an issue",
+      "foot.privacyShort": "Privacy",
+      "credit.by": "Image compression powered by",
+      "credit.support": "",
+      "credit.fine": "Compression runs through TinyPNG / Tinify anonymous APIs, and originals are uploaded to their service. Thanks to TinyPNG, this little tool does not need its own compression backend.",
+      "credit.official": "Official site ↗",
+      "js.compressing": "Compressing locally…",
+      "js.badImage": "That image could not be read — try another",
+      "js.badType": "Please choose a PNG, JPG or WebP image",
+      "js.noSupport": "This browser cannot process images locally — try another browser",
+      "js.noEncoding": "This browser could not encode the image — try another browser or image",
+      "js.tryAnother": "Try another image",
+      "js.localOnly": "Still processed in the browser, never uploaded",
+      "js.compat": "This browser lacks createImageBitmap; the demo will use a compatibility decoder.",
+      "js.fallback": "The encoder did not use WebP and fell back to {format}.",
+      "js.larger": "The encoded result is larger than the original; keeping the original is likely better.",
+      "js.unchanged": "No size change",
+      "js.capOriginal": "Original",
+      "js.capLocal": "Local",
+      "js.waiting": "Waiting",
+      "js.processing": "Processing…",
+      "js.verified": "Verified ✓"
+    }
+  };
+
+  let lang = "zh";
+  const t = (key) => {
+    const dict = I18N[lang] || I18N.zh;
+    return dict[key] !== undefined ? dict[key] : (I18N.zh[key] ?? key);
+  };
+
+  function applyLang(next) {
+    lang = next === "en" ? "en" : "zh";
+    document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
+    document.documentElement.dataset.lang = lang;
+    $$("[data-i18n], [data-i18n-html]").forEach((el) => {
+      const htmlKey = el.getAttribute("data-i18n-html");
+      const value = t(htmlKey || el.getAttribute("data-i18n"));
+      if (htmlKey) el.innerHTML = value;
+      else el.textContent = value;
+    });
+    $$("[data-i18n-aria]").forEach((el) => el.setAttribute("aria-label", t(el.dataset.i18nAria)));
+    $$("[data-i18n-alt]").forEach((el) => el.setAttribute("alt", t(el.dataset.i18nAlt)));
+    $$("[data-lang-opt]").forEach((el) => el.classList.toggle("on", el.dataset.langOpt === lang));
+    document.title = t("meta.title");
+    $("#pageDesc").setAttribute("content", t("meta.desc"));
+    $("#ogTitle").setAttribute("content", t("meta.title"));
+    $("#ogDesc").setAttribute("content", t("meta.ogDesc"));
+    document.getElementById("langToggle").setAttribute("aria-label", t("nav.langAria"));
+    if (onLanguageChange) onLanguageChange();
+    try { localStorage.setItem("shrinkdrop-lang", lang); } catch (e) { /* storage may be blocked */ }
+  }
+
+  let initialLang = "zh";
+  try {
+    const saved = localStorage.getItem("shrinkdrop-lang");
+    initialLang = saved || ((navigator.language || "").toLowerCase().startsWith("zh") ? "zh" : "en");
+  } catch (e) {
+    initialLang = (navigator.language || "").toLowerCase().startsWith("zh") ? "zh" : "en";
+  }
+  applyLang(initialLang);
+
+  $("#langToggle").addEventListener("click", () => applyLang(lang === "zh" ? "en" : "zh"));
+
+  document.getElementById("year").textContent = new Date().getFullYear();
+  requestAnimationFrame(() => document.body.classList.add("loaded"));
+
+  /* nav */
+  const nav = $("#nav");
+  const onNav = () => nav.classList.toggle("scrolled", scrollY > 24);
+  addEventListener("scroll", onNav, { passive: true });
+  onNav();
+
+  /* spotlight + card glow */
+  const spot = $("#spotlight");
+  if (!reduce && matchMedia("(hover: hover)").matches) {
+    let sx = innerWidth / 2, sy = innerHeight / 2, cx = sx, cy = sy, running = false;
+    const tick = () => {
+      cx += (sx - cx) * 0.14; cy += (sy - cy) * 0.14;
+      spot.style.left = cx + "px"; spot.style.top = cy + "px";
+      if (Math.abs(sx - cx) + Math.abs(sy - cy) > 0.4) requestAnimationFrame(tick);
+      else running = false;
+    };
+    addEventListener("pointermove", (e) => {
+      sx = e.clientX; sy = e.clientY; spot.classList.add("on");
+      if (!running) { running = true; requestAnimationFrame(tick); }
+    }, { passive: true });
+  }
+  $$(".cell, .dl-card").forEach((el) => {
+    el.addEventListener("pointermove", (e) => {
+      const r = el.getBoundingClientRect();
+      el.style.setProperty("--mx", ((e.clientX - r.left) / r.width * 100) + "%");
+      el.style.setProperty("--my", ((e.clientY - r.top) / r.height * 100) + "%");
+    });
+  });
+
+  /* app window tilt */
+  const win = $("#appWindow");
+  if (win && !reduce && matchMedia("(hover: hover)").matches) {
+    const wrap = win.parentElement;
+    wrap.addEventListener("pointermove", (e) => {
+      const r = wrap.getBoundingClientRect();
+      const px = (e.clientX - r.left) / r.width - .5;
+      const py = (e.clientY - r.top) / r.height - .5;
+      win.style.setProperty("--ry", (-7 + px * 9).toFixed(2) + "deg");
+      win.style.setProperty("--rx", (4 - py * 8).toFixed(2) + "deg");
+    });
+    wrap.addEventListener("pointerleave", () => {
+      win.style.setProperty("--ry", "-7deg");
+      win.style.setProperty("--rx", "4deg");
+    });
+  }
+
+  /* page scroll progress */
+  const scrollFill = $("#scrollFill");
+  const paintProgress = () => {
+    const max = document.documentElement.scrollHeight - innerHeight;
+    scrollFill.style.transform = "scaleX(" + (max > 0 ? scrollY / max : 0) + ")";
+  };
+  addEventListener("scroll", paintProgress, { passive: true });
+  addEventListener("resize", paintProgress);
+  paintProgress();
+
+  /* reveal section headers without markup noise */
+  $$(".section-head, .share-copy, .share-stage, .faq").forEach((el) => {
+    el.setAttribute("data-reveal", "");
+  });
+
+  /* reveals */
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach((en) => {
+      if (en.isIntersecting) { en.target.classList.add("in"); io.unobserve(en.target); }
+    });
+  }, { rootMargin: "0px 0px -12% 0px", threshold: .12 });
+  $$("[data-reveal]").forEach((el) => io.observe(el));
+
+  /* sticky compression scene */
+  const shrink = $("#compress");
+  const rail = $("#railFill");
+  const liveSize = $("#liveSize");
+  const savedPct = $("#savedPct");
+  const livePct = $("#livePct");
+  const stepEls = $$("#shrinkSteps li");
+  const stackCards = $$("#stack .stack-card");
+  let ticking = false;
+  const lerp = (a, b, f) => a + (b - a) * f;
+  let lastProgress = 0;
+  const renderStage = () => {
+    if (!livePct) return;
+    livePct.textContent = lastProgress > .92 ? t("js.verified") : lastProgress > .06 ? t("js.processing") : t("js.waiting");
+  };
+  function updateShrink() {
+    ticking = false;
+    const r = shrink.getBoundingClientRect();
+    const total = shrink.offsetHeight - innerHeight;
+    const p = clamp((-r.top) / Math.max(total, 1));
+    // staged easing so size only changes in the middle
+    const q = clamp((p - .12) / .66);
+    const eased = q * q * (3 - 2 * q);
+    const size = lerp(12.4, 2.9, eased);
+    if (liveSize) liveSize.textContent = size.toFixed(1) + " MB";
+    if (savedPct) savedPct.textContent = Math.round(eased * 77) + "%";
+    lastProgress = p;
+    renderStage();
+    if (rail) rail.style.width = (eased * 100).toFixed(2) + "%";
+    const idx = p < .3 ? 0 : p < .62 ? 1 : p < .86 ? 2 : 3;
+    stepEls.forEach((el, i) => el.classList.toggle("active", i <= idx));
+    stackCards.forEach((el, i) => {
+      if (i === 2) return;
+      const k = clamp(p * 1.6 - (i === 0 ? .1 : 0));
+      el.style.setProperty("--s", (1 - .1 * k).toFixed(3));
+      el.style.setProperty("--y", (i === 0 ? -10 : 16) * (1 - k) + "px");
+    });
+  }
+  function onScroll() {
+    if (!ticking) { ticking = true; requestAnimationFrame(updateShrink); }
+  }
+  addEventListener("scroll", onScroll, { passive: true });
+  addEventListener("resize", onScroll);
+  updateShrink();
+
+  /* ---------------- local compression demo ---------------- */
+  const drop = $("#drop"), fileInput = $("#file");
+  const imgBefore = $("#imgBefore"), imgAfter = $("#imgAfter");
+  const compare = $("#compare"), cut = $("#cut");
+  const mOriginal = $("#mOriginal"), mCompressed = $("#mCompressed"), mSaved = $("#mSaved");
+  const capBefore = $("#capBefore"), capAfter = $("#capAfter");
+  const labStatus = $("#labStatus");
+  let beforeUrl = null, afterUrl = null, requestId = 0;
+
+  function openPicker() { fileInput.click(); }
+  drop.addEventListener("click", openPicker);
+  drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openPicker(); } });
+  ["dragenter", "dragover"].forEach((evt) => drop.addEventListener(evt, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((evt) => drop.addEventListener(evt, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", (e) => {
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) handleFile(f, false);
+  });
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files[0];
+    fileInput.value = "";
+    if (file) handleFile(file, false);
+  });
+
+  cut.addEventListener("input", () => compare.style.setProperty("--cut", cut.value + "%"));
+
+  async function toBlob(canvas, type, quality) {
+    return new Promise((res) => canvas.toBlob(res, type, quality));
+  }
+
+  const canBitmap = typeof window.createImageBitmap === "function";
+  const FORMAT_LABEL = { "image/webp": "WebP", "image/png": "PNG", "image/jpeg": "JPEG" };
+  const IMAGE_EXT = /\.(png|jpe?g|webp)$/i;
+  const demo = { original: 0, compressed: 0, kind: null, format: "", status: null, processing: false };
+
+  async function loadImageElement(url) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("decode"));
+      img.src = url;
+    });
+  }
+
+  async function decodeImage(file) {
+    if (canBitmap) {
+      try {
+        const bmp = await createImageBitmap(file);
+        return { source: bmp, width: bmp.width, height: bmp.height, close: () => bmp.close && bmp.close() };
+      } catch (e) { /* fall back to an <img> decoder */ }
+    }
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await loadImageElement(url);
+      return { source: img, width: img.naturalWidth, height: img.naturalHeight, close: () => URL.revokeObjectURL(url) };
+    } catch (e) {
+      URL.revokeObjectURL(url);
+      return null;
+    }
+  }
+
+  async function encodeCanvas(canvas) {
+    const candidates = [
+      ["image/webp", 0.82],
+      ["image/jpeg", 0.82],
+      ["image/png", undefined]
+    ];
+    for (const [type, quality] of candidates) {
+      const blob = await toBlob(canvas, type, quality);
+      const format = blob && FORMAT_LABEL[blob.type.toLowerCase()];
+      if (format) return { blob, format };
+    }
+    return null;
+  }
+
+  function renderMetrics() {
+    if (!demo.original) return;
+    const change = demo.compressed - demo.original;
+    const pct = Math.abs(change) / demo.original * 100;
+    mOriginal.textContent = fmt(demo.original);
+    mCompressed.textContent = fmt(demo.compressed);
+    mSaved.textContent = change === 0
+      ? t("js.unchanged")
+      : (change > 0 ? "+" : "−") + (pct >= 1 ? Math.round(pct) + "%" : "<1%") + " · " + fmt(Math.abs(change));
+    mSaved.parentElement.classList.toggle("up", change > 0);
+    capBefore.textContent = t("js.capOriginal") + " · " + fmt(demo.original);
+    capAfter.textContent = t("js.capLocal") + " " + demo.format + " · " + fmt(demo.compressed);
+  }
+
+  function renderDropCopy() {
+    const strong = drop.querySelector("strong");
+    const small = drop.querySelector("small");
+    if (demo.processing) {
+      strong.textContent = t("js.compressing");
+      small.textContent = t("js.localOnly");
+    } else if (demo.status) {
+      strong.textContent = t(demo.status);
+      small.textContent = t("lab.dropHint");
+    } else if (demo.kind) {
+      strong.textContent = t("js.tryAnother");
+      small.textContent = t("js.localOnly");
+    } else {
+      strong.textContent = t("lab.dropTitle");
+      small.textContent = t("lab.dropHint");
+    }
+    const notes = [];
+    if (demo.status) notes.push(t(demo.status));
+    else {
+      if (!canBitmap) notes.push(t("js.compat"));
+      if (demo.kind && demo.format !== "WebP") notes.push(t("js.fallback").replace("{format}", demo.format));
+      if (demo.kind && demo.compressed > demo.original) notes.push(t("js.larger"));
+    }
+    labStatus.textContent = notes.join(" ");
+    labStatus.hidden = notes.length === 0;
+  }
+
+  async function handleFile(file, isSample, sampleRequest) {
+    const id = isSample ? sampleRequest : ++requestId;
+    if (id !== requestId) return;
+    demo.processing = false;
+    demo.status = null;
+    const typeOk = /^image\/(png|jpe?g|webp)$/i.test(file.type || "") || IMAGE_EXT.test(file.name || "");
+    if (!typeOk) {
+      demo.status = "js.badType";
+      renderDropCopy();
+      return;
+    }
+    demo.processing = true;
+    renderDropCopy();
+    let decoded = null;
+    let errorKey = "js.badImage";
+    try {
+      decoded = await decodeImage(file);
+      if (id !== requestId) return;
+      if (!decoded || !decoded.width || !decoded.height) throw new Error("decode");
+      const canvas = document.createElement("canvas");
+      canvas.width = decoded.width;
+      canvas.height = decoded.height;
+      const ctx = canvas.getContext("2d", { alpha: true });
+      if (!ctx) {
+        errorKey = "js.noSupport";
+        throw new Error("canvas");
+      }
+      ctx.drawImage(decoded.source, 0, 0);
+      errorKey = "js.noEncoding";
+      const encoded = await encodeCanvas(canvas);
+      if (id !== requestId) return;
+      if (!encoded) throw new Error("encode");
+
+      const nextBefore = URL.createObjectURL(file);
+      let nextAfter;
+      try {
+        nextAfter = URL.createObjectURL(encoded.blob);
+      } catch (e) {
+        URL.revokeObjectURL(nextBefore);
+        throw e;
+      }
+      if (beforeUrl) URL.revokeObjectURL(beforeUrl);
+      if (afterUrl) URL.revokeObjectURL(afterUrl);
+      beforeUrl = nextBefore;
+      afterUrl = nextAfter;
+      imgBefore.src = beforeUrl;
+      imgAfter.src = afterUrl;
+      demo.original = file.size;
+      demo.compressed = encoded.blob.size;
+      demo.kind = isSample ? "sample" : "user";
+      demo.format = encoded.format;
+      demo.processing = false;
+      renderMetrics();
+      renderDropCopy();
+      compare.style.setProperty("--cut", "50%");
+      cut.value = 50;
+    } catch (e) {
+      if (id === requestId) {
+        demo.processing = false;
+        if (!isSample) demo.status = errorKey;
+      }
+    } finally {
+      if (decoded) decoded.close();
+      if (id === requestId) renderDropCopy();
+    }
+  }
+
+  /* build a synthetic poster so the comparison isn't empty */
+  async function makeSample(sampleRequest) {
+    const W = 1600, H = 1067;
+    const c = document.createElement("canvas");
+    c.width = W; c.height = H;
+    const x = c.getContext("2d");
+    const g = x.createLinearGradient(0, 0, W, H);
+    g.addColorStop(0, "#04140d"); g.addColorStop(.55, "#0b3524"); g.addColorStop(1, "#1d6f4a");
+    x.fillStyle = g; x.fillRect(0, 0, W, H);
+
+    const glow = x.createRadialGradient(W * .78, H * .22, 20, W * .78, H * .22, W * .55);
+    glow.addColorStop(0, "rgba(185,255,94,.34)"); glow.addColorStop(1, "rgba(185,255,94,0)");
+    x.fillStyle = glow; x.fillRect(0, 0, W, H);
+
+    x.strokeStyle = "rgba(160,255,196,.10)"; x.lineWidth = 1;
+    for (let i = 0; i <= W; i += 80) { x.beginPath(); x.moveTo(i, 0); x.lineTo(i, H); x.stroke(); }
+    for (let i = 0; i <= H; i += 80) { x.beginPath(); x.moveTo(0, i); x.lineTo(W, i); x.stroke(); }
+
+    x.fillStyle = "#f0f7f2";
+    x.font = "800 168px 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif";
+    x.letterSpacing = "-6px";
+    x.fillText("MAKE IT", 96, 400);
+    const lg = x.createLinearGradient(96, 430, 900, 600);
+    lg.addColorStop(0, "#7dffc4"); lg.addColorStop(1, "#b9ff5e");
+    x.fillStyle = lg;
+    x.fillText("LIGHTER.", 96, 570);
+
+    x.letterSpacing = "4px";
+    x.font = "500 24px 'SF Mono', ui-monospace, Menlo, monospace";
+    x.fillStyle = "rgba(220,240,228,.62)";
+    x.fillText("SHRINKDROP — IMAGE COMPRESSION", 100, 700);
+
+    x.strokeStyle = "rgba(185,255,94,.4)"; x.lineWidth = 2;
+    x.strokeRect(98, 760, 300, 90);
+    x.fillStyle = "#b9ff5e";
+    x.font = "600 30px 'SF Mono', ui-monospace, Menlo, monospace";
+    x.fillText("−77%", 128, 818);
+    x.letterSpacing = "0px";
+
+    try {
+      const icon = await new Promise((res) => {
+        const im = new Image();
+        im.onload = () => res(im); im.onerror = () => res(null);
+        im.src = "assets/app-icon-256.png";
+      });
+      if (icon) {
+        x.save();
+        x.shadowColor = "rgba(0,0,0,.55)"; x.shadowBlur = 60; x.shadowOffsetY = 30;
+        x.drawImage(icon, W - 420, H - 420, 320, 320);
+        x.restore();
+      }
+    } catch (e) { /* poster still works without the icon */ }
+
+    const png = await toBlob(c, "image/png");
+    if (!png) return;
+    const f = new File([png], "shrinkdrop-poster.png", { type: "image/png" });
+    await handleFile(f, true, sampleRequest);
+  }
+  renderDropCopy();
+  makeSample(requestId);
+
+  onLanguageChange = () => { renderMetrics(); renderDropCopy(); renderStage(); };
+
+  /* os hint */
+  const mac = /Macintosh|Mac OS X/.test(navigator.userAgent);
+  const isWindows = /Windows/.test(navigator.userAgent);
+  const tagMac = $("#dl-mac .best-tag"), tagWin = $("#dl-win .best-tag");
+  if (mac && tagMac) tagMac.hidden = false;
+  else if (isWindows && tagWin) tagWin.hidden = false;
+})();
+</script>
+</body>
+</html>
