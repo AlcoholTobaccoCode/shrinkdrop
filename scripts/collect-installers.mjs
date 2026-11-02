@@ -4,7 +4,7 @@ import path from 'node:path';
 
 const [bundleDirectory, outputDirectory, platform] = process.argv.slice(2);
 const formats = {
-  'macos-universal': { dmg: '.dmg' },
+  'macos-universal': { dmg: '.dmg', pkg: '.pkg' },
   'windows-x64': { nsis: '.exe', msi: '.msi' },
 }[platform];
 if (!bundleDirectory || !outputDirectory || !formats) {

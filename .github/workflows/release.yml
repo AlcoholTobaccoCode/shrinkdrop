@@ -87,6 +87,9 @@ jobs:
         with:
           args: ${{ matrix.args }} --ci -- --locked
       - run: pnpm check:secrets
+      - name: Build macOS PKG
+        if: matrix.artifact == 'macos-universal'
+        run: node scripts/build-macos-pkg.mjs "${{ matrix.bundle-directory }}/macos/shrinkdrop.app" "${{ matrix.bundle-directory }}/pkg" "${{ needs.version.outputs.version }}"
       - name: Collect installers and checksums
         run: node scripts/collect-installers.mjs "${{ matrix.bundle-directory }}" "dist/installers/ci/${{ matrix.artifact }}" "${{ matrix.artifact }}"
       - uses: actions/upload-artifact@v4
@@ -151,7 +154,7 @@ jobs:
           if ! gh release view "$RELEASE_TAG" --json isDraft > dist/release-state.json; then
             gh release create "$RELEASE_TAG" --verify-tag --draft --title "shrinkdrop $APP_VERSION" --notes-file dist/release/RELEASE_NOTES.md
           fi
-          gh release upload "$RELEASE_TAG" dist/release/*.dmg dist/release/*.exe dist/release/*.msi dist/release/SHA256SUMS.txt dist/release/build-info.json --clobber
+          gh release upload "$RELEASE_TAG" dist/release/*.dmg dist/release/*.pkg dist/release/*.exe dist/release/*.msi dist/release/SHA256SUMS.txt dist/release/build-info.json --clobber
           prerelease=false
           latest=true
           if [[ "$APP_VERSION" == *-* ]]; then

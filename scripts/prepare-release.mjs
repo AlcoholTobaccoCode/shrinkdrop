@@ -6,7 +6,7 @@ const [inputDirectory, outputDirectory] = process.argv.slice(2);
 if (!inputDirectory || !outputDirectory) throw new Error('Usage: node scripts/prepare-release.mjs <input-directory> <output-directory>');
 const { version } = JSON.parse(await readFile('package.json', 'utf8'));
 const expected = new Map([
-  ['macos-universal', new Set(['.dmg'])],
+  ['macos-universal', new Set(['.dmg', '.pkg'])],
   ['windows-x64', new Set(['.exe', '.msi'])],
 ]);
 const builds = [];
@@ -49,9 +49,11 @@ const notes = [
   '| 系统 | 下载文件 |',
   '| --- | --- |',
   '| Windows x64 | `shrinkdrop_' + version + '_x64-setup.exe`（推荐）或 `.msi` |',
-  '| macOS Intel / Apple Silicon | `shrinkdrop_' + version + '_universal.dmg` |',
+  '| macOS Intel / Apple Silicon | `shrinkdrop_' + version + '_universal.pkg`（推荐）或 `.dmg` |',
   '',
-  '请在下方 Assets 中直接下载安装文件，无需登录 GitHub。macOS 打开 DMG 后将应用拖入 Applications。',
+  '请在下方 Assets 中直接下载安装文件，无需登录 GitHub。macOS 推荐打开 PKG 用系统安装器安装，DMG 保留拖拽安装方式；Windows 推荐 `setup.exe`。',
+  '',
+  'PKG 由系统安装器安装到 Applications，安装后不会残留挂载的磁盘镜像。',
   '',
   '安装包暂未配置开发者签名及 macOS 公证，首次打开可能出现系统安全提示。',
   '',
