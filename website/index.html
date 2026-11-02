@@ -1086,10 +1086,19 @@ footer {
         </article>
       </div>
       <div class="dl-foot">
-        <span><span data-i18n="dl.all">所有版本：</span><a href="https://github.com/AlcoholTobaccoCode/shrinkdrop/releases" target="_blank" rel="noopener">GitHub Releases</a><span data-i18n="dl.source"> · 源码：</span><a href="https://github.com/AlcoholTobaccoCode/shrinkdrop" target="_blank" rel="noopener">far-domain/shrinkdrop</a></span>
+        <span><span data-i18n="dl.all">所有版本：</span><a href="https://github.com/AlcoholTobaccoCode/shrinkdrop/releases" target="_blank" rel="noopener">GitHub Releases</a><span data-i18n="dl.source"> · 源码：</span><a href="https://github.com/AlcoholTobaccoCode/shrinkdrop" target="_blank" rel="noopener">alcoholtobaccocode/shrinkdrop</a></span>
         <span data-i18n="dl.versionNote">当前版本以 Releases 页面为准</span>
       </div>
-      <p class="lede" data-i18n-html="dl.signpath">本项目计划申请 <a href="https://signpath.org/" target="_blank" rel="noopener" style="color:var(--lime);text-decoration:underline">SignPath Foundation</a> 的免费代码签名。申请尚未获批，当前安装包未使用 SignPath 签名。</p>
+      <!--
+        Code signing policy — publish only after SignPath signing is actually active.
+        Required wording per https://signpath.org/terms.html:
+
+        ## Code signing policy
+        Free code signing provided by SignPath.io, certificate by SignPath Foundation.
+        - Committers and reviewers: @alcoholtobaccocode
+        - Approvers: @alcoholtobaccocode
+        Privacy policy: https://github.com/AlcoholTobaccoCode/shrinkdrop/blob/main/docs/privacy.md
+      -->
     </div>
   </section>
 
@@ -1166,7 +1175,7 @@ footer {
   </div>
 
   <div class="legal">
-    <span>© <span id="year">2026</span> shrinkdrop · far-domain</span>
+    <span>© <span id="year">2026</span> shrinkdrop</span>
     <span class="dots">
       <a href="https://github.com/AlcoholTobaccoCode/shrinkdrop" target="_blank" rel="noopener">GitHub</a>
       <a href="https://tinypng.com/" target="_blank" rel="noopener">TinyPNG</a>
@@ -1294,7 +1303,7 @@ footer {
       "share.relay": "云中转",
       "dl.title": "选你的平台，<span class=\"dim\">装上就用。</span>",
       "dl.lede": "前往 GitHub Releases 页面，在 Assets 中选择适合平台的安装包下载。",
-      "dl.signpath": "本项目计划申请 <a href=\"https://signpath.org/\" target=\"_blank\" rel=\"noopener\" style=\"color:var(--lime);text-decoration:underline\">SignPath Foundation</a> 的免费代码签名。申请尚未获批，当前安装包未使用 SignPath 签名。",
+
       "dl.rec": "推荐",
       "dl.winTitle": "Windows 安装包",
       "dl.winDesc": "提供 EXE 安装器和 MSI。需 Windows 10 及以上。",
@@ -1459,7 +1468,7 @@ footer {
       "dl.all": "All versions: ",
       "dl.source": " · Source: ",
       "dl.versionNote": "The latest version lives on the Releases page",
-      "dl.signpath": "This project plans to apply for free code signing from <a href=\"https://signpath.org/\" target=\"_blank\" rel=\"noopener\" style=\"color:var(--lime);text-decoration:underline\">SignPath Foundation</a>. Approval is pending; current installers are not signed using SignPath.",
+
       "faq.title": "The details <span class=\"dim\">people ask about.</span>",
       "faq.q1": "Where do compressed images go?",
       "faq.a1": "They are uploaded over HTTPS to the anonymous compression services of TinyPNG, TinyJPG or Tinify, then the result is downloaded back to your machine. No API key and no self-hosted server; vendor-side processing and retention follow their policies.",
