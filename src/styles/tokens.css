@@ -223,6 +223,20 @@ p, h1 { margin: 0; }
 .share-row { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--line); }
 .share-row:last-child { border-bottom: 0; }
 .share-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.share-name--expanded { max-height: 40vh; overflow-y: auto; overflow-wrap: anywhere; white-space: pre-wrap; }
+.share-name--previewable { cursor: default; }
+.share-name--previewable:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.share-expand { flex: none; font-size: 11px; }
+.file-preview { position: fixed; z-index: 100; width: min(420px, calc(100vw - 16px)); max-height: min(350px, calc(100vh - 16px)); display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--text); box-shadow: 0 12px 36px #0004; }
+.file-preview-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.file-preview-header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.file-preview-modes { display: flex; flex: none; gap: 3px; }
+.file-preview-modes button { padding: 4px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); }
+.file-preview-modes button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+.file-preview img { display: block; max-width: 100%; max-height: min(300px, calc(100vh - 80px)); object-fit: contain; align-self: center; }
+.file-preview iframe { width: 100%; min-height: 260px; border: 1px solid var(--line); background: white; }
+.file-preview pre { min-height: 0; margin: 0; padding: 10px; overflow: auto; border-radius: 6px; background: var(--bg); white-space: pre; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.preview-token-string { color: #288451; } .preview-token-keyword { color: #a45aca; } .preview-token-number { color: #bf7625; } .preview-token-comment { color: var(--muted); }
 .share-size { flex: 0 0 74px; text-align: right; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .share-row > .icon-button, .share-row > .share-select { flex: none; }
 .share-empty { min-height: 220px; }

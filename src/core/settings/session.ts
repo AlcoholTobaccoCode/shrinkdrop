@@ -24,7 +24,8 @@ function payload(settings: SettingsView): SettingsUpdatePayload {
       public: settings.share.public,
       allowUpload: settings.share.allowUpload,
       allowText: settings.share.allowText,
-      autoSaveUploads: settings.share.autoSaveUploads
+      autoSaveUploads: settings.share.autoSaveUploads,
+      allowFolderUpload: settings.share.allowFolderUpload
     }
   };
 }

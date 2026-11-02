@@ -49,6 +49,7 @@ export interface SettingsView {
     allowUpload: boolean;
     allowText: boolean;
     autoSaveUploads: boolean;
+    allowFolderUpload: boolean;
     accounts: AccountView[];
     groups: GroupView[];
   };
@@ -70,6 +71,7 @@ export interface SettingsUpdatePayload {
     allowUpload: boolean;
     allowText: boolean;
     autoSaveUploads: boolean;
+    allowFolderUpload: boolean;
   };
 }
 
@@ -110,6 +112,7 @@ export function defaultSettings(): SettingsView {
       allowUpload: false,
       allowText: false,
       autoSaveUploads: false,
+      allowFolderUpload: false,
       accounts: [],
       groups: []
     }

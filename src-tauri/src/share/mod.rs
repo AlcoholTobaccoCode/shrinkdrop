@@ -111,6 +111,7 @@ pub struct ShareOptions {
     pub allow_upload: bool,
     pub allow_text: bool,
     pub auto_save_uploads: bool,
+    pub allow_folder_upload: bool,
     pub accounts: Vec<Account>,
     pub upload_dir: PathBuf,
     pub language: Language,
@@ -119,6 +120,7 @@ pub struct ShareOptions {
 
 struct RuntimeGroup {
     options: GroupOptions,
+    receive_dir: PathBuf,
     base: String,
     url: String,
     public: bool,
@@ -235,7 +237,7 @@ impl ShareManager {
             return Err("分享还没有开始".to_string());
         };
         let group = Self::active_group(running)?;
-        let dir = group.options.upload_dir.clone();
+        let dir = group.receive_dir.clone();
         fs::create_dir_all(&dir).map_err(|_| "无法创建接收目录".to_string())?;
         Ok(dir)
     }
@@ -320,6 +322,11 @@ impl ShareManager {
         if options.groups.is_empty() {
             return Err("至少需要一个分享分组".to_string());
         }
+        if options.groups.iter().any(|group| !group.slug.is_empty() &&
+            (!(2..=32).contains(&group.slug.len()) || !group.slug.chars().all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')))
+        {
+            return Err("分组路径无效".to_string());
+        }
         let (listener, port) = bind_listener(options.port).await?;
         let listener6 = bind_listener_v6(port);
         let addresses = net::candidate_addresses();
@@ -341,6 +348,15 @@ impl ShareManager {
                 String::new()
             } else {
                 format!("/g/{}", group.slug)
+            };
+            let receive_dir = if options.auto_save_uploads {
+                if group.slug.is_empty() {
+                    download_dir()
+                } else {
+                    download_dir().join("groups").join(&group.slug)
+                }
+            } else {
+                group.upload_dir.clone()
             };
             let url = format!("http://{primary}:{port}{base}");
             let items = snapshots.get(&group.id).cloned().unwrap_or_default();
@@ -370,16 +386,17 @@ impl ShareManager {
                 zip_dir: temp_root.join(&group.id),
                 auth,
                 next_id: next_id.clone(),
-                upload_dir: group.upload_dir.clone(),
+                upload_dir: receive_dir.clone(),
                 language: self.language.clone(),
                 public: group.public,
-                auto_save_uploads: options.auto_save_uploads,
+                allow_folder_upload: options.allow_folder_upload,
                 app: app.clone(),
             });
             groups.push(RuntimeGroup {
                 public: group.public,
                 protection: group.protection,
                 options: group,
+                receive_dir,
                 base,
                 url,
                 items,
@@ -637,23 +654,6 @@ pub(crate) fn download_dir() -> PathBuf {
         .unwrap_or_else(|| std::env::temp_dir())
 }
 
-pub(crate) fn unique_destination(dir: &std::path::Path, name: &str) -> PathBuf {
-    let candidate = dir.join(name);
-    if !candidate.exists() {
-        return candidate;
-    }
-    let (stem, extension) = match name.rsplit_once('.') {
-        Some((stem, extension)) if !stem.is_empty() => (stem.to_string(), format!(".{extension}")),
-        _ => (name.to_string(), String::new()),
-    };
-    for index in 1..1000 {
-        let candidate = dir.join(format!("{stem} ({index}){extension}"));
-        if !candidate.exists() {
-            return candidate;
-        }
-    }
-    dir.join(format!("{}-{}", random_token(), name))
-}
 
 fn build_items_zip(items: &[SharedItem], destination: &std::path::Path) -> Result<(), String> {
     use std::io::Write;
@@ -930,6 +930,36 @@ pub fn share_open_upload_dir(manager: tauri::State<'_, ShareManager>) -> Result<
         .map_err(|_| "无法打开接收目录".to_string())
 }
 
+#[derive(Serialize)]
+pub struct PreviewItem {
+    bytes: Vec<u8>,
+    mime: String,
+    size: u64,
+}
+
+#[tauri::command]
+pub async fn share_preview_item(
+    manager: tauri::State<'_, ShareManager>,
+    id: u32,
+) -> Result<PreviewItem, String> {
+    use tokio::io::AsyncReadExt;
+    let item = manager.snapshot_items(&[id]).map_err(|_| "PREVIEW_NOT_FOUND".to_string())?
+        .into_iter().next().ok_or_else(|| "PREVIEW_NOT_FOUND".to_string())?;
+    if item.kind != ItemKind::File {
+        return Err("PREVIEW_UNSUPPORTED".to_string());
+    }
+    let mime = server::preview_mime(&item.path).ok_or_else(|| "PREVIEW_UNSUPPORTED".to_string())?;
+    let limit = if mime.starts_with("text/") { 512 * 1024 } else { 32 * 1024 * 1024 };
+    let file = tokio::fs::File::open(&item.path).await.map_err(|_| "PREVIEW_NOT_FOUND".to_string())?;
+    let metadata = file.metadata().await.map_err(|_| "PREVIEW_NOT_FOUND".to_string())?;
+    if !metadata.is_file() { return Err("PREVIEW_UNSUPPORTED".to_string()); }
+    if metadata.len() > limit { return Err("PREVIEW_TOO_LARGE".to_string()); }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(limit + 1).read_to_end(&mut bytes).await.map_err(|_| "PREVIEW_READ_FAILED".to_string())?;
+    if bytes.len() as u64 > limit { return Err("PREVIEW_TOO_LARGE".to_string()); }
+    Ok(PreviewItem { size: bytes.len() as u64, bytes, mime: mime.to_string() })
+}
+
 #[tauri::command]
 pub async fn share_save_items(
     app: AppHandle,
@@ -1038,6 +1068,7 @@ mod tests {
             allow_upload: false,
             allow_text: false,
             auto_save_uploads: false,
+            allow_folder_upload: false,
             accounts: Vec::new(),
             groups: vec![GroupOptions {
                 id: "default".to_string(),
@@ -1747,6 +1778,7 @@ mod tests {
         let mut options = options();
         options.allow_upload = true;
         options.allow_text = true;
+        options.allow_folder_upload = true;
         options.upload_dir = upload_dir.clone();
         let (base, _token, _items) = server_tests::spawn_with(items, options).await;
 
@@ -1759,10 +1791,17 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(text.status(), reqwest::StatusCode::OK);
+        let traversal = reqwest::multipart::Form::new().part(
+            "file",
+            reqwest::multipart::Part::bytes(b"bad".to_vec()).file_name("evil/../报告.txt"),
+        );
+        let rejected = client.post(format!("{base}/api/upload"))
+            .header("x-share-csrf", "1").multipart(traversal).send().await.unwrap();
+        assert_eq!(rejected.status(), reqwest::StatusCode::BAD_REQUEST);
 
         let form = reqwest::multipart::Form::new().part(
             "file",
-            reqwest::multipart::Part::bytes(b"uploaded".to_vec()).file_name("evil/../报告.txt"),
+            reqwest::multipart::Part::bytes(b"uploaded".to_vec()).file_name("报告.txt"),
         );
         let upload = client
             .post(format!("{base}/api/upload"))
@@ -1787,6 +1826,30 @@ mod tests {
             .any(|item| item["name"] == "报告.txt" && item["visitor"] == true));
         assert!(upload_dir.join("报告.txt").exists());
         assert!(!upload_dir.join("evil").exists());
+        for _ in 0..2 {
+            let form = reqwest::multipart::Form::new().part("file",
+                reqwest::multipart::Part::bytes(b"image-data".to_vec()).file_name("picture.jpg"));
+            let response = client.post(format!("{base}/api/upload"))
+                .header("x-share-csrf", "1").multipart(form).send().await.unwrap();
+            assert_eq!(response.status(), reqwest::StatusCode::OK);
+        }
+        let listed: Vec<serde_json::Value> = client.get(format!("{base}/api/items"))
+            .send().await.unwrap().json().await.unwrap();
+        for name in ["picture.jpg", "picture (1).jpg"] {
+            let item = listed.iter().find(|item| item["name"] == name).unwrap();
+            assert_eq!(item["preview"], true);
+            let preview = client.get(format!("{base}/api/preview?id={}", item["id"]))
+                .send().await.unwrap();
+            assert_eq!(preview.status(), reqwest::StatusCode::OK);
+            assert_eq!(preview.headers()[reqwest::header::CONTENT_TYPE], "image/jpeg");
+            assert_eq!(preview.bytes().await.unwrap().as_ref(), b"image-data");
+        }
+        let form = reqwest::multipart::Form::new().part("file",
+            reqwest::multipart::Part::bytes(b"nested".to_vec()).file_name("photos/sub/a.txt"));
+        let response = client.post(format!("{base}/api/upload"))
+            .header("x-share-csrf", "1").multipart(form).send().await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(fs::read(upload_dir.join("photos/sub/a.txt")).unwrap(), b"nested");
     }
 
     #[tokio::test]
@@ -1864,7 +1927,7 @@ mod tests {
                 upload_dir: options.upload_dir.clone(),
                 language: Arc::new(RwLock::new(Language::Auto)),
                 public: true,
-                auto_save_uploads: false,
+                allow_folder_upload: options.allow_folder_upload,
                 app: None,
             };
             let app = server::router(vec![context]);
@@ -1877,5 +1940,6 @@ mod tests {
             });
             (format!("http://127.0.0.1:{port}"), token, shared)
         }
+
     }
 }

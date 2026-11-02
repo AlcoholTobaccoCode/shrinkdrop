@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import LiteIcon from './components/LiteIcon.vue';
+import SharePreview from './components/SharePreview.vue';
+import type { ShareItem } from './core/share/types';
+import { previewKind } from './core/share/preview';
 import { createLiteSession } from './core/lite/session';
 import { formatBytes, sizeChange, statusLabel } from './core/lite/presentation';
 import { createShareSession } from './core/share/session';
@@ -58,6 +61,36 @@ const shareGroupsEl = ref<HTMLElement>();
 const groupsOpen = ref(false);
 const downloadableItems = computed(() => shareState.items.filter(item => item.kind !== 'text'));
 const selectedShareCount = computed(() => selectedShareIds.value.length);
+const expandedTextIds = ref<number[]>([]);
+const previewItem = ref<ShareItem | null>(null);
+const previewPosition = ref({ top: 0, left: 0 });
+let previewTimer: ReturnType<typeof setTimeout> | undefined;
+function cancelPreviewClose() { clearTimeout(previewTimer); }
+function closePreviewSoon() {
+  cancelPreviewClose();
+  previewTimer = setTimeout(() => {
+    const panel = document.querySelector<HTMLElement>('.file-preview');
+    if (panel?.matches(':hover') || panel?.contains(document.activeElement)) return;
+    previewItem.value = null;
+  }, 300);
+}
+function showPreview(item: ShareItem, event: Event) {
+  if (!desktop || item.kind !== 'file' || !previewKind(item.name)) return;
+  cancelPreviewClose();
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  previewPosition.value = { left: Math.max(8, Math.min(rect.left, window.innerWidth - 428)), top: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 360)) };
+  previewItem.value = item;
+}
+async function focusPreview(item: ShareItem, event: KeyboardEvent) {
+  if (!desktop || item.kind !== 'file' || !previewKind(item.name)) return;
+  showPreview(item, event);
+  await nextTick();
+  document.querySelector<HTMLElement>('.file-preview')?.focus();
+}
+function toggleText(id: number) {
+  expandedTextIds.value = expandedTextIds.value.includes(id) ? expandedTextIds.value.filter(value => value !== id) : [...expandedTextIds.value, id];
+}
+watch(() => shareState.activeGroup, () => { previewItem.value = null; expandedTextIds.value = []; });
 // 地址栏当前是否走 IPv6；按钮据此显示可切换到的另一族地址。
 const shareUsingIpv6 = computed(() =>
   shareState.ipv6Addresses.some(address => shareState.url.includes(`//${address}:`))
@@ -238,7 +271,7 @@ onMounted(async () => {
     if (unmounted) stop(); else detached = stop;
   } catch { session.notify(t('拖放暂时不可用，请使用「添加图片」选择文件。'), 'error'); }
 });
-onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedSettings(); detachedShareDrop(); share.dispose(); void session.dispose(); });
+onBeforeUnmount(() => { unmounted = true; cancelPreviewClose(); detached(); detachedShare(); detachedSettings(); detachedShareDrop(); share.dispose(); void session.dispose(); });
 //#endregion
 </script>
 
@@ -292,7 +325,7 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
               <LiteIcon name="plus" />{{ t('发文字') }}
             </button>
             <button class="button button--quiet" :disabled="shareState.phase !== 'running'" @click="share.openUploadFolder()">
-              <LiteIcon name="folder" />{{ t('接收目录') }}
+              <LiteIcon name="folder" />{{ t('上传目录') }}
             </button>
             <button class="button button--quiet" :disabled="shareState.phase === 'stopping'" @click="share.stop()">
               {{ shareState.phase === 'stopping' ? t('正在停止') : t('停止分享') }}
@@ -535,11 +568,13 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
                       <li v-for="item in shareState.items" :key="item.id" class="share-row" :class="{ 'share-row--visitor': item.visitor }">
                         <input v-if="item.kind !== 'text'" type="checkbox" class="share-select" :checked="isShareSelected(item.id)"
                           :aria-label="`${t('下载')} ${item.name}`" @change="toggleShareSelect(item.id)" />
-                        <span class="share-name" :title="item.kind === 'text' ? item.text || item.name : item.name">
+                        <span class="share-name" :class="{ 'share-name--expanded': item.kind === 'text' && expandedTextIds.includes(item.id), 'share-name--previewable': item.kind === 'file' && previewKind(item.name) }"
+                          :title="item.name" :tabindex="item.kind === 'file' && previewKind(item.name) ? 0 : undefined" @mouseenter="showPreview(item, $event)" @mouseleave="closePreviewSoon" @focus="showPreview(item, $event)" @blur="closePreviewSoon" @keydown.enter.prevent="focusPreview(item, $event)" @keydown.space.prevent="focusPreview(item, $event)">
                           <template v-if="item.kind === 'text'">“{{ item.text || item.name }}”</template>
                           <template v-else>{{ item.name }}</template>
                           <em v-if="item.visitor" class="share-badge">{{ t('访客上传') }}</em>
                         </span>
+                        <button v-if="item.kind === 'text'" class="button button--quiet share-expand" :aria-expanded="expandedTextIds.includes(item.id)" @click="toggleText(item.id)">{{ expandedTextIds.includes(item.id) ? t('收起文字') : t('展开文字') }}</button>
                         <span class="share-size">{{ item.kind === 'dir' ? t('文件夹') : item.kind === 'text' ? t('文字') : formatBytes(item.size) }}</span>
                         <button v-if="item.kind !== 'text'" class="icon-button" :title="t('下载')" :aria-label="`${t('下载')} ${item.name}`" :disabled="downloadBusy" @click="downloadShare([item.id])"><LiteIcon name="download" /></button>
                         <button class="icon-button" :aria-label="`${t('移除')} ${item.name}`" :disabled="!desktop" @click="share.remove(item.id)"><LiteIcon name="close" /></button>
@@ -580,6 +615,7 @@ onBeforeUnmount(() => { unmounted = true; detached(); detachedShare(); detachedS
       </div>
     </div>
   </main>
+  <Teleport to="body"><SharePreview v-if="previewItem" :item="previewItem" :top="previewPosition.top" :left="previewPosition.left" @enter="cancelPreviewClose" @leave="closePreviewSoon" /></Teleport>
 
   <div v-if="textOpen" class="settings-overlay" @click.self="textOpen = false">
     <div class="text-sheet" role="dialog" aria-modal="true" aria-labelledby="text-title">

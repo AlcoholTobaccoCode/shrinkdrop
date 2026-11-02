@@ -51,6 +51,13 @@
       authFailed: '口令不正确',
       authLocked: '尝试次数过多，请 10 分钟后再试',
       chooseFiles: '请先选择文件',
+      selectFiles: '选择文件',
+      selectFolder: '选择文件夹',
+      uploadHint: '可选择多个文件，上传时保持文件夹结构。',
+      uploadFilesHint: '可一次选择多个文件。',
+      selectedFiles: count => `已选择 ${count} 个文件`,
+      uploadProgress: (done, total) => `正在上传 ${done} / ${total}`,
+      uploadPartial: (done, total) => `已上传 ${done} / ${total} 个文件。请重试剩余文件。`,
       uploadFailed: '上传失败，请重试',
       tooLarge: '文件超过 1GB，无法上传',
       textPlaceholder: '输入要分享的文字',
@@ -130,6 +137,13 @@
       authFailed: 'Wrong credentials',
       authLocked: 'Too many attempts. Try again in 10 minutes.',
       chooseFiles: 'Choose files first',
+      selectFiles: 'Choose files',
+      selectFolder: 'Choose folder',
+      uploadHint: 'Choose multiple files or preserve a folder’s structure.',
+      uploadFilesHint: 'Choose multiple files to upload.',
+      selectedFiles: count => `${count} file${count === 1 ? '' : 's'} selected`,
+      uploadProgress: (done, total) => `Uploading ${done} / ${total}`,
+      uploadPartial: (done, total) => `${done} / ${total} files uploaded. Retry the remaining files.`,
       uploadFailed: 'Upload failed. Try again.',
       tooLarge: 'File exceeds 1 GB',
       textPlaceholder: 'Write something to share',
@@ -425,7 +439,9 @@
 
     toggle.append(icon, main, chevron);
     toggle.addEventListener('click', () => {
-      preview.openKey = expanded ? '' : key;
+      const next = preview.openKey === key ? '' : key;
+      hideOpenPreview();
+      preview.openKey = next;
       renderList();
     });
 
@@ -467,7 +483,7 @@
     li.className = 'row' + (entry.kind === 'dir' ? ' row--dir' : '');
     if (kind) li.className += ' row--expandable';
 
-    const link = document.createElement(entry.kind === 'dir' ? 'button' : 'a');
+    const link = document.createElement(entry.kind === 'dir' || kind ? 'button' : 'a');
     link.className = 'row-link';
     if (entry.kind === 'dir') {
       link.type = 'button';
@@ -480,7 +496,9 @@
       link.setAttribute('aria-expanded', String(preview.openKey === entryKey(entry, root)));
       link.addEventListener('click', () => {
         const key = entryKey(entry, root);
-        preview.openKey = preview.openKey === key ? '' : key;
+        const next = preview.openKey === key ? '' : key;
+        hideOpenPreview();
+        preview.openKey = next;
         renderList();
       });
     } else {
@@ -647,9 +665,8 @@
     retry.className = 'btn ghost';
     retry.textContent = t('retryPreview');
     retry.addEventListener('click', () => {
-      const fresh = box.cloneNode(false);
-      fresh.textContent = t('previewLoading');
-      box.replaceWith(fresh);
+      const row = box.closest('.row');
+      if (row) row.dataset.previewRetry = 'true';
       renderList();
     });
     const download = document.createElement('button');
@@ -1019,7 +1036,7 @@
       const current = existing.get(key);
       const playing = current && Array.from(current.querySelectorAll('audio, video'))
         .some(media => !media.paused && !media.ended);
-      const reusable = current && (playing || !needsPreviewRebuild(current, entry, key));
+      const reusable = current && !current.dataset.previewRetry && !needsPreviewRebuild(current, entry, key);
       const node = reusable ? current : rowFor(entry, root);
       node.dataset.key = key;
       ordered.push({ node, playing: Boolean(playing) });
@@ -1444,7 +1461,7 @@
   }
 
 
-  function openSheet(titleText) {
+  function openSheet(titleText, onClose) {
     const overlay = document.createElement('div');
     overlay.className = 'sheet-overlay';
     const card = document.createElement('div');
@@ -1455,72 +1472,144 @@
     title.textContent = titleText;
     const error = document.createElement('p');
     error.className = 'sheet-error';
+    error.setAttribute('role', 'alert');
     const actions = document.createElement('div');
     actions.className = 'sheet-actions';
     const cancel = document.createElement('button');
     cancel.type = 'button';
     cancel.className = 'btn ghost';
     cancel.textContent = t('cancel');
-    cancel.addEventListener('click', () => overlay.remove());
+    const close = () => {
+      if (onClose) onClose();
+      overlay.remove();
+    };
+    cancel.addEventListener('click', close);
     actions.append(cancel);
     card.append(title, error, actions);
     overlay.append(card);
     overlay.addEventListener('click', event => {
-      if (event.target === overlay) overlay.remove();
+      if (event.target === overlay) close();
     });
     document.body.append(overlay);
     return { overlay, card, error, actions };
   }
 
   function openUpload() {
-    const { overlay, card, error, actions } = openSheet(t('upload'));
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.multiple = true;
+    let request = null;
+    let files = [];
+    let completed = 0;
+    let cancelled = false;
+    const { overlay, card, error, actions } = openSheet(t('upload'), () => {
+      cancelled = true;
+      if (request) request.abort();
+      if (completed) load();
+    });
+    card.classList.add('upload-sheet');
+    const allowFolder = Boolean(state.auth && state.auth.folder_upload);
+    const hint = document.createElement('p');
+    hint.className = 'upload-hint';
+    hint.textContent = t(allowFolder ? 'uploadHint' : 'uploadFilesHint');
+    const choices = document.createElement('div');
+    choices.className = 'upload-choices';
+    const summary = document.createElement('p');
+    summary.className = 'upload-summary';
+    summary.setAttribute('aria-live', 'polite');
+    summary.textContent = t('chooseFiles');
+    const controls = [];
+    const addPicker = (label, folder) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.multiple = true;
+      if (folder) input.setAttribute('webkitdirectory', '');
+      input.className = 'upload-input';
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'btn upload-choice';
+      button.innerHTML = folder ? ICONS.folder : ICONS.file;
+      const text = document.createElement('span');
+      text.textContent = label;
+      button.append(text);
+      button.addEventListener('click', () => input.click());
+      input.addEventListener('change', () => {
+        if (!input.files || !input.files.length) return;
+        files = Array.from(input.files);
+        completed = 0;
+        error.textContent = '';
+        bar.style.width = '0%';
+        progress.setAttribute('aria-valuenow', '0');
+        summary.textContent = t('selectedFiles', files.length);
+        input.value = '';
+      });
+      controls.push(button);
+      choices.append(button, input);
+    };
+    addPicker(t('selectFiles'), false);
+    if (allowFolder && 'webkitdirectory' in document.createElement('input')) {
+      addPicker(t('selectFolder'), true);
+    }
     const progress = document.createElement('div');
     progress.className = 'progress';
+    progress.setAttribute('role', 'progressbar');
+    progress.setAttribute('aria-valuemin', '0');
+    progress.setAttribute('aria-valuemax', '100');
+    progress.setAttribute('aria-valuenow', '0');
     const bar = document.createElement('span');
     progress.append(bar);
     const submit = document.createElement('button');
     submit.type = 'button';
     submit.className = 'btn primary';
     submit.textContent = t('upload');
-    card.insertBefore(input, error);
+    card.insertBefore(hint, error);
+    card.insertBefore(choices, error);
+    card.insertBefore(summary, error);
     card.insertBefore(progress, actions);
     actions.append(submit);
-    submit.addEventListener('click', () => {
-      const files = Array.from(input.files || []);
+    submit.addEventListener('click', async () => {
       if (!files.length) {
         error.textContent = t('chooseFiles');
         return;
       }
-      const form = new FormData();
-      files.forEach(file => form.append('file', file, file.name));
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', BASE + '/api/upload');
-      xhr.setRequestHeader('x-share-csrf', '1');
-      xhr.upload.onprogress = event => {
-        if (event.lengthComputable) bar.style.width = Math.round((event.loaded / event.total) * 100) + '%';
-      };
-      xhr.onload = () => {
-        if (xhr.status === 200) {
-          overlay.remove();
-          load();
+      submit.disabled = true;
+      controls.forEach(control => { control.disabled = true; });
+      error.textContent = '';
+      const total = files.length;
+      const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+      let sentBytes = files.slice(0, completed).reduce((sum, file) => sum + file.size, 0);
+      while (completed < total && !cancelled) {
+        const file = files[completed];
+        summary.textContent = t('uploadProgress', completed + 1, total);
+        const form = new FormData();
+        form.append('file', file, file.webkitRelativePath || file.name);
+        const status = await new Promise(resolve => {
+          const xhr = new XMLHttpRequest();
+          request = xhr;
+          xhr.open('POST', BASE + '/api/upload');
+          xhr.setRequestHeader('x-share-csrf', '1');
+          xhr.upload.onprogress = event => {
+            const part = event.lengthComputable ? event.loaded / event.total : 0;
+            const percent = totalBytes ? Math.round((sentBytes + file.size * part) / totalBytes * 100) : Math.round(completed / total * 100);
+            bar.style.width = percent + '%';
+            progress.setAttribute('aria-valuenow', String(percent));
+          };
+          xhr.onload = () => resolve(xhr.status);
+          xhr.onerror = xhr.onabort = () => resolve(0);
+          xhr.send(form);
+        });
+        request = null;
+        if (cancelled) return;
+        if (status !== 200) {
+          const message = status === 413 ? t('tooLarge') : status === 401 || status === 403 ? t('authFailed') : t('uploadFailed');
+          error.textContent = completed ? t('uploadPartial', completed, total) + ' ' + message : message;
+          submit.disabled = false;
+          controls.forEach(control => { control.disabled = false; });
+          if (completed) load();
           return;
         }
-        error.textContent = xhr.status === 413
-          ? t('tooLarge')
-          : xhr.status === 401 || xhr.status === 403
-            ? t('authFailed')
-            : t('uploadFailed');
-        submit.disabled = false;
-      };
-      xhr.onerror = () => {
-        error.textContent = t('uploadFailed');
-        submit.disabled = false;
-      };
-      submit.disabled = true;
-      xhr.send(form);
+        sentBytes += file.size;
+        completed += 1;
+      }
+      overlay.remove();
+      load();
     });
   }
 

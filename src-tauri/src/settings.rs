@@ -123,6 +123,7 @@ pub struct ShareSettings {
     pub allow_text: bool,
     #[serde(default)]
     pub auto_save_uploads: bool,
+    pub allow_folder_upload: bool,
     pub accounts: Vec<Account>,
 }
 
@@ -138,6 +139,7 @@ impl Default for ShareSettings {
             allow_upload: false,
             allow_text: false,
             auto_save_uploads: false,
+            allow_folder_upload: false,
             accounts: Vec::new(),
         }
     }
@@ -227,6 +229,7 @@ pub struct ShareView {
     allow_upload: bool,
     allow_text: bool,
     auto_save_uploads: bool,
+    allow_folder_upload: bool,
     accounts: Vec<AccountView>,
     groups: Vec<GroupView>,
 }
@@ -269,6 +272,8 @@ pub struct ShareUpdate {
     allow_upload: bool,
     allow_text: bool,
     auto_save_uploads: bool,
+    #[serde(default)]
+    allow_folder_upload: bool,
 }
 
 #[derive(Deserialize)]
@@ -292,6 +297,7 @@ pub fn view(settings: &Settings) -> SettingsView {
             allow_upload: settings.share.allow_upload,
             allow_text: settings.share.allow_text,
             auto_save_uploads: settings.share.auto_save_uploads,
+            allow_folder_upload: settings.share.allow_folder_upload,
             accounts: settings.share.accounts.iter().map(account_view).collect(),
             groups: settings
                 .share
@@ -372,6 +378,7 @@ pub fn share_options(settings: &Settings) -> ShareOptions {
         allow_upload: settings.share.allow_upload,
         allow_text: settings.share.allow_text,
         auto_save_uploads: settings.share.auto_save_uploads,
+        allow_folder_upload: settings.share.allow_folder_upload,
         accounts: settings.share.accounts.clone(),
         upload_dir: root,
         language: settings.general.language,
@@ -537,12 +544,14 @@ pub async fn settings_update(
     settings.share.allow_upload = update.share.allow_upload;
     settings.share.allow_text = update.share.allow_text;
     settings.share.auto_save_uploads = update.share.auto_save_uploads;
+    settings.share.allow_folder_upload = update.share.allow_folder_upload;
     let restart = current.share.port != settings.share.port
         || current.share.protection != settings.share.protection
         || current.share.public != settings.share.public
         || current.share.allow_upload != settings.share.allow_upload
         || current.share.allow_text != settings.share.allow_text
         || current.share.auto_save_uploads != settings.share.auto_save_uploads
+        || current.share.allow_folder_upload != settings.share.allow_folder_upload
         || current.share.upload_dir != settings.share.upload_dir;
     commit(&app, &state, &manager, settings, restart).await
 }

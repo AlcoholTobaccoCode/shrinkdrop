@@ -120,6 +120,11 @@ function setAutoSaveUploads(event: Event) {
   update(draft => { draft.share.autoSaveUploads = checked; });
 }
 
+function setAllowFolderUpload(event: Event) {
+  const checked = (event.target as HTMLInputElement).checked;
+  update(draft => { draft.share.allowFolderUpload = checked; });
+}
+
 function setAllowText(event: Event) {
   const checked = (event.target as HTMLInputElement).checked;
   update(draft => { draft.share.allowText = checked; });
@@ -392,10 +397,15 @@ function clearGroupPin(group: { id: string }) {
                 </div>
               </div>
               <div class="settings-row settings-row--switch">
+                <span>{{ t('允许访客上传文件夹') }}</span>
+                <label class="switch"><input type="checkbox" :checked="view.share.allowFolderUpload" :aria-label="t('允许访客上传文件夹')" @change="setAllowFolderUpload" /><span class="switch-track" aria-hidden="true"><span /></span></label>
+              </div>
+              <p class="settings-hint">{{ t('需要访客拥有上传权限，文件夹内的目录结构会保留。') }}</p>
+              <div class="settings-row settings-row--switch">
                 <span>{{ t('上传后自动保存到下载目录') }}</span>
                 <label class="switch"><input type="checkbox" :checked="view.share.autoSaveUploads" @change="setAutoSaveUploads" /><span class="switch-track" aria-hidden="true"><span /></span></label>
               </div>
-              <p class="settings-hint">{{ t('默认手动：访客上传的文件只在列表中高亮，由你选择保存；开启后会自动复制到系统下载目录。') }}</p>
+              <p class="settings-hint">{{ t('开启后上传直接保存到下载目录，不再额外写入接收目录。') }}</p>
               <div class="settings-block">
                 <span>{{ t('分组') }}</span>
                 <p class="settings-hint">{{ t('默认分组在根路径；自定义分组在 /g/路径，文件互不共享，可独立设置访问保护。') }}</p>

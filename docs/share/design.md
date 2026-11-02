@@ -55,7 +55,7 @@ Runtime   { running, url, port, candidates[], connections, transfer }
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/` | 访客页，首次访问下发会话 cookie |
-| GET | `/api/state` | 保护级别、权限、语言、是否需要 PIN/登录 |
+| GET | `/api/state` | 保护级别、权限、语言和文件夹上传开关 `folder_upload` |
 | POST | `/api/unlock` | 校验 PIN，成功后可访问 |
 | POST | `/api/login` | 账号登录（账号模式） |
 | GET | `/api/items` | 列出全部分享根（文件/目录） |
@@ -63,7 +63,7 @@ Runtime   { running, url, port, candidates[], connections, transfer }
 | GET | `/api/download?id=&path=` | 单文件 Range 下载；目录现场打包 zip |
 | GET | `/api/preview?id=&path=` | 内联预览（Range + 显式 Content-Type + `inline`），仅限可预览类型 |
 | GET | `/api/thumb?id=&path=` | 图片缩略图（200px JPEG） |
-| POST | `/api/upload` | multipart 上传，写上传目录 |
+| POST | `/api/upload` | multipart 上传；文件夹上传启用时接受相对路径并保留目录层级 |
 | POST | `/api/text` | 写入一条文本 |
 | GET | `/api/events` | SSE：列表与传输变化 |
 
@@ -84,6 +84,8 @@ Runtime   { running, url, port, candidates[], connections, transfer }
 | Office / PDF | 保留下载，不做预览 |
 
 预览路由复用下载鉴权与路径校验，只额外切换 `Content-Disposition: inline` 与显式 MIME；`nosniff` 保持开启。支持类型以扩展名白名单为入口，能否播放仍由浏览器解码决定，失败时提供下载。CSP 增加 `media-src 'self'`。
+
+桌面分享列表的文件支持鼠标悬浮或键盘聚焦预览；图片限制显示尺寸，JSON 格式化并与 Python、JavaScript 一起高亮，HTML 可切换源码和不执行脚本的沙箱预览。桌面长文字可展开与收起。
 
 代码高亮使用内嵌 highlight.js（约 127 KB），浅深两套主题随系统切换，不请求外部资源。列表按 key 增量更新，SSE 刷新不会替换正在播放的媒体元素；不支持预览的文件显示「暂不预览」。
 
@@ -132,6 +134,8 @@ stopped → starting → running { url, port } → stopping → stopped
 
 - 移动优先；顶部显示分享者名称与保护状态，列表支持面包屑、搜索、文件类型图标、图片缩略图。
 - 下载单文件、整目录 zip、多选逐个下载；上传与发文字按权限显示。
+- 可一次选择多个文件逐个上传；文件夹上传需桌面设置开启，浏览器支持时可选目录并保留相对层级。服务端校验路径并拒绝符号链接目录。
+- 上传默认写入分组接收目录；自动保存开启时直接写入下载目录，自定义分组写入 `Downloads/groups/<slug>`，列表及打开上传目录均指向实际落点。
 - SSE 实时刷新；断线退避重连。
 - 中英双语跟随 `Accept-Language`，可手动切换；亮/暗色跟随系统。
 - 无 JavaScript 时至少能列出文件和下载链接（渐进增强）。
@@ -140,7 +144,7 @@ stopped → starting → running { url, port } → stopping → stopped
 
 - 存储：应用配置目录下的 `settings.json`，原子写；PIN 保存 Argon2id 哈希，账号口令按展示需求明文保存。
 - 入口：头部齿轮打开独立单实例窗口（`settings.html`），分「通用 / 压缩 / 分享 / 关于」四组；修改即时保存并生效，主窗口通过事件同步。
-- 字段：通用（启动面、语言）、压缩（默认自动压缩、并发 1~5、保存目录）、分享（端口、上传目录、保护级别、公开访问开关、PIN、账号与权限、允许上传/文字、自定义分组）、关于。
+- 字段：通用（启动面、语言）、压缩（默认自动压缩、并发 1~5、保存目录）、分享（端口、上传目录、保护级别、公开访问开关、PIN、账号与权限、允许上传/文字、文件夹上传开关、自定义分组）、关于。
 - 联动：端口、保护级别、PIN、账号或访客语言变化时，若分享正在运行则自动重启并保留分享列表；前端 toast 提示旧链接失效，需要手动关闭。并发与默认自动压缩即时应用到会话；保存目录注入原生保存/选目录对话框。
 
 ## 分期
@@ -181,7 +185,7 @@ stopped → starting → running { url, port } → stopping → stopped
 
 - 分享面接受系统拖拽：未开始分享时拖入直接启动，运行中拖入追加到当前分组；文件列表同样可拖入。
 - 访客上传项带 `visitor` 标记，在桌面列表高亮并显示「访客上传」；支持单文件、文件夹、多选打包 zip 手动保存。
-- 设置新增「上传后自动保存到下载目录」，默认关闭；开启后上传文件额外复制到系统下载目录。
+- 设置新增「上传后自动保存到下载目录」，默认关闭；开启后上传文件直接写入系统下载目录（自定义分组写在 `groups/<slug>` 下），不再额外写入接收目录，避免同一文件保存两份。
 - 设置窗口固定 760×680，使用系统标题栏关闭，不再绘制自定义顶部栏。
 
 ## 分组

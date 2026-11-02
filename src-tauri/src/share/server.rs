@@ -8,6 +8,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use cap_fs_ext::DirExt;
+use cap_std::fs::{Dir, OpenOptions};
+
 use axum::body::Body;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Multipart, Query, Request, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
@@ -18,7 +21,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::{broadcast, Semaphore};
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
@@ -55,7 +58,7 @@ pub struct Context {
     pub upload_dir: PathBuf,
     pub language: Arc<RwLock<Language>>,
     pub public: bool,
-    pub auto_save_uploads: bool,
+    pub allow_folder_upload: bool,
     pub app: Option<tauri::AppHandle>,
 }
 
@@ -275,6 +278,7 @@ fn state_payload(context: &Context, headers: &HeaderMap) -> serde_json::Value {
             .unwrap_or("zh"),
         "public": context.public,
         "upload": permissions.as_ref().map(|value| value.upload).unwrap_or(false),
+        "folder_upload": context.allow_folder_upload && permissions.as_ref().map(|value| value.upload).unwrap_or(false),
         "text": permissions.as_ref().map(|value| value.text).unwrap_or(false),
     })
 }
@@ -686,7 +690,7 @@ async fn preview(
 }
 
 /// 预览只开放浏览器可直接解码的类型；未知扩展名一律要求下载。
-fn preview_mime(path: &FsPath) -> Option<&'static str> {
+pub(super) fn preview_mime(path: &FsPath) -> Option<&'static str> {
     let extension = path
         .extension()
         .and_then(|value| value.to_str())?
@@ -806,9 +810,14 @@ async fn upload(
     if !csrf_ok(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    if fs::create_dir_all(&context.upload_dir).is_err() {
+    let upload_root = context.upload_dir.clone();
+    if fs::create_dir_all(&upload_root).is_err() {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
+    let root = match Dir::open_ambient_dir(&upload_root, cap_std::ambient_authority()) {
+        Ok(root) => root,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
 
     let mut uploaded: Vec<UploadedFile> = Vec::new();
     loop {
@@ -823,45 +832,72 @@ async fn upload(
         if uploaded.len() >= MAX_UPLOAD_FILES {
             break;
         }
-        let name = sanitize_filename(&raw_name);
-        let Ok(path) = unique_path(&context.upload_dir, &name).await else {
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        let Some(components) = upload_components(&raw_name) else {
+            return StatusCode::BAD_REQUEST.into_response();
         };
-        let temp = context
-            .upload_dir
-            .join(format!(".{}.part", random_suffix()));
-        let mut file = match tokio::fs::File::create(&temp).await {
-            Ok(file) => file,
+        if components.len() > 1 && !context.allow_folder_upload {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        if reserved_upload_path(context.base.is_empty(), &components) {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        let name = sanitize_filename(components.last().unwrap());
+        let directory = match upload_directory(&root, &components[..components.len() - 1]) {
+            Ok(directory) => directory,
+            Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+        };
+        let temp = format!(".{}.part", random_suffix());
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        let mut file = match root.open_with(&temp, &options) {
+            Ok(file) => tokio::fs::File::from_std(file.into_std()),
             Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         };
         let mut size = 0u64;
         let mut field = field;
         let mut failed = false;
-        while let Ok(Some(chunk)) = field.chunk().await {
+        loop {
+            let chunk = match field.chunk().await {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => break,
+                Err(_) => { failed = true; break; }
+            };
             size += chunk.len() as u64;
-            if size > MAX_UPLOAD_BYTES {
-                failed = true;
-                break;
-            }
-            if file.write_all(&chunk).await.is_err() {
+            if size > MAX_UPLOAD_BYTES || file.write_all(&chunk).await.is_err() {
                 failed = true;
                 break;
             }
         }
-        if failed || size == 0 {
-            let _ = tokio::fs::remove_file(&temp).await;
+        if failed {
+            drop(file);
+            let _ = root.remove_file(&temp);
             if size > MAX_UPLOAD_BYTES {
                 return StatusCode::PAYLOAD_TOO_LARGE.into_response();
             }
-            continue;
+            return StatusCode::BAD_REQUEST.into_response();
         }
         if file.sync_all().await.is_err() {
-            let _ = tokio::fs::remove_file(&temp).await;
+            drop(file);
+            let _ = root.remove_file(&temp);
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
+        let committed = commit_upload(&mut file, &directory, &name).await;
         drop(file);
-        if tokio::fs::rename(&temp, &path).await.is_err() {
-            let _ = tokio::fs::remove_file(&temp).await;
+        let _ = root.remove_file(&temp);
+        let (display, identity) = match committed {
+            Ok(result) => result,
+            Err(()) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+        let mut path = upload_root.clone();
+        for component in &components[..components.len() - 1] {
+            path.push(component);
+        }
+        path.push(&display);
+        let path = match fs::canonicalize(&path) {
+            Ok(path) => path,
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+        if !matches!(same_file::Handle::from_path(&path), Ok(handle) if handle == identity) {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
         let modified = fs::metadata(&path).ok().and_then(|meta| {
@@ -871,17 +907,6 @@ async fn upload(
                 .map(|duration| duration.as_secs())
         });
         let id = context.next_id.fetch_add(1, Ordering::SeqCst);
-        let display = path
-            .file_name()
-            .map(|value| value.to_string_lossy().into_owned())
-            .unwrap_or_else(|| name.clone());
-        if context.auto_save_uploads {
-            let directory = super::download_dir();
-            if fs::create_dir_all(&directory).is_ok() {
-                let destination = super::unique_destination(&directory, &display);
-                let _ = fs::copy(&path, destination);
-            }
-        }
         push_item(
             &context,
             SharedItem {
@@ -974,20 +999,73 @@ fn sanitize_filename(name: &str) -> String {
     trimmed.chars().take(120).collect()
 }
 
-async fn unique_path(directory: &FsPath, name: &str) -> Result<PathBuf, ()> {
-    let path = directory.join(name);
-    if tokio::fs::metadata(&path).await.is_err() {
-        return Ok(path);
+fn upload_components(name: &str) -> Option<Vec<&str>> {
+    if name.is_empty() || name.contains('\\') || (cfg!(windows) && name.contains(':')) {
+        return None;
     }
-    let (stem, extension) = match name.rsplit_once('.') {
-        Some((stem, extension)) if !stem.is_empty() => (stem.to_string(), format!(".{extension}")),
-        _ => (name.to_string(), String::new()),
-    };
-    for index in 1..1000 {
-        let candidate = directory.join(format!("{stem} ({index}){extension}"));
-        if tokio::fs::metadata(&candidate).await.is_err() {
-            return Ok(candidate);
+    let components: Vec<_> = name.split('/').collect();
+    if components.iter().any(|part| {
+        part.is_empty() || *part == "." || *part == ".." || part.ends_with(['.', ' '])
+            || part.chars().any(|ch| ch.is_control() || matches!(ch, '<' | '>' | '"' | '|' | '?' | '*'))
+    }) {
+        return None;
+    }
+    Some(components)
+}
+
+fn reserved_upload_path(default_group: bool, components: &[&str]) -> bool {
+    default_group && components.len() > 1 && components.first().is_some_and(|part| part.eq_ignore_ascii_case("groups"))
+}
+
+fn upload_directory(root: &Dir, components: &[&str]) -> std::io::Result<Dir> {
+    let mut directory = root.try_clone()?;
+    for component in components {
+        match directory.create_dir(component) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
         }
+        directory = directory.open_dir_nofollow(component)?;
+    }
+    Ok(directory)
+}
+
+async fn commit_upload(temp: &mut tokio::fs::File, directory: &Dir, name: &str) -> Result<(String, same_file::Handle), ()> {
+    let (stem, extension) = match name.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() => (stem, format!(".{extension}")),
+        _ => (name, String::new()),
+    };
+    for index in 0..1000 {
+        let candidate = if index == 0 { name.to_owned() } else {
+            format!("{stem} ({index}){extension}")
+        };
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        let output = match directory.open_with(&candidate, &options) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return Err(()),
+        };
+        let identity = match output.try_clone().and_then(|file| same_file::Handle::from_file(file.into_std())) {
+            Ok(identity) => identity,
+            Err(_) => {
+                drop(output);
+                let _ = directory.remove_file(&candidate);
+                return Err(());
+            }
+        };
+        let mut output = tokio::fs::File::from_std(output.into_std());
+        let result = async {
+            temp.rewind().await?;
+            tokio::io::copy(temp, &mut output).await?;
+            output.sync_all().await
+        }.await;
+        drop(output);
+        if result.is_err() {
+            let _ = directory.remove_file(&candidate);
+            return Err(());
+        }
+        return Ok((candidate, identity));
     }
     Err(())
 }
@@ -1224,16 +1302,23 @@ mod tests {
     use super::*;
 
     fn fixture_dir() -> PathBuf {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "shrinkdrop-share-server-test-{}-{stamp}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        dir
+        static NEXT_FIXTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        loop {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let sequence = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!(
+                "shrinkdrop-share-server-test-{}-{stamp}-{sequence}",
+                std::process::id()
+            ));
+            match fs::create_dir(&dir) {
+                Ok(()) => return dir,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("cannot create test fixture: {error}"),
+            }
+        }
     }
 
     #[test]
@@ -1318,6 +1403,57 @@ mod tests {
         assert_eq!(sanitize_filename("   ..  "), "file");
         assert_eq!(sanitize_filename("正常 文件.txt"), "正常 文件.txt");
         assert_eq!(sanitize_filename(".hidden"), "hidden");
+    }
+
+    #[test]
+    fn default_group_cannot_upload_into_reserved_groups() {
+        assert!(reserved_upload_path(true, &["groups", "other", "file.txt"]));
+        assert!(reserved_upload_path(true, &["GROUPS", "other", "file.txt"]));
+        assert!(!reserved_upload_path(false, &["groups", "file.txt"]));
+        assert!(!reserved_upload_path(true, &["photos", "groups", "file.txt"]));
+        assert_eq!(upload_components("folder/a:b.txt").is_some(), !cfg!(windows));
+    }
+
+    #[tokio::test]
+    async fn upload_commit_preserves_existing_files() {
+        let path = fixture_dir();
+        let root = Dir::open_ambient_dir(&path, cap_std::ambient_authority()).unwrap();
+        let directory = upload_directory(&root, &["folder", "nested"]).unwrap();
+        fs::write(path.join("folder/nested/test.txt"), b"original").unwrap();
+        let mut temp = tokio::fs::File::from_std(fs::OpenOptions::new().read(true).write(true).create_new(true).open(path.join("temp")).unwrap());
+        temp.write_all(b"upload").await.unwrap();
+        let (name, _) = commit_upload(&mut temp, &directory, "test.txt").await.unwrap();
+        assert_eq!(name, "test (1).txt");
+        assert_eq!(fs::read(path.join("folder/nested/test.txt")).unwrap(), b"original");
+        assert_eq!(fs::read(path.join("folder/nested/test (1).txt")).unwrap(), b"upload");
+        drop(temp);
+        drop(directory);
+        drop(root);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn upload_rejects_symlinks_and_uses_open_directory_after_replacement() {
+        use std::os::unix::fs::symlink;
+        let path = fixture_dir();
+        let outside = fixture_dir();
+        let root = Dir::open_ambient_dir(&path, cap_std::ambient_authority()).unwrap();
+        symlink(&outside, path.join("link")).unwrap();
+        assert!(upload_directory(&root, &["link"]).is_err());
+        let directory = upload_directory(&root, &["folder"]).unwrap();
+        fs::rename(path.join("folder"), path.join("moved")).unwrap();
+        symlink(&outside, path.join("folder")).unwrap();
+        let mut temp = tokio::fs::File::from_std(fs::OpenOptions::new().read(true).write(true).create_new(true).open(path.join("temp")).unwrap());
+        temp.write_all(b"upload").await.unwrap();
+        commit_upload(&mut temp, &directory, "test.txt").await.unwrap();
+        assert!(!outside.join("test.txt").exists());
+        assert_eq!(fs::read(path.join("moved/test.txt")).unwrap(), b"upload");
+        drop(temp);
+        drop(directory);
+        drop(root);
+        fs::remove_dir_all(path).unwrap();
+        fs::remove_dir_all(outside).unwrap();
     }
 
     #[test]

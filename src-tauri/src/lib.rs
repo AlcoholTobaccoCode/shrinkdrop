@@ -101,6 +101,7 @@ pub fn run() {
             settings::share_group_set_pin,
             share::share_set_active_group,
             share::share_open_upload_dir,
+            share::share_preview_item,
             share::share_save_items
         ])
         .run(tauri::generate_context!())
