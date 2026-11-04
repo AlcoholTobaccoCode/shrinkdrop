@@ -31,7 +31,7 @@
 - **Windows E2E**：本轮只在 macOS 上做了交叉类型检查（`cargo check --target x86_64-pc-windows-msvc`），没有在 Windows 上编译、安装服务或跑真实登录。SmartScreen/AV、服务 ACL、管道 ACL 的实际行为需要真机验证。
 - **T4 macOS helper**：签名路线（Developer ID + SMAppService）未开始；不签名路线已落地为只读后端（`macos_readonly.rs`）。
 - **T8 打包/签名/升级**：helper 二进制尚未进入安装包（`src-tauri/tauri.conf.json` 的 `externalBin`/resources 未配置），随包 MSI 与 `.sha256` 清单未加入资源；因此 Windows 上的“安装辅助服务”当前找不到 exe。
-- **T9 安全评审**：IPC ACL、SID 校验、失败路径已实现但未经渗透测试。
+- **T9 安全评审**：IPC DACL、SID + linked token 校验、命令白名单（`runner::resolve` 只放行 System32 下的已知工具）、失败路径不重试都已实现，但**未经独立安全评审或渗透测试**。
 - **T10 文档**：用户文档与故障排查还没写。
 
 ### 第一轮记录（2026-11-04）
