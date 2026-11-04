@@ -1,8 +1,13 @@
 import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 
-export function git(args, { allowFailure = false } = {}) {
-  const result = spawnSync('git', args, { encoding: 'utf8', shell: false });
+export function git(args, { allowFailure = false, env, input } = {}) {
+  const result = spawnSync('git', args, {
+    encoding: 'utf8',
+    shell: false,
+    input,
+    env: env ? { ...process.env, ...env } : undefined,
+  });
   if (result.error) throw result.error;
   if (result.status !== 0 && !allowFailure) {
     throw new Error(`git ${args.join(' ')}\n${result.stderr.trim() || result.stdout.trim()}`);
