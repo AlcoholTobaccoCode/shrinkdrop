@@ -41,7 +41,8 @@
 | 默认生命周期 | `app`（退出即关，最安全）；用户可切到 `persistent` |
 | helper 安装时机 | 首次开启时安装/注册，不在应用安装阶段静默安装 |
 | 多实例 | helper 按连接引用计数；最后一个客户端退出后才按 `app` 生命周期关闭（app 侧目前以进程为粒度持有一个会话，helper 侧计数属 T7） |
-| helper 不可用时的展示 | 可见：设置里常驻“远程访问”分组，开关禁用并说明“此版本暂不包含”，不静默隐藏（2026-11-04 决定） |
+| helper 不可用时的展示 | 可见：设置里常驻“远程访问”分组，开关禁用并说明“此版本暂不包含”，不静默隐藏（2026-11-04 决定）。若走不签名/只读路线：开关替换为“打开共享设置”按钮 + 三态只读状态卡，不写 `enabled`（见 `signing-setup.md` §9.2） |
+| 签名策略 | **待定**（2026-11-04）：两条路线见 `docs/ssh/signing-setup.md` §9。不买证书 → macOS 只读 + 手动引导、Windows 全功能；买 Developer ID（99 美元/年）才有 macOS **无需每次授权**的应用内开关（osascript 方案每次弹密码且崩溃无兜底，不计入） |
 | 非目标 | 公网穿透、端口转发 UI、SFTP 文件浏览、托盘常驻、自研 SSH 服务、macOS 自定义端口（v1 固定 22；需另立 `com.shrinkdrop.sshd`） |
 
 ## 1. 里程碑与依赖
@@ -90,7 +91,11 @@ T10 文档与发布
 
 **Gate G1：** 如果 macOS `launchctl` 路径在目标版本不可靠，先决定回退到 `systemsetup` + Full Disk Access 引导，还是缩小功能范围；不要带着未验证路径进入实现。
 **Gate G2：** 如果 Windows Home 不可用，功能在 Home 上隐藏；支持矩阵按实测结果写死。
-**Gate G3：** 发布产物必须通过客观签名校验：`codesign --verify --strict`、`spctl -a -vvv -t install <pkg>`、`stapler validate` 全绿；证书与公证步骤见 `docs/ssh/signing-setup.md`。未签名构建不作为发布候选。
+**Gate G3（两条路线，二选一，选哪条待定）：**
+
+- **G3a 签名轨**：发布产物通过 `codesign --verify --strict`、`spctl -a -vvv -t install <pkg>`、`stapler validate` 全绿；证书与公证见 `docs/ssh/signing-setup.md`。
+- **G3b 不签名轨**：①macOS 15/26 干净 VM 从 `/Applications` 首次启动，SSH 面板只显示只读状态与“打开共享设置”，拿不到可用开关；②`/Library/LaunchDaemons` 与 `~/Library/LaunchAgents` 无本应用残留；③Windows 安装后 sshd 可启停并可真实登录；④按 README 的 Gatekeeper 绕过与 SHA256 校验步骤可复现。
+- 走哪条路线是产品决定；**不能既声称未签名不可交付、又交付未签名降级形态**。
 
 **Acceptance:** 所有 Gate 有结论；`docs/ssh/poc.md` 的结果表已回填并提交；标注“T4/T5 后补测”的项不计入本轮。
 
@@ -168,7 +173,7 @@ T10 文档与发布
 
 ---
 
-### Task 4 macOS helper 与后端
+### Task 4 macOS helper 与后端（仅签名轨；不签名路线不做）
 
 **Files:** `src-tauri/ssh-helper/src/main.rs`、`src-tauri/ssh-helper/src/macos.rs`、`src-tauri/src/ssh/macos.rs`、`src-tauri/installer/macos/com.shrinkdrop.ssh-helper.plist`、`scripts/ssh-helper-dev.sh`
 
@@ -279,7 +284,7 @@ T10 文档与发布
 - [ ] macOS：构建 universal helper（arm64 + x86_64），`lipo` 合并；放入 `Contents/Resources`。
 - [ ] macOS：plist 放入 `Contents/Library/LaunchDaemons`；确认 Tauri bundler 不会丢掉该目录，必要时在打包脚本中补。
 - [ ] macOS：按“helper → framework → app → pkg(productsign) → dmg”顺序签名；hardened runtime；公证与 staple；校验用 `codesign --verify --strict`、`spctl -a -vvv -t install <pkg>`、`stapler validate`（与 Gate G3 一致）。
-- [ ] macOS：CI 增加 Developer ID 证书与公证密钥；当前未签名构建不得作为 SSH 功能的发布候选。
+- [ ] macOS：CI 增加 Developer ID 证书与公证密钥（仅签名轨）；未签名构建只能走 G3b 的只读降级形态，不能宣称支持应用内开关。
 - [ ] macOS：检测 app 是否从 DMG/非 `/Applications` 运行；需要时引导移动，避免 SMAppService 注册失败。
 - [ ] macOS：处理 app 被移动/删除后的 LaunchDaemon 残留：启动时检测并重新注册；helper 在 app bundle 不存在时退出，避免 KeepAlive crash loop；文档给出登录项清理步骤。
 - [ ] Windows：签名 app 与 helper（Authenticode + 时间戳）；配置 Tauri Windows 签名。
@@ -351,7 +356,7 @@ T10 文档与发布
 | 风险 | 影响 | 回退/缓解 |
 |---|---|---|
 | macOS `launchctl` 路径在某个版本失效 | 无法自动开关 | Task 0 Gate；回退 `systemsetup` + FDA 引导，或暂时只做手动开启引导 |
-| SMAppService 需要签名，当前包未签名 | helper 无法交付 | Task 8 先完成签名；未签名构建隐藏该功能 |
+| SMAppService 需要签名，当前包未签名 | macOS 只能只读/手动引导 | 二选一：Task 8 完成签名（G3a），或走 G3b 只读降级（开关换成“打开共享设置”，见 `signing-setup.md` §9.2） |
 | Windows Home 不支持可选功能 | 部分用户不可用 | Gate G2；按 SKU 隐藏并提示 |
 | 企业 GPO/MDM 禁用 | 功能不可用 | 明确错误态；不反复重试 |
 | helper 被 AV/SmartScreen 拦截 | 安装失败 | Authenticode 签名；安装说明；错误码可诊断 |
@@ -363,15 +368,15 @@ T10 文档与发布
 
 ## 5. Definition of Done
 
-- [ ] 设置中可开启/关闭，并能在两种生命周期之间切换。
+- [ ] 签名轨：设置中可开启/关闭，并能在两种生命周期之间切换；不签名轨：只读状态 + “打开共享设置”，不写 `enabled`。
 - [ ] Windows 可自定义端口；开启/改端口前检测占用，被占用时明确提示并阻止；macOS 非 22 明确不支持。
 - [ ] Windows FoD 失败时，“官网下载”和“内置安装（随包 MSI）”可用；随包版本有哈希/签名校验；不静默安装。
 - [ ] 端口变更失败时配置/防火墙回滚，旧端口状态可恢复。
-- [ ] `app` 生命周期：正常退出与崩溃后，owned 的 SSH 在宽限期内关闭。
+- [ ] `app` 生命周期（仅签名轨，需要 helper）：正常退出与崩溃后，owned 的 SSH 在宽限期内关闭。
 - [ ] `persistent` 生命周期：app 退出后仍可连，重启后仍可连。
 - [ ] 用户手动开启的 SSH 不会被 app 误关。
-- [ ] helper 仅本机 IPC、固定动词、有认证、无任意命令执行。
-- [ ] macOS helper 走 SMAppService，签名/公证通过；Windows helper 走签名服务，安装/卸载干净。
+- [ ] helper（仅签名轨 / Windows）仅本机 IPC、固定动词、有认证、无任意命令执行。
+- [ ] 签名轨：macOS helper 走 SMAppService、签名/公证通过；不签名轨：macOS 无 helper 残留（G3b）。Windows helper 安装/卸载干净（签名可选，未签名时 README 写明 SmartScreen 步骤）。
 - [ ] 真实 SSH 登录验证通过；错误路径有可操作文案。
 - [ ] 现有压缩、分享、防休眠、设置与退出流程回归通过。
 - [ ] 文档、隐私说明、故障排查与发布检查表更新。

@@ -4,13 +4,17 @@
 状态：未配置（当前安装包未签名、未公证）
 关联：`docs/ssh/plan.md` 的 Task 8、Gate G3；`docs/distribution/package-managers.md`
 
-SSH 功能对签名是**硬依赖**，不是“发布前再补”的优化项：
+签名分两件事，别混：
 
-- macOS helper 走 `SMAppService.daemon`，helper 与主 app 必须**同一 Team ID** 签名，否则注册直接失败。
-- 未签名/临时签名的包无法公证，Gatekeeper 会拦；helper 也无法作为发布候选。
-- Windows helper 可以未签名安装，但 SmartScreen/AV 会拦，企业环境更容易被策略挡住。
+| 项 | 影响什么 | 不做的后果 |
+|---|---|---|
+| **Developer ID 证书**（99 美元/年） | macOS helper 通过 `SMAppService` 注册的前提（app 与 helper 同 Team ID） | macOS 无法做应用内开关；只能降级为“只读状态 + 手动引导” |
+| **公证（notarization）** | 分发：Gatekeeper 是否放行下载来的包 | 用户要多点一次“仍要打开”；不影响 `register()`（社区实测：Developer ID 签名但不公证仍可注册） |
+| **Windows Authenticode** | 信任提示：SmartScreen 是否警告 | 功能不受影响；用户点“更多信息 → 仍要运行” |
 
-在拿到证书之前，SSH 功能保持“可见但禁用”（已定），不会假装可用。
+也就是说：**Windows 不签名不影响 SSH 功能；macOS 不签 Developer ID 就做不了应用内开关**。没有开发者账号时，SSH 功能在 macOS 上降级为“只读状态 + 手动开启引导”（见第 9 节），在 Windows 上保持全功能。
+
+在拿到证书之前，SSH 功能按“可见但禁用/降级”处理，不会假装可用。
 
 ## 1. 要准备的东西
 
@@ -135,7 +139,7 @@ spctl -a -vvv -t open --context context:primary-signature "$DMG"
 |---|---|---|
 | OV 代码签名证书 | DigiCert / Sectigo / SSL.com 等 | 数百美元/年；私钥常在硬件令牌或云 HSM |
 | EV 代码签名证书 | 同上，SmartScreen 立即有信誉 | 更贵，审核更严 |
-| Azure Trusted Signing | 微软云签名，按次计费 | 便宜，但对组织资质与历史有要求 |
+| Azure Artifact Signing（原 Trusted Signing） | 微软云签名，Basic 档约 9.99 美元/月（5,000 次签名/月，以 Azure 定价页为准） | **不免费**：必须有**付费** Azure 订阅（免费/试用/赞助订阅不支持）；需通过身份验证（个人可用，要政府证件与地址证明）；**只签 Windows 二进制，对 macOS 无用** |
 | 自签名 | 仅内部测试 | 免费，**不能发布** |
 
 要签**用户实际拿到的东西**，不只是主程序：
@@ -195,11 +199,101 @@ Tauri 侧：`bundle.windows.certificateThumbprint`、`digestAlgorithm = "sha256"
 | 现在 | 功能可见但禁用（`backendAvailable=false`） |
 | T4 macOS helper | 需要 Developer ID Application 证书；开发期可用 `SHRINKDROP_SSH_DEV=1` 手动装 LaunchDaemon 验证，但**不能作为发布候选** |
 | T8 打包 | helper 与 app 同 Team ID 签名、hardened runtime、pkg 用 Installer 证书、公证与 staple |
-| 发布 | Gate G3 通过：`codesign --verify --strict` + `spctl -t install` + `stapler validate` 全绿；未签名构建不发布 SSH 功能 |
+| 发布（签名路线） | Gate G3 通过：`codesign --verify --strict` + `spctl -t install` + `stapler validate` 全绿 |
+| 发布（不签名路线） | 不满足签名轨的 G3，按 `plan.md` 的 **G3b** 验收：干净 VM 上 macOS 显示只读状态且无 helper 残留、Windows 能装能连、README 的 Gatekeeper/SHA256 步骤可复现（见第 9 节） |
 
 ## 8. 你可能要现在决定的事
 
 1. 走**个人**还是**组织** Developer Program？（组织要 D-U-N-S，周期更长）
 2. 公证凭据用 Apple ID 专用password还是 App Store Connect API Key？（只做本地发布可以先用前者）
 3. DMG 是否与 pkg 一起公证？（推荐一起；否则 README 要标 DMG 不推荐）
-4. Windows 签名是现在买证书，还是先用 Azure Trusted Signing / 暂不签（SSH 在 Windows 上继续禁用或提示 SmartScreen）？
+4. Windows 签名是现在买证书，还是先用 Azure Artifact Signing / 暂不签（SSH 在 Windows 上继续可用，只是 SmartScreen 提示）？
+
+## 9. 不签名时怎么办（降级方案）
+
+结论：**两个平台都不签名，Windows 功能不受影响，macOS 需要降级**。下面是可以直接采用的形态。
+
+### 9.1 硬约束（macOS）
+
+`SMAppService.daemon(...)` 有几条硬条件，缺一条就注册不了：
+
+1. app 与 helper 必须用**同一 Team ID 的 Developer ID** 签名（Apple 签发）；
+2. plist 必须在 app 内的 `Contents/Library/LaunchDaemons`，文件名与 `Label` 一致；
+3. app 不能从 DMG / translocation 路径运行，必须在 `/Applications` 之类稳定位置；
+4. 公证不是注册前提（社区实测：Developer ID 签名但未公证，`register()` 仍能成功并拉起 daemon，见 <https://github.com/jherskovic/iSCSI/blob/main/docs/daemon-registration.md>），但分发仍要过 Gatekeeper。
+
+因此：
+
+- ad-hoc 签名（`codesign -s -`）、自签名证书都**没有 Team ID**，注册失败（DTS 明确说 ad-hoc 会出问题）。
+- 免费 Apple ID 的 “Apple Development / Personal Team” 证书有 Team ID，但过期快、不能分发给别人，不是发布路径。
+- **没有 Developer ID 证书就无法通过 SMAppService 注册/分发 helper**（开发模式手动装见 §9.4），也就没有发布可用的、无需每次授权的应用内开关。
+
+### 9.2 macOS 降级方案 A（推荐）：只读状态 + 手动引导
+
+不需要任何特权、不依赖签名，功能边界清楚：
+
+- **状态判定写成三态**，避免“假阳性已开启”：
+  - **已开启**：`launchctl print system/com.openssh.sshd` 成功，或 22 的监听进程确认为本机 sshd；
+  - **未开启**：明确 `not found`，或端口拒绝连接；
+  - **未知**：权限错误、端口被其它进程占用、读不到 host key —— 显示“无法确认”，不显示“已开启”。
+  - 本机 macOS 26.2 手动试过：job 未加载时非 root 可读 `print`；**加载后**是否同样可读、以及加载态的 `print` 输出格式，待 T0 的 M1/M3 确认（`[需核对]`）。权限失败必须与“未加载”区分。
+- 显示：局域网地址、`ssh user@ip`、host key 指纹（读 `/etc/ssh/ssh_host_*_key.pub`，读不到就不显示指纹）。
+- 开关位置改为按钮：“打开共享设置” → 深链 `x-apple.systempreferences:com.apple.Sharing-Settings.extension`，失败时退回文字步骤（`系统设置 → 通用 → 共享 → 远程登录`），附一句说明“macOS 需要你手动开启一次”。
+- 状态卡写“由系统设置管理，应用只读”；**不显示可用的开关**。
+- **设置语义**：只读模式不写 `settings.ssh.enabled`，`ssh_*` 写操作一律返回 `helper_unavailable`（或新增 `read_only` 状态），`ssh_status` 只返回探测结果，避免重启后 UI 与系统不一致。
+- 代价：不能一键开启/关闭；退出应用不会自动关；用户要去系统设置点两下。
+
+### 9.3 macOS 降级方案 B：每次操作弹管理员授权（可选）
+
+用 `osascript ... with administrator privileges` 执行**编译期常量**的 `launchctl` 命令：
+
+- 能实现“应用内开关”，但**每次开启/关闭都会弹系统密码框**，提示来源显示为 `osascript`，用户容易当成可疑程序；MDM/EDR 常直接拦。
+- **崩溃/强杀没有兜底**：`kill -9`、崩溃、强制重启都会让已开的 sshd 一直开着，下次启动也分不清是不是自己开的（`research.md` 的规则是“保持开启 + 提示上次异常退出”）。因此这条路必须**禁用 `app` 生命周期，只留 `persistent`**，否则不满足 `plan.md` 的 DoD。
+- 安全边界：`do shell script` 会经 `sh` 执行，命令串一旦有变量插值（端口、路径、用户名）就是本地提权面。要求：命令是编译期常量、用绝对路径 `/bin/launchctl`、禁止任何插值、stdout/stderr 不回显到 UI。
+- 只有在“必须有一键开关、又不想买证书”时才考虑；默认关闭，让用户主动选择。`[需 T4 实测]` 提权行为与 launchctl 在该上下文下的稳定性。
+
+### 9.4 macOS 降级方案 C：手动安装 helper（仅开发模式）
+
+开发模式（`SHRINKDROP_SSH_DEV=1`）手动注册，仅供自测：
+
+- plist 放 `/Library/LaunchDaemons/com.shrinkdrop.ssh-helper.plist`；
+- helper 二进制留在 app 的 `Contents/Resources`（`BundleProgram=Contents/Resources/shrinkdrop-ssh-helper`），或放到 root 所有的 `/Library/PrivilegedHelperTools/`；
+- 注册用 `sudo launchctl bootstrap system /Library/LaunchDaemons/com.shrinkdrop.ssh-helper.plist`（不要用已废弃的 `load`）。
+
+**安全前提**：如果 `BundleProgram` 指向用户可写的 app bundle，任何能改 app 的本地用户都能拿到 root 执行——等于本地提权。所以只能用于开发，且 app 必须放在 root 所有的目录（如 `/Applications`）。对最终用户不提供这条路。
+
+### 9.5 Windows：不签名照常可用
+
+- 安装可选功能、创建/启动 `sshd`、改端口、防火墙规则都**不要求安装包或 helper 有签名**——功能本身不依赖签名。
+- 但安装阶段有摩擦：`.exe` 首次运行会弹 SmartScreen“Windows 已保护你的电脑”（更多信息 → 仍要运行）；helper 的 UAC 提示会显示“未知发布者”；部分 AV/EDR 会直接拦掉未签名的服务安装。MSI 是否同样弹 SmartScreen **`[需核对]`**，写 README 前在 Windows 11 上实测一次。
+- 被 WDAC / AppLocker / GPO 拦住时是**安装阶段失败**，与 SSH 能否使用无关；文案要区分“签名缺失被拦”和“策略禁止”。
+- 建议 README 同时提供 `SHA256SUMS.txt` 校验步骤，让用户能确认下载完整。
+
+### 9.6 macOS 应用本身的 Gatekeeper 摩擦（与 SSH 无关）
+
+即使 SSH 功能降级，未签名的 app 仍要过 Gatekeeper：
+
+- 从浏览器下载的包会带 quarantine，首次打开会被拦下。**提示文案取决于签名状态**（“无法验证开发者” / “Apple 无法检查是否包含恶意软件” / “已损坏”），写 README 前在 macOS 15 与 26 上各截一次图（`[需核对]`）。
+- macOS 15+ **取消了右键打开的绕过**，必须去 `系统设置 → 隐私与安全性 → 仍要打开`，再确认一次；13/14 仍可右键打开。
+- 替代：README 给 `xattr -d com.apple.quarantine /Applications/shrinkdrop.app`。前提是产物至少有 ad-hoc 签名且签名后未被改动；如果系统提示“已损坏”，**不要**引导用户删 quarantine，应让用户重装包（签名被破坏时 xattr 救不了）。
+- 每次替换 app（更新）可能再次触发；发布说明里要写清楚。
+
+### 9.7 成本对比
+
+年化口径，不含 Azure 订阅费与身份审核的人工成本：
+
+| 路线 | 现金成本（年化） | macOS 能力 | Windows 能力 | 额外工作 |
+|---|---|---|---|---|
+| 都不签 | 0 | 只读 + 手动引导 | 全功能；SmartScreen/UAC 信任提示随下载量慢慢减少 | 写 Gatekeeper/手动开启文档；不实现 T4 |
+| 只签 Windows（Artifact Signing Basic） | 约 120 美元/年（另需付费 Azure 订阅 + 身份验证） | 只读 + 手动引导 | 全功能；信任提示随声誉累积减少（不保证立刻消失） | 省掉 T4；维护签名流水线 |
+| 只买 Apple Developer ID | 99 美元/年 | 全功能（helper + 生命周期切换） | 全功能；仍有 SmartScreen 提示 | T4 + 签名/公证流水线 |
+| 两个都签 | 约 219 美元/年（99 + 120，另需 Azure 订阅） | 全功能 | 全功能；信任提示随声誉累积减少 | 两套流水线 |
+
+> “推荐给开源项目”的只是“都不签”这一条，**是否采用要等你确认**；两条路线各自的门禁已写进 `plan.md` 的 G3a / G3b。
+
+> 若确定走不签名路线，需要同步改这些位置：
+> - `docs/ssh/plan.md`：Task 4 标注“搁置（无 Developer ID）”，Task 8 拆成签名轨/不签名轨，风险表与 DoD 里“未签名隐藏功能”改为“只读/降级”；
+> - `docs/ssh/poc.md`：G3 改为 G3a/G3b 两支；
+> - `docs/ssh/helper-protocol.md`：注明 macOS 只读模式下不走 helper；
+> - `README.md`：加 Gatekeeper“仍要打开”步骤、SmartScreen 步骤、SHA256 校验；
+> - 本文件 §7 的发布行改为两个分支。

@@ -74,7 +74,7 @@ Copy-Item "$env:ProgramData\ssh\sshd_config" "$env:ProgramData\ssh\sshd_config.p
 | Windows | UAC 允许一次安装 helper（LocalSystem 服务） | 由服务操作 `sshd`，不再弹 UAC |
 | 标准用户 | 开关禁用，提示“需要管理员账户” | 同上，不做降权代理 |
 
-这一版代码里，helper 不可用时整组**可见但禁用**（已定），不会假装可用。
+这一版代码里，helper 不可用时整组**可见但禁用或只读**（取决于签名路线，见 `signing-setup.md` §9），不会假装可用。
 
 ## 2. macOS 步骤
 
@@ -523,7 +523,7 @@ Get-NetTCPConnection -State Listen | Where-Object LocalPort -in 22,2223
 |---|---|---|
 | G1 | 在 macOS 15 与 26（以及仍在支持矩阵内的 13/14）上，M2/M3/M6/M8 全部一致，且 M4 真实登录成功 | 回退 `systemsetup` + 引导 FDA（用 M14 证据），或把 macOS 缩为“只读状态 + 手动开启引导” |
 | G2 | Windows 11 **Home** 上 W2 + W3 + W4 + W5 全部通过（能装、能起、防火墙放行、能登录） | Home 隐藏该功能，支持矩阵按实测写死 |
-| G3 | 发布产物通过签名验收：`codesign --verify --strict`、`spctl -a -vvv -t install`（pkg）、`stapler validate` 全部通过（做法见 `docs/ssh/signing-setup.md`） | 未签名构建不作为发布候选，SSH 功能保持禁用 |
+| G3 | 两条路线（选择见 `plan.md`）：**G3a 签名轨** = `codesign --verify --strict` + `spctl -a -vvv -t install`（pkg）+ `stapler validate` 全绿；**G3b 不签名轨** = macOS 只读状态无可用开关且无 helper 残留、Windows 可装可连、README 的 Gatekeeper/SHA256 步骤可复现 | 两条都不满足则不发 SSH 功能 |
 
 > G3 是“发布产物的客观校验”，不靠 PoC 主观判断：没有 Developer ID Application（签 app/helper）+ Developer ID Installer（签 pkg）+ 公证，就必然不通过。
 
