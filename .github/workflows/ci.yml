@@ -22,3 +22,5 @@ jobs:
         with:
           workspaces: src-tauri -> target
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      # helper 的平台无关测试在 macOS 上也能跑（真实系统调用都在 Windows 分支）。
+      - run: cargo test --manifest-path src-tauri/Cargo.toml -p shrinkdrop-ssh-helper --locked
