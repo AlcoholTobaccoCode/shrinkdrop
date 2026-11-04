@@ -12,3 +12,7 @@
 - [ ] 记录代码签名与 macOS 公证状态；未签名安装包必须在下载说明中明确标注，原生启动验收单独记录。
 - [x] 隐私文档与匿名上传行为一致。
 - [ ] macOS PKG 与 DMG 同时产出并校验；需在 macOS 确认 PKG 安装到 Applications、升级覆盖与 DMG 拖拽安装均正常。
+- [ ] Windows 安装包内已包含 `shrinkdrop-ssh-helper.exe`（`pnpm build:ssh-helper` 生成 sidecar）；安装后首次开启 SSH 能弹 UAC 并起服务。
+- [ ] Windows 真机验收 SSH：开启/关闭、两种生命周期、自定义端口、端口占用拦截、app 退出与崩溃后关闭、重启后常驻、卸载后无残留服务与防火墙规则。
+- [ ] 未签名安装包在下载说明中写明 SmartScreen/UAC“未知发布者”的处理步骤。
+- [ ] 若随包 OpenSSH MSI 进入发布，校验其 SHA256 清单与 LICENCE 文件齐全。
