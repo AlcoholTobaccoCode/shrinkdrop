@@ -18,6 +18,7 @@ export const sshErrorMessages: Record<SshErrorCode, string> = {
   policy_blocked: '系统策略禁止开启远程访问。',
   port_in_use: '端口已被其它进程占用。',
   busy: '上一个远程访问操作还没结束。',
+  read_only: '当前构建只能读取状态，请在系统设置里开启远程登录。',
   internal: '远程访问操作失败，请重试。',
   unsupported_verb: '辅助服务不支持该操作。',
   frame_too_large: '辅助服务返回的数据异常。',

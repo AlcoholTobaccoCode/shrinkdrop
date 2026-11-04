@@ -310,7 +310,23 @@ const en: Record<string, string> = {
     'Installing the helper needs administrator authorization (system password or UAC).',
   '由 shrinkdrop 开启的 SSH 会在退出应用后关闭；系统已有的实例不受影响。':
     'SSH started by shrinkdrop turns off when the app quits; instances the system already ran are untouched.',
-  '监听中': 'Listening'
+  '监听中': 'Listening',
+  '无法确认': 'Unconfirmed',
+  '打开共享设置': 'Open Sharing settings',
+  'macOS 的远程登录由系统设置管理：打开「共享 → 远程登录」开启一次即可，应用只读取状态。':
+    'macOS manages Remote Login in System Settings. Turn it on once under Sharing → Remote Login; the app only reads the state.',
+  '状态由系统设置管理，应用只读；开启或关闭请到「共享 → 远程登录」。':
+    'The system manages this state and the app only reads it. Turn it on or off under Sharing → Remote Login.',
+  '当前构建只能读取状态，请在系统设置里开启远程登录。':
+    'This build can only read the state; turn on Remote Login in System Settings.',
+  '系统未安装 OpenSSH Server。可以先去 Windows 设置 → 可选功能里安装，或使用下面两种兜底。':
+    'OpenSSH Server is not installed. Install it from Windows Settings → Optional features, or use one of the two fallbacks below.',
+  '官网下载': 'Download from the official page',
+  '内置安装（随包 OpenSSH）': 'Install the bundled OpenSSH',
+  '内置版本 {version}；安装前校验 SHA256，不会静默安装。':
+    'Bundled version {version}; its SHA256 is verified before installing, and nothing installs silently.',
+  '安装完成后回到这里重新开启；如果系统提示重启，请先重启。':
+    'Come back and turn it on again once installed; restart first if Windows asks you to.'
 };
 
 export const i18n = reactive({ lang: 'zh' as Lang });

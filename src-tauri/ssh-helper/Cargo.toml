@@ -1,0 +1,37 @@
+[package]
+name = "shrinkdrop-ssh-helper"
+version = "0.1.6"
+description = "shrinkdrop SSH 特权辅助服务（Windows）"
+authors = ["Tinypng Cross Platform"]
+license = "MIT-0"
+edition = "2021"
+
+[[bin]]
+name = "shrinkdrop-ssh-helper"
+path = "src/main.rs"
+
+[features]
+# 测试替身开放给 app 侧的协议端到端测试复用。
+testing = []
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+shrinkdrop-ssh-core = { path = "../ssh-core" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Pipes",
+  "Win32_System_Services",
+  "Win32_System_Threading",
+  "Win32_System_IO",
+  "Win32_System_Console",
+  "Win32_System_Registry",
+  "Win32_Security_Cryptography",
+  "Win32_UI_Shell",
+] }

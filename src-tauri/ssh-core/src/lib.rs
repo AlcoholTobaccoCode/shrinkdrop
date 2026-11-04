@@ -38,6 +38,8 @@ pub enum Verb {
     Attach,
     Detach,
     ShutdownHelper,
+    /// FoD 失败后的兜底：安装随包固定版 OpenSSH（需调用方在 UI 里已确认）。
+    InstallBundled,
 }
 
 /// 请求帧。`lifetime`/`port` 只有对应动词才读取，其余情况忽略。
@@ -107,6 +109,8 @@ pub enum ErrorCode {
     PolicyBlocked,
     PortInUse,
     Busy,
+    /// 只读模式：本构建没有可用的特权控制面（未签名路线的 macOS）。
+    ReadOnly,
     Internal,
     UnsupportedVerb,
     FrameTooLarge,
@@ -154,11 +158,35 @@ pub struct PortOwner {
     pub process: String,
 }
 
+/// 系统 SSH 的三态：`unknown` 表示“没权限”或“端口被别的进程占用”，
+/// 不能当作“已开启”展示。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OsState {
+    Enabled,
+    #[default]
+    Disabled,
+    Unknown,
+}
+
+impl OsState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OsState::Enabled => "enabled",
+            OsState::Disabled => "disabled",
+            OsState::Unknown => "unknown",
+        }
+    }
+}
+
 /// helper 的状态快照。`os_enabled` 是系统实际状态，`enabled` 是 helper 期望状态。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HelperStatus {
     pub enabled: bool,
     pub os_enabled: bool,
+    /// 三态结论；缺省时由 `os_enabled` 推导。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os_state: Option<OsState>,
     pub listening: bool,
     pub port: u16,
     pub owned: bool,
@@ -177,6 +205,7 @@ impl Default for HelperStatus {
         Self {
             enabled: false,
             os_enabled: false,
+            os_state: None,
             listening: false,
             port: 22,
             owned: false,
@@ -496,6 +525,7 @@ mod tests {
             (ErrorCode::PolicyBlocked, "policy_blocked"),
             (ErrorCode::PortInUse, "port_in_use"),
             (ErrorCode::Busy, "busy"),
+            (ErrorCode::ReadOnly, "read_only"),
             (ErrorCode::Internal, "internal"),
             (ErrorCode::UnsupportedVerb, "unsupported_verb"),
             (ErrorCode::FrameTooLarge, "frame_too_large"),

@@ -30,6 +30,12 @@ const sshErrorCopy = computed(() => {
 const sshStateLabel = computed(() => {
   if (!ssh.value.backendAvailable) return t('此版本暂不包含');
   if (!ssh.value.supported) return t('当前系统不支持');
+  // 只读路线：状态只来自系统，三态里 unknown 不能显示成“已开启”。
+  if (ssh.value.readOnly) {
+    if (ssh.value.osState === 'enabled') return t('系统已启用');
+    if (ssh.value.osState === 'unknown') return t('无法确认');
+    return t('未开启');
+  }
   if (!ssh.value.admin) return t('需要管理员账户');
   if (ssh.value.osEnabled && ssh.value.owned) return t('已开启（由 shrinkdrop 管理）');
   if (ssh.value.osEnabled) return t('系统已启用');
@@ -55,16 +61,30 @@ const sshPortHint = computed(() => {
     : '';
 });
 const sshConnection = computed(() => sshCommand(ssh.value));
+/** Windows 缺少 sshd 时的两手准备：只在 FoD/服务缺失的错误上出现。 */
+const sshNeedsInstall = computed(
+  () =>
+    ssh.value.platform === 'windows' &&
+    !ssh.value.readOnly &&
+    ssh.value.helperInstalled &&
+    ssh.value.helperApproved &&
+    (sshSession.state.error === 'feature_missing' || sshSession.state.error === 'service_missing')
+);
+/** 有随包版本时才显示“内置安装”；否则只给官网下载。 */
+const sshBundledAvailable = computed(() => Boolean(ssh.value.bundledVersion));
 /** 没有辅助服务就没有可审计的特权控制面：开关只读，避免假装可用。 */
 const sshToggleBlocked = computed(
   () =>
     !ssh.value.backendAvailable ||
+    ssh.value.readOnly ||
     !ssh.value.supported ||
     !ssh.value.admin ||
     !ssh.value.helperInstalled ||
     !ssh.value.helperApproved ||
     sshBusy.value
 );
+/** 只读路线下只显示“打开共享设置”，不显示生命周期与开关。 */
+const sshManual = computed(() => ssh.value.readOnly);
 // 防休眠依赖 macOS 的 caffeinate 与 LaunchDaemon，仅在 Mac 上展示该设置。
 const isMac = /Mac/i.test(navigator.userAgent);
 async function applyWindowTitle() {
@@ -563,6 +583,14 @@ async function copySshConnection() {
             </section>
 
             <section v-else-if="section === 'ssh'" class="settings-section">
+              <template v-if="sshManual">
+                <div class="settings-row">
+                  <span>{{ t('允许通过 SSH 远程登录本机') }}</span>
+                  <button class="button" @click="sshSession.openSharingSettings()">{{ t('打开共享设置') }}</button>
+                </div>
+                <p class="settings-hint">{{ t('macOS 的远程登录由系统设置管理：打开「共享 → 远程登录」开启一次即可，应用只读取状态。') }}</p>
+              </template>
+              <template v-else>
               <div class="settings-row settings-row--switch">
                 <span>{{ t('允许通过 SSH 远程登录本机') }}</span>
                 <label class="switch">
@@ -596,6 +624,7 @@ async function copySshConnection() {
                 </div>
               </div>
               <p class="settings-hint">{{ sshLifetimeHint }}</p>
+              </template>
 
               <div class="settings-row">
                 <span>{{ t('端口') }}</span>
@@ -621,6 +650,7 @@ async function copySshConnection() {
                 <p v-if="sshPortHint" class="settings-hint settings-hint--warning" role="note">{{ sshPortHint }}</p>
                 <p v-if="sshErrorCopy" class="notice notice--error" role="alert">{{ sshErrorCopy }}</p>
                 <p v-if="!ssh.backendAvailable" class="settings-hint">{{ t('此版本暂不包含远程访问控制面，需要带辅助服务的签名版本。') }}</p>
+                <p v-else-if="sshManual" class="settings-hint">{{ t('状态由系统设置管理，应用只读；开启或关闭请到「共享 → 远程登录」。') }}</p>
                 <template v-else>
                   <p v-if="!ssh.helperInstalled" class="settings-hint">{{ t('需要安装辅助服务才能开启远程访问。') }}</p>
                   <p v-else-if="!ssh.helperApproved" class="settings-hint settings-hint--warning" role="note">{{ t('辅助服务等待系统批准：在「登录项」里允许 shrinkdrop 后重试。') }}</p>
@@ -631,6 +661,15 @@ async function copySshConnection() {
                   <p v-if="ssh.supported && ssh.admin" class="settings-hint">{{ ssh.helperInstalled ? t('卸载辅助服务会同时关闭由 shrinkdrop 开启的 SSH。') : t('安装辅助服务需要管理员授权（系统密码或 UAC）。') }}</p>
                 </template>
                 <p v-if="ssh.supported && !ssh.admin" class="settings-hint settings-hint--warning">{{ t('SSH 需要管理员账户，请用管理员账户打开应用。') }}</p>
+                <template v-if="sshNeedsInstall">
+                  <p class="settings-hint settings-hint--warning" role="note">{{ t('系统未安装 OpenSSH Server。可以先去 Windows 设置 → 可选功能里安装，或使用下面两种兜底。') }}</p>
+                  <div class="settings-inline">
+                    <button class="button" :disabled="sshBusy" @click="sshSession.openOpenSshDownload()">{{ t('官网下载') }}</button>
+                    <button v-if="sshBundledAvailable" class="button button--primary" :disabled="sshBusy" @click="sshSession.installBundledOpenSsh()">{{ t('内置安装（随包 OpenSSH）') }}</button>
+                  </div>
+                  <p v-if="sshBundledAvailable" class="settings-hint">{{ t('内置版本 {version}；安装前校验 SHA256，不会静默安装。', { version: ssh.bundledVersion ?? '' }) }}</p>
+                  <p class="settings-hint">{{ t('安装完成后回到这里重新开启；如果系统提示重启，请先重启。') }}</p>
+                </template>
               </div>
 
               <div v-if="ssh.backendAvailable" class="settings-block">

@@ -54,6 +54,10 @@ impl SshBackend for UnavailableBackend {
         Err(unavailable())
     }
 
+    fn install_bundled(&self) -> Result<HelperStatus, SshError> {
+        Err(unavailable())
+    }
+
     fn uninstall_helper(&self) -> Result<(), SshError> {
         Ok(())
     }

@@ -26,6 +26,9 @@ export interface SshSession {
   setLifetime(lifetime: SshLifetime): Promise<void>;
   setPort(port: number): Promise<void>;
   installHelper(): Promise<void>;
+  openSharingSettings(): Promise<void>;
+  installBundledOpenSsh(): Promise<void>;
+  openOpenSshDownload(): Promise<void>;
   uninstallHelper(): Promise<void>;
   subscribe(): Promise<() => void>;
 }
@@ -83,6 +86,21 @@ export function createSshSession(adapter: SshAdapter): SshSession {
   const setLifetime = (lifetime: SshLifetime) => run(() => adapter.setLifetime(lifetime));
   const setPort = (port: number) => run(() => adapter.setPort(port));
   const installHelper = () => run(() => adapter.installHelper());
+  async function openSharingSettings() {
+    try {
+      await adapter.openSharingSettings();
+    } catch (error) {
+      state.detail = typeof error === 'string' ? error : '';
+    }
+  }
+  const installBundledOpenSsh = () => run(() => adapter.installBundledOpenSsh());
+  async function openOpenSshDownload() {
+    try {
+      await adapter.openOpenSshDownload();
+    } catch (error) {
+      state.detail = typeof error === 'string' ? error : '';
+    }
+  }
   const uninstallHelper = () => run(() => adapter.uninstallHelper());
 
   /** 主窗口改了 SSH 状态时，设置窗口跟随刷新。 */
@@ -102,7 +120,10 @@ export function createSshSession(adapter: SshAdapter): SshSession {
     setLifetime,
     setPort,
     installHelper,
+    installBundledOpenSsh,
+    openOpenSshDownload,
     uninstallHelper,
+    openSharingSettings,
     subscribe
   };
 }

@@ -3382,6 +3382,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "shrinkdrop-ssh-core",
+ "shrinkdrop-ssh-helper",
  "socket2 0.5.10",
  "sys-locale",
  "tauri",
@@ -3390,6 +3391,7 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
+ "windows-sys 0.60.2",
  "zip",
 ]
 
@@ -3399,6 +3401,17 @@ version = "0.1.6"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "shrinkdrop-ssh-helper"
+version = "0.1.6"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "shrinkdrop-ssh-core",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

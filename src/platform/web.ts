@@ -122,6 +122,9 @@ export function createBrowserSshAdapter(): SshAdapter {
       runtime = { ...runtime, port };
       return result(null);
     },
+    openSharingSettings: async () => {},
+    installBundledOpenSsh: async () => result(null),
+    openOpenSshDownload: async () => {},
     installHelper: async () => {
       runtime = { ...runtime, helperInstalled: true, helperApproved: true };
       return result(null);

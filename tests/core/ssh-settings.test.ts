@@ -37,6 +37,9 @@ function fixture(initial: SshOutcome) {
     setLifetime: vi.fn(async () => initial),
     setPort: vi.fn(async () => initial),
     installHelper: vi.fn(async () => initial),
+    installBundledOpenSsh: vi.fn(async () => initial),
+    openOpenSshDownload: vi.fn(async () => {}),
+    openSharingSettings: vi.fn(async () => {}),
     uninstallHelper: vi.fn(async () => initial),
     onStatus: vi.fn(async handler => {
       pushStatus = handler;
@@ -115,6 +118,42 @@ describe('ssh session', () => {
   });
 });
 
+describe('ssh read-only route', () => {
+  it('keeps the app from writing when the backend is read-only', async () => {
+    const readOnly = outcome(
+      runtime({ readOnly: true, osState: 'unknown', backendAvailable: true }),
+      'read_only',
+      { enabled: false, lifetime: 'app', port: 22 }
+    );
+    const { session } = fixture(readOnly);
+    await session.load();
+    expect(session.state.runtime.readOnly).toBe(true);
+    expect(session.state.runtime.osState).toBe('unknown');
+    expect(session.state.error).toBe('read_only');
+    expect(session.state.settings.enabled).toBe(false);
+  });
+
+  it('opens the system sharing panel through the adapter', async () => {
+    const { adapter, session } = fixture(outcome(runtime({ readOnly: true })));
+    await session.openSharingSettings();
+    expect(adapter.openSharingSettings).toHaveBeenCalled();
+  });
+});
+
+describe('ssh bundled OpenSSH fallback', () => {
+  it('runs the bundled install through the adapter', async () => {
+    const { adapter, session } = fixture(outcome(runtime({ platform: 'windows' })));
+    await session.installBundledOpenSsh();
+    expect(adapter.installBundledOpenSsh).toHaveBeenCalled();
+  });
+
+  it('reports the fixed download entry without inventing a URL', async () => {
+    const { adapter, session } = fixture(outcome(runtime({ platform: 'windows' })));
+    await session.openOpenSshDownload();
+    expect(adapter.openOpenSshDownload).toHaveBeenCalled();
+  });
+});
+
 describe('ssh connection copy', () => {
   it('builds ssh user@host for port 22', () => {
     expect(sshCommand(runtime())).toBe('ssh qingshan@192.168.1.20');
@@ -142,6 +181,7 @@ describe('ssh error copy', () => {
       'policy_blocked',
       'port_in_use',
       'busy',
+      'read_only',
       'internal',
       'unsupported_verb',
       'frame_too_large',

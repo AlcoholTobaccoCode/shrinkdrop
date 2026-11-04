@@ -21,7 +21,7 @@
 
 | 情况 | 处理 |
 |---|---|
-| 帧超限 / 不是合法 JSON / 缺 `id` | 写 helper 日志（`frame_too_large` / `invalid_frame`），断开连接，**不回包** |
+| 帧超限 / 不是合法 JSON / 缺 `id` | 写 helper 日志（`frame_too_large` / `invalid_frame`），断开连接，**不回包**（实现里 `TooLarge` 会尽力回一帧 `frame_too_large`，因为此时 `id` 不可信，UI 不依赖它） |
 | `id` 可读但动词未知 | 回 `{ "id": <id>, "payload": { "type": "error", "code": "unsupported_verb" } }`，会话可继续 |
 | 出现协议外字段（`command`/`path`/`shell` 等） | `Request` 使用 `deny_unknown_fields`，按上一条回 `unsupported_verb` |
 | 已验证的固定动词但参数非法（如 `port: 0`） | 回 `unsupported_custom_port`，不改系统状态 |
@@ -50,13 +50,14 @@
 | `set_port` | `port` | 仅 Windows；macOS 非 22 回 `unsupported_custom_port` |
 | `attach` | — | 声明一个客户端会话（引用计数 +1），用于 `lifetime=app` 的退出关闭 |
 | `detach` | — | 会话结束（引用计数 -1）；计数归零后按生命周期决定是否关闭 |
-| `shutdown_helper` | — | helper 自行退出，由 launchd / SCM 拉起新版本（升级用） |
+| `shutdown_helper` | — | 还原系统状态后 helper 自行退出，由 launchd / SCM 拉起新版本（升级/卸载用） |
+| `install_bundled` | — | Windows FoD 失败时的兜底：安装随包固定版 OpenSSH。路径由 helper 自己定位，协议里没有路径参数 |
 
 禁止的参数形态：没有 `command`/`shell`/`path` 字段，没有任意 URL；端口只接受 1–65535 的整数（`0` 由 helper 拒绝并回 `unsupported_custom_port`）。`Request` 开启 `deny_unknown_fields`，多出来的字段直接判为非法帧，不会被静默忽略。
 
 ## 4. 错误码
 
-`unsupported_os`、`unsupported_custom_port`、`needs_admin`、`helper_unavailable`、`helper_version_mismatch`、`feature_missing`、`service_missing`、`service_start_failed`、`service_stop_failed`、`firewall_blocked`、`policy_blocked`、`port_in_use`、`busy`、`internal`、`unsupported_verb`、`frame_too_large`、`timeout`。
+`unsupported_os`、`unsupported_custom_port`、`needs_admin`、`helper_unavailable`、`helper_version_mismatch`、`feature_missing`、`service_missing`、`service_start_failed`、`service_stop_failed`、`firewall_blocked`、`policy_blocked`、`port_in_use`、`busy`、`read_only`、`internal`、`unsupported_verb`、`frame_too_large`、`timeout`。
 
 规则：
 
@@ -71,7 +72,8 @@
 {
   "enabled": true,        // helper 期望状态
   "os_enabled": true,     // 系统实际状态（launchd job 已加载 / 服务已启动）
-  "listening": true,      // 目标端口在监听
+  "os_state": "enabled",  // enabled | disabled | unknown；unknown 不能当“已开启”展示
+  "listening": true,      // 目标端口在监听，且监听者是本机 sshd
   "port": 22,
   "owned": true,          // 是否由本 app 的 helper 开启
   "lifetime": "app",
@@ -113,8 +115,9 @@ app 侧：`ssh_status` 返回 `SshSnapshot { runtime, ssh }`，把 `status` 的�
 2. 只有 `owned=true` 且 `lifetime=app` 才允许在最后一个客户端退出后关闭。
 3. 用户从 System Settings / 服务管理器手动开关后，helper 只报告状态，不抢控制权。
 4. app 以**进程**为粒度持有一个 helper 会话：本地 `attach` 计数只决定何时发 `detach`（0→1 发一次 `attach`，1→0 发一次 `detach`），主窗口与设置窗口共享同一会话。
-5. 崩溃兜底：心跳超时后视作最后一个客户端退出。
-6. helper 侧按连接计数的多实例保护属于 T7（未实现）；在它落地前，多开 app 实例时的引用计数没有 helper 侧保障。
+5. helper 侧按**连接**计数：每个会话在收到 `attach` 后计数 +1，`detach` 或**连接断开**（含 app 崩溃/强杀）时 -1；归零且 `owned && app` 才关闭 sshd。因此崩溃兜底不依赖心跳超时。
+6. 多开 app 实例时，每个实例各自持有一个会话，计数由 helper 汇总；最后一个实例退出才关闭。
+7. 心跳（5s）与宽限（15s）尚未实现：当前是断开即结算，语义更保守（不会留下开着的 sshd）。
 
 ## 8. 超时与心跳
 
@@ -166,5 +169,9 @@ Windows：
 | 帧编解码、共享类型、错误码、严格请求解析 | 已实现（`src-tauri/ssh-core`，含单测） |
 | `ssh_status` / `ssh_*` 命令、`SshSnapshot` / `SshOutcome` 契约 | 已实现（`src-tauri/src/ssh/mod.rs`） |
 | app 侧状态机 / 所有权 / 进程内会话计数 / 失败不落盘 | 已实现（假后端单测；真实配置/防火墙回滚属 helper） |
-| app 侧 helper 客户端（连接、hello、帧收发、2s/10s/5s/15s 超时与心跳） | 未实现（当前默认后端是 `UnavailableBackend`） |
-| helper 二进制、SMAppService / Windows 服务 | 未开始（T4/T5；依赖 T0 PoC 与 Developer ID 签名） |
+| app 侧 helper 客户端（连接、hello、帧收发、错误映射） | 已实现（`src-tauri/src/ssh/ipc.rs`；超时/心跳未做） |
+| Windows 传输层（命名管道、UAC 提权安装） | 已实现（`src-tauri/src/ssh/windows_pipe.rs`），仅交叉类型检查，未在 Windows 上运行 |
+| Windows helper（SCM 服务、管道 ACL、sshd 控制、端口/防火墙/回滚、随包 MSI） | 已实现（`src-tauri/ssh-helper`），54 项单测在 macOS 上通过；未在 Windows 上安装或登录 |
+| macOS helper（SMAppService） | 未开始（T4；依赖 Developer ID 签名） |
+| macOS 只读后端 | 已实现（`src-tauri/src/ssh/macos_readonly.rs`） |
+| 超时 / 心跳 / 宽限期 | 未实现（断开即结算） |

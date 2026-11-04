@@ -1,28 +1,42 @@
 # SSH 远程访问开发计划（方案 A：系统 sshd + 特权 helper）
 
 日期：2026-11-04
-状态：待开发
+状态：Windows 全功能已实现（未真机验证）；macOS 走只读路线；签名路线待定
 关联：`docs/ssh/research.md`
 目标：在设置中启用/停用宿主机 OpenSSH Server，并支持「app 运行时」与「后台常驻」两种生命周期。
 
 > 执行方式：按 Task 顺序推进；Task 4 与 Task 5 可并行；Task 6 在 Task 3 的 IPC 契约稳定后即可并行。每个 Task 完成后再进入依赖它的 Task，不跨阶段提前接平台代码。
 
-## 进度（2026-11-04，第一轮）
+## 进度（2026-11-04，第二轮）
 
-已落地（核心状态机与协议有单测，`cargo test --locked` 与 `pnpm test` 通过）：
+第一轮落地（协议、领域模型、控制面、设置面板骨架）：见本节末尾的“第一轮记录”。
 
-- **T1 协议文档**：`docs/ssh/helper-protocol.md`；帧/动词/错误码/状态文件/IPC 认证/威胁模型全部定稿。
-- **T2 设置与领域模型**：`shrinkdrop-ssh-core`（`SshLifetime`、`ErrorCode`、`StateFile`、帧编解码）、`SshSettings`、`SshRuntime`、`Settings.ssh`、前端类型同步；旧 `settings.json` 缺失 `ssh` 时按默认值加载。
-- **T3 控制面**：`SshBackend` trait、`SshManager` 状态机（所有权、进程内会话计数、失败不落盘、启动对齐、退出收尾）、7 个 `ssh_*` 命令；假后端覆盖核心转移：所有权、两种生命周期、失败不落盘、Busy、helper 缺失/未批准、进程内会话计数。
-- **T6 设置界面（部分）**：远程访问分组、二次确认、生命周期、只读/可编辑端口、状态卡、端口占用提示、连接命令与指纹、中英文错误文案；设置窗口在挂载与聚焦时用 `ssh_status`（`SshSnapshot`）回填期望状态。
+第二轮新增（Windows 全功能 + macOS 只读路线；`cargo test` 140 项、`pnpm test` 128 项、`vue-tsc` 通过）：
 
-本轮未做，依赖外部条件：
+- **T5 Windows helper**：新增 crate `src-tauri/ssh-helper`（`shrinkdrop-ssh-helper`）。
+  - `helper.rs`：固定动词的业务核心（所有权、两种生命周期、端口占用预检、失败回滚、会话引用计数、卸载还原），平台无关、可在任意平台单测。
+  - `sshd.rs`：`sc.exe` / `dism.exe` / `netsh.exe` / `msiexec.exe` / `netstat.exe` / `tasklist.exe` 全部固定 argv；解析与错误映射（`1060`/`1056`/`1062`/`3010`/`1603`/`1618`）。
+  - `config.rs`：`sshd_config` 托管块——**换端口会注释掉已有 active `Port`**（只追加会同时开着 22），改前备份、`sshd -t` 校验、失败回滚。
+  - `bundled.rs`：随包 MSI 的 SHA256 清单校验 + `msiexec /qn /norestart`；已有 sshd 时拒绝重复安装。
+  - `session.rs`：协议循环（握手、版本校验、超大帧、未知动词、`shutdown_helper`），**连接断开等价于 detach**，app 崩溃后 owned 实例不会永远开着。
+  - `pipe.rs`：管道 DACL 仅 SYSTEM / Administrators / 安装者 SID，`PIPE_REJECT_REMOTE_CLIENTS`，调用方 token + linked token 复核管理员组。
+  - `main.rs`：SCM 服务外壳（`ShrinkdropSshHelper`，LocalSystem，自动启动）、`--install-service` / `--uninstall-service` / `--run-console`。
+- **T3 真实后端（Windows）**：`src-tauri/src/ssh/ipc.rs`（协议客户端 + `Transport`/`TransportBackend`）与 `windows_pipe.rs`（命名管道 + `ShellExecuteW runas` 提权安装）。app 从不直接调 `sc.exe`。
+- **T6 剩余项**：macOS“打开共享设置”入口（只读路线）；Windows FoD 失败的两手准备（官网下载固定 URL + 随包 MSI 内置安装）；`read_only` 错误码与三态状态卡文案。
+- **T7 部分**：会话断开即 detach（崩溃兜底）；改端口后校验旧端口已释放，否则回滚；host key 指纹按 ed25519 → ecdsa → rsa 回退。
 
-- **T0 平台 PoC**：自测手册在 `docs/ssh/poc.md`（命令、期望、记录表、清理、Gate 判据），由 QingShan 在测试机执行；会真实开关宿主机 Remote Login，不在开发机静默执行。
-- **T3 真实后端**：`helper` 未随包提供，`UnavailableBackend` 只返回 `helper_unavailable`，运行态带 `backendAvailable=false`；设置窗口因此禁用开关、隐藏安装入口，状态卡显示“此版本暂不包含”。这是当前的真实能力，不是占位文案。
-- **T4/T5 helper**：依赖 T0 结论与 Developer ID 签名（Gate G3）；证书与公证的获取步骤、CI secrets、校验命令见 `docs/ssh/signing-setup.md`。未验证的系统路径不提前实现。
-- **T6 剩余**：已开启时改端口的二次确认、macOS“打开 Sharing 设置”入口、Windows FoD 失败的两手准备（随 T5）、SSH 面板的组件级键盘/aria 测试（现只有会话与文案单测）。
-- **T7–T10**：按计划顺延。
+仍未完成（依赖外部条件，不谎报）：
+
+- **T0 平台 PoC**：自测手册在 `docs/ssh/poc.md`，需 QingShan 在真实 Windows / macOS 测试机执行；Windows 上的 UAC、服务安装、真实 SSH 登录、Home SKU 可用性都还没实测。
+- **Windows E2E**：本轮只在 macOS 上做了交叉类型检查（`cargo check --target x86_64-pc-windows-msvc`），没有在 Windows 上编译、安装服务或跑真实登录。SmartScreen/AV、服务 ACL、管道 ACL 的实际行为需要真机验证。
+- **T4 macOS helper**：签名路线（Developer ID + SMAppService）未开始；不签名路线已落地为只读后端（`macos_readonly.rs`）。
+- **T8 打包/签名/升级**：helper 二进制尚未进入安装包（`src-tauri/tauri.conf.json` 的 `externalBin`/resources 未配置），随包 MSI 与 `.sha256` 清单未加入资源；因此 Windows 上的“安装辅助服务”当前找不到 exe。
+- **T9 安全评审**：IPC ACL、SID 校验、失败路径已实现但未经渗透测试。
+- **T10 文档**：用户文档与故障排查还没写。
+
+### 第一轮记录（2026-11-04）
+
+已落地：T1 协议文档；T2 设置与领域模型；T3 控制面（假后端覆盖所有权/生命周期/失败不落盘/Busy/helper 缺失/进程内会话计数）；T6 设置界面骨架（分组、二次确认、生命周期、端口、状态卡、连接命令与指纹、中英文文案）。
 
 ## 0. 已定决策
 
@@ -201,27 +215,27 @@ T10 文档与发布
 
 **Files:** `src-tauri/ssh-helper/src/main.rs`、`src-tauri/ssh-helper/src/windows.rs`、`src-tauri/src/ssh/windows.rs`、`scripts/ssh-helper-dev.ps1`
 
-- [ ] helper Windows 服务：`ShrinkdropSshHelper`，LocalSystem，`SERVICE_AUTO_START`。
-- [ ] 命名管道：`\\.\pipe\shrinkdrop-ssh-helper`，`PIPE_REJECT_REMOTE_CLIENTS`；ACL 仅 SYSTEM、Administrators、当前 console 用户 SID。
-- [ ] 调用方鉴权：从客户端 PID 取 token，使用 linked token 校验 Administrators 组；非管理员一律 `needs_admin`，不能只依赖 UI。
-- [ ] 服务控制：`OpenSCManager` / `OpenService("sshd")` / `StartService` / `ControlService(STOP)` / `ChangeServiceConfig` / `QueryServiceStatusEx`。
-- [ ] 启动类型：`persistent` 设 `SERVICE_AUTO_START`；`app` 设 `SERVICE_DEMAND_START`，退出停止；记录并恢复原始启动类型，避免永久改坏用户配置。
-- [ ] 可选功能：检测 `OpenSSH.Server~~~~0.0.1.0`；缺失时通过 DISM API 或 `%SystemRoot%\System32\dism.exe` 固定参数安装；处理离线/WSUS/策略失败。
-- [ ] 安装来源优先级：已有 `sshd` 服务 → 直接用；否则尝试 FoD；FoD 失败时 UI 提供“官网下载”和“内置安装”，不静默安装随包版本。
-- [ ] 官网下载：打开 `https://github.com/PowerShell/Win32-OpenSSH/releases`；用户手动安装后“重新检测”服务/二进制；不自动运行下载的文件。
-- [ ] 内置安装：随包固定版 `OpenSSH-Win64-v<version>.msi`；安装前校验 SHA256（若 MSI 有 Authenticode 签名则一并校验）；`msiexec /i ... /qn /norestart`；映射 0/3010/1603/1618 错误；记录 `installedByApp`。
-- [ ] 冲突保护：系统里已有 `sshd` 服务时禁止再装随包 MSI；避免 FoD 与 standalone 两套 OpenSSH 抢服务名/端口。
-- [ ] 防火墙：校验 `OpenSSH-Server-In-TCP` 存在且启用；缺失时用固定参数创建（仅入站 TCP 22）。
-- [ ] 自定义端口：解析 `%ProgramData%\ssh\sshd_config` 的 active `Port` 行，写入带标记的托管块；改前备份，`sshd -t` 校验，重启 `sshd`，失败回滚。
-- [ ] 端口占用：用 `GetExtendedTcpTable`（或等价 API）查监听者；被其它进程占用返回 `port_in_use`（port/pid/process），不写配置、不启服务；被本机 `sshd` 占用且为目标端口按幂等处理。
-- [ ] 端口防火墙：自定义端口创建独立规则（如 `shrinkdrop-ssh-<port>`），不改 stock `OpenSSH-Server-In-TCP`；关闭/卸载/换端口时删除自己创建的规则。
-- [ ] 端口生效校验：服务启动后确认目标端口在监听、22 不再监听（自定义端口时）；失败回滚配置/防火墙并返回错误。
-- [ ] host key：读取 `%ProgramData%\ssh\ssh_host_ed25519_key.pub`（缺失时尝试 RSA/ECDSA），计算 SHA256 指纹返回给 UI；没有 key 时返回 null。
-- [ ] 安装/卸载：`--install-service --allow-sid <SID>`、`--uninstall-service`；服务 exe 放 `%ProgramData%\shrinkdrop\ssh-helper\<version>\`，该目录 ACL 只允许 SYSTEM/Administrators 写，避免升级时文件锁与普通用户替换。
-- [ ] 升级：版本不一致时安装新 helper、切换服务路径、停止旧服务、清理旧目录。
-- [ ] 状态读取：`Get-Service`/`sc query` 非管理员可用；能力检测用文件/服务存在性，不强制 `Get-WindowsCapability`。
-- [ ] 单元测试：协议、SCM 状态映射、错误码映射（fixture/假 API）。
-- [ ] 手工 E2E：Win11 Pro、Win11 Home（若 Gate G2 通过）、开启/关闭、UAC、app 退出、崩溃、重启、卸载。
+- [x] helper Windows 服务：`ShrinkdropSshHelper`，LocalSystem，`SERVICE_AUTO_START`（`ssh-helper/src/main.rs`）。
+- [x] 命名管道：`\\.\pipe\shrinkdrop-ssh-helper`，`PIPE_REJECT_REMOTE_CLIENTS`；DACL 仅 SYSTEM、Administrators、安装者 SID（`ssh-helper/src/pipe.rs`）。
+- [x] 调用方鉴权：从客户端 PID 取 token，用 linked token 复核 Administrators 组；非管理员回 `needs_admin`，不只看 UI。
+- [x] 服务控制：经 `sc.exe` 固定 argv（`query`/`qc`/`config start=`/`start`/`stop`），不用拼接的命令行。
+- [x] 启动类型：`persistent` 设 `auto`；`app` 设 `demand`；开启前记录原始值，关闭时还原（含 `disabled`）。
+- [x] 可选功能：`dism /online /get-featureinfo|add-capability` 固定参数；离线/WSUS/策略失败统一归到 `feature_missing`。
+- [x] 安装来源优先级：已有 `sshd` 直接用（`owned=false`）；否则尝试 FoD；FoD 失败由 UI 提供两手兜底。
+- [x] 官网下载：后端固定 URL `https://github.com/PowerShell/Win32-OpenSSH/releases`，前端不能传任意 URL；不自动运行下载的文件。
+- [x] 内置安装：随包 `OpenSSH-Win64-v<version>.msi`；同目录 `.sha256` 清单校验，`msiexec /i ... /qn /norestart`；映射 0/3010/1603/1618；记录 `installed_by_app`。
+- [x] 冲突保护：系统里已有 `sshd` 服务时禁止装随包 MSI（`install_bundled` 先查服务状态）。
+- [x] 防火墙：端口 22 复用 `OpenSSH-Server-In-TCP`（存在且启用时不重复创建）；缺失时用固定参数创建。
+- [x] 自定义端口：解析 `sshd_config` 的 active `Port`，写入托管块并**注释掉旧端口**；改前备份，`sshd -t` 校验，失败回滚。
+- [x] 端口占用：`netstat -ano` + `tasklist` 查监听者；被其它进程占用回 `port_in_use`（port/pid/process），不写配置、不启服务；被本机 `sshd` 占用按幂等处理。
+- [x] 端口防火墙：自定义端口建独立规则 `shrinkdrop-ssh-<port>`，不动 stock 规则；关闭/卸载/换端口时删除自己的规则。
+- [x] 端口生效校验：启动后确认目标端口在监听；换端口后确认旧端口已释放，否则回滚配置并重启回旧端口。
+- [x] host key：`ssh-keygen -lf` 读 `ssh_host_ed25519_key.pub`，缺失时回退 ecdsa / rsa；没有 key 返回 null。
+- [ ] 安装/卸载的目录约定：现按 app 同目录 / 安装目录定位 helper 与 MSI，尚未迁到 `%ProgramData%\shrinkdrop\ssh-helper\<version>\`（该目录 ACL 收紧与文件锁隔离仍待做）。
+- [ ] 升级：版本不一致时安装新 helper、切换服务路径、停止旧服务、清理旧目录（未做）。
+- [x] 状态读取：`sc query` / `sc qc` 非管理员可用；能力检测用服务与文件存在性，不强制 `Get-WindowsCapability`。
+- [x] 单元测试：协议循环、SCM 状态/启动类型映射、`netstat`/`tasklist` 解析、MSI 清单校验、状态机（所有权/生命周期/端口占用/回滚/引用计数），共 54 项，在 macOS 上运行。
+- [ ] 手工 E2E：Win11 Pro、Win11 Home（若 Gate G2 通过）、开启/关闭、UAC、app 退出、崩溃、重启、卸载。**尚未在 Windows 上执行**；本轮只做了 `cargo check --target x86_64-pc-windows-msvc` 交叉类型检查。
 
 **Acceptance:** Windows 上可完成一次真实 SSH 登录；`app` 生命周期退出后服务停止；`persistent` 重启后仍可连；自定义端口生效且占用时被拦截；卸载后服务与状态清理干净。
 
@@ -236,20 +250,20 @@ T10 文档与发布
 - [x] 生命周期二段选择：`仅应用运行时` / `后台常驻`；`app` 需要 helper，未安装时置灰并给出安装入口。
 - [x] 端口输入：Windows 可编辑（1–65535，默认 22）；macOS 只读显示运行态端口（恒为 22）；非法值不提交。
 - [x] 端口占用提示：开启/修改端口时显示“端口被 <进程> (PID) 占用”，阻止应用并允许重试；不使用模态阻塞整个设置窗口。
-- [ ] 已开启时改端口：二次确认会断开现有 SSH 会话；失败时恢复旧端口并展示错误。
+- [x] 已开启时改端口：helper 重配并重启服务，失败时回滚旧端口并返回错误（UI 直接展示 `service_start_failed`；改端口前的二次确认尚未加）。
 - [x] 状态卡：此版本不包含/不支持/需要管理员/已开启（应用管理）/系统已启用/监听中/未开启；策略禁用与端口占用等以错误码文案展示。
 - [x] 非管理员账户：禁用开关并说明“SSH 需要管理员账户”，不弹无意义的 UAC/授权。
 - [x] 展示 `ssh user@ip`、端口、host key 指纹；提供复制命令。
-- [ ] macOS 提供“打开 Sharing 设置”；Windows 提供“打开服务/可选功能”说明。
+- [x] macOS 提供“打开共享设置”（只读路线）；Windows 在 FoD 失败时给出“官网下载 / 内置安装”与可选功能说明。
 - [x] helper 安装/卸载入口：安装时解释 UAC/管理员授权；卸载时说明会关闭 SSH（若 owned）。
-- [ ] Windows 缺少 sshd 时的两手准备：
+- [x] Windows 缺少 sshd 时的两手准备：
   - “官网下载”：打开 `https://github.com/PowerShell/Win32-OpenSSH/releases`，用户手动装完点“重新检测”；URL 固定在后端，前端不能传任意 URL；同时给出 Windows 设置 → 可选功能的微软官方步骤；
   - “内置安装（随包）”：UI 可叫“内置下载”，实际是运行随包 MSI；展示随包版本，调用 helper 校验并运行 MSI；显示安装中/失败/需要重启；
   - 两者都失败时保留错误详情，不循环重试。
-- [ ] 适配器方法：`sshStatus`、`sshEnable`、`sshDisable`、`sshSetLifetime`、`sshSetPort`、`sshInstallHelper`、`sshUninstallHelper`、`sshInstallBundledOpenSsh`、`sshOpenOpenSshDownload`、`sshRecheckOpenSsh`。
+- [x] 适配器方法：`sshStatus`、`sshEnable`、`sshDisable`、`sshSetLifetime`、`sshSetPort`、`sshInstallHelper`、`sshUninstallHelper`、`sshInstallBundledOpenSsh`、`sshOpenOpenSshDownload`、`sshOpenSharingSettings`（“重新检测”由 `sshStatus` 完成，未单独建命令）。
 - [x] 事件同步：`ssh-status` 广播；设置窗口在挂载与获得焦点时刷新（主窗口目前不展示 SSH 状态）。
 - [x] 错误码到中英文文案的映射；不显示内部路径/命令输出。
-- [ ] 测试：关闭默认、首次确认、取消不产生特权操作、lifetime 切换、helper 缺失、错误态、键盘/aria。
+- [ ] 测试：关闭默认、首次确认、取消不产生特权操作、lifetime 切换、helper 缺失、错误态、键盘/aria。会话层与文案已有 14 项单测（含只读路线与兜底入口）；组件级键盘/aria 仍缺。
 - [x] 现有分享/压缩设置回归：新增字段不影响 `settings_update`。
 
 **Acceptance:** 设置界面可完成 enable/disable/切换生命周期/设置端口；端口占用有明确提示；所有状态有明确文案；Vitest 与类型检查通过。
@@ -260,18 +274,18 @@ T10 文档与发布
 
 **Files:** `src-tauri/src/ssh/mod.rs`、平台 helper、`tests/core/ssh-settings.test.ts`、`docs/ssh/helper-protocol.md`
 
-- [ ] 多实例：helper 引用计数；最后一个客户端退出才按 `app` 关闭。
-- [ ] 正常退出：主窗口关闭 → detach → helper 宽限后关闭；不阻塞窗口退出。
-- [ ] 崩溃/强杀：helper 心跳超时后关闭（仅 owned + app）。
+- [x] 多实例：helper 按连接引用计数；最后一个客户端退出才按 `app` 关闭；连接断开（含崩溃）等价于 detach。
+- [ ] 正常退出：主窗口关闭 → detach → helper 关闭。**已实现会话断开即 detach**；`helper-protocol.md` 里的 15s 宽限与 5s 心跳尚未实现（当前是立即关闭，不阻塞窗口退出）。
+- [x] 崩溃/强杀：helper 在连接断开时按 `owned + app` 关闭（比心跳超时更直接，已有单测）。
 - [ ] 手动覆盖：用户从 System Settings/服务管理器开启或关闭后，app 重新对齐，不抢控制权。
 - [ ] 持久模式：helper 不主动覆盖用户手动关闭；app 启动时只报告状态。
 - [ ] 睡眠/唤醒、网络切换后刷新 address；不尝试唤醒主机。
-- [ ] 已开启时改端口：Windows 重配并重启服务，确认新端口监听、旧端口释放；失败回滚；macOS 拒绝非 22。
+- [x] 已开启时改端口：Windows 重配并重启服务，确认新端口监听、旧端口释放；失败回滚；macOS 拒绝非 22。
 - [ ] Windows 网络配置切换（Private/Public/Domain）后重新校验防火墙规则；规则被禁用时报告 `firewall_blocked`。
-- [ ] 目标端口被其他进程占用：enable/set_port 失败，返回 `port_in_use`，不误判为 SSH 开启。
+- [x] 目标端口被其他进程占用：enable/set_port 失败，返回 `port_in_use`，不误判为 SSH 开启。
 - [ ] helper 版本不匹配/未批准/被策略禁用：降级为只读状态，不循环重试。
-- [ ] 卸载：停止服务、注销 LaunchDaemon、删除状态/日志；owned 时先关闭 SSH。
-- [ ] 平台 E2E 记录：normal / crash / reboot / manual override / uninstall 五种场景。
+- [x] 卸载：owned 时先关闭 SSH、还原 `sshd_config` 与启动类型、删除自建防火墙规则、清空状态文件；不删除系统 OpenSSH。
+- [ ] 平台 E2E 记录：normal / crash / reboot / manual override / uninstall 五种场景。**未在 Windows 真机执行**。
 
 **Acceptance:** 两种生命周期的行为与文档一致；异常路径不留下“以为关了但其实还开着”的状态。
 

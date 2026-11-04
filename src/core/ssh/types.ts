@@ -16,6 +16,7 @@ export type SshErrorCode =
   | 'policy_blocked'
   | 'port_in_use'
   | 'busy'
+  | 'read_only'
   | 'internal'
   | 'unsupported_verb'
   | 'frame_too_large'
@@ -33,6 +34,10 @@ export interface SshRuntime {
   admin: boolean;
   /** 本构建是否包含可用的控制面后端；false 时开关与安装入口都不显示。 */
   backendAvailable: boolean;
+  /** 只读模式：开关不可用，只能引导用户去系统设置（macOS 未签名路线）。 */
+  readOnly: boolean;
+  /** 三态：unknown 不能当作“已开启”。 */
+  osState: 'enabled' | 'disabled' | 'unknown';
   username: string;
   helperInstalled: boolean;
   helperApproved: boolean;
@@ -73,6 +78,12 @@ export interface SshAdapter {
   setLifetime(lifetime: SshLifetime): Promise<SshOutcome>;
   setPort(port: number): Promise<SshOutcome>;
   installHelper(): Promise<SshOutcome>;
+  /** 只读路线：打开系统设置 → 共享。 */
+  openSharingSettings(): Promise<void>;
+  /** Windows FoD 失败时的兜底：安装随包固定版 OpenSSH。 */
+  installBundledOpenSsh(): Promise<SshOutcome>;
+  /** FoD 失败时打开 OpenSSH 官方发布页；URL 固定在后端。 */
+  openOpenSshDownload(): Promise<void>;
   uninstallHelper(): Promise<SshOutcome>;
   onStatus(handler: (runtime: SshRuntime) => void): Promise<() => void>;
 }
@@ -83,6 +94,8 @@ export function defaultSshRuntime(): SshRuntime {
     platform: 'other',
     admin: false,
     backendAvailable: false,
+    readOnly: false,
+    osState: 'disabled',
     username: '',
     helperInstalled: false,
     helperApproved: false,

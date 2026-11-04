@@ -110,11 +110,14 @@ pub fn run() {
             share::share_preview_item,
             share::share_save_items,
             ssh::ssh_status,
+            ssh::ssh_open_sharing_settings,
             ssh::ssh_enable,
             ssh::ssh_disable,
             ssh::ssh_set_lifetime,
             ssh::ssh_set_port,
             ssh::ssh_install_helper,
+            ssh::ssh_install_bundled_open_ssh,
+            ssh::ssh_open_open_ssh_download,
             ssh::ssh_uninstall_helper
         ])
         .build(tauri::generate_context!())
