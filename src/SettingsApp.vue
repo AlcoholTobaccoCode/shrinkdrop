@@ -633,7 +633,7 @@ async function copySshConnection() {
                 <p v-if="ssh.supported && !ssh.admin" class="settings-hint settings-hint--warning">{{ t('SSH 需要管理员账户，请用管理员账户打开应用。') }}</p>
               </div>
 
-              <div class="settings-block">
+              <div v-if="ssh.backendAvailable" class="settings-block">
                 <div class="settings-row">
                   <span>{{ t('连接命令') }}</span>
                   <div class="settings-path-row">
