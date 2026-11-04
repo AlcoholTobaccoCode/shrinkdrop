@@ -18,9 +18,9 @@
 
 本轮未做，依赖外部条件：
 
-- **T0 平台 PoC**：需要 Windows 机器/虚拟机与管理员授权，且会真实开关宿主机 Remote Login；不适合在开发机静默执行。
+- **T0 平台 PoC**：自测手册在 `docs/ssh/poc.md`（命令、期望、记录表、清理、Gate 判据），由 QingShan 在测试机执行；会真实开关宿主机 Remote Login，不在开发机静默执行。
 - **T3 真实后端**：`helper` 未随包提供，`UnavailableBackend` 只返回 `helper_unavailable`，运行态带 `backendAvailable=false`；设置窗口因此禁用开关、隐藏安装入口，状态卡显示“此版本暂不包含”。这是当前的真实能力，不是占位文案。
-- **T4/T5 helper**：依赖 T0 结论与 Developer ID 签名（Gate G3）；未验证的系统路径不提前实现。
+- **T4/T5 helper**：依赖 T0 结论与 Developer ID 签名（Gate G3）；证书与公证的获取步骤、CI secrets、校验命令见 `docs/ssh/signing-setup.md`。未验证的系统路径不提前实现。
 - **T6 剩余**：已开启时改端口的二次确认、macOS“打开 Sharing 设置”入口、Windows FoD 失败的两手准备（随 T5）、SSH 面板的组件级键盘/aria 测试（现只有会话与文案单测）。
 - **T7–T10**：按计划顺延。
 
@@ -40,7 +40,8 @@
 | 默认状态 | 关闭；首次开启需二次确认 |
 | 默认生命周期 | `app`（退出即关，最安全）；用户可切到 `persistent` |
 | helper 安装时机 | 首次开启时安装/注册，不在应用安装阶段静默安装 |
-| 多实例 | helper 按连接引用计数；最后一个客户端退出后才按 `app` 生命周期关闭 |
+| 多实例 | helper 按连接引用计数；最后一个客户端退出后才按 `app` 生命周期关闭（app 侧目前以进程为粒度持有一个会话，helper 侧计数属 T7） |
+| helper 不可用时的展示 | 可见：设置里常驻“远程访问”分组，开关禁用并说明“此版本暂不包含”，不静默隐藏（2026-11-04 决定） |
 | 非目标 | 公网穿透、端口转发 UI、SFTP 文件浏览、托盘常驻、自研 SSH 服务、macOS 自定义端口（v1 固定 22；需另立 `com.shrinkdrop.sshd`） |
 
 ## 1. 里程碑与依赖
@@ -70,28 +71,28 @@ T10 文档与发布
 
 ### Task 0 平台 PoC 与门禁
 
-**Files:** `docs/ssh/poc.md`（新建）、`scripts/ssh-poc/`（可选）
+**Files:** `docs/ssh/poc.md`（已建：自测手册，等待回填结果）、`scripts/ssh-poc/`（可选）
 
-- [ ] macOS 13/14/15/26 各跑一遍 `launchctl enable/bootstrap` 与 `bootout/disable`。
-- [ ] 验证 System Settings → Sharing → Remote Login 开关是否与 launchctl 状态一致。
-- [ ] 验证 `Allow access for` / `com.apple.access_ssh` 的实际生效；管理员与非管理员账户分别测试。
-- [ ] 验证应用防火墙放行、重启保持、关闭时现有 SSH 会话行为。
-- [ ] 验证 FileVault 重启后本地解锁前的 SSH 可达性。
-- [ ] 验证未签名 app 通过 `osascript` 提权；记录 SMAppService 在未签名/临时签名下的报错。
-- [ ] 验证从 DMG 直接运行（app translocation）时能否注册 helper；记录是否需要强制移动到 `/Applications`。
-- [ ] Windows 11 Pro 与 Home 各一台/VM：安装 OpenSSH Server 可选功能、启动 `sshd`、验证防火墙规则、重启保持。
-- [ ] Windows 验证非管理员查询状态、UAC 安装 helper、命名管道 ACL、离线/WSUS 失败表现。
-- [ ] macOS 验证在 `/etc/ssh/sshd_config.d/` 写 `Port 2222` 后 stock socket-activated listener 是否变化（预期不变）；记录自定义 LaunchDaemon 方案的可行性。
-- [ ] Windows 验证自定义端口 2222：改 `sshd_config`、重启服务、防火墙规则、22 是否停止监听。
-- [ ] Windows 验证随包 MSI 方案：固定版本下载、SHA256/Authenticode 校验、`msiexec /qn` 安装、服务名/端口、与 FoD 已装的冲突、卸载行为。
-- [ ] Windows 验证端口占用检测：先占用 2222，再开启，确认可拿到 PID/进程名并阻止；释放后成功。
-- [ ] 把命令、输出、结论写入 `docs/ssh/poc.md`。
+- [ ] macOS 13/14/15/26 各跑一遍 `launchctl enable/bootstrap` 与 `bootout/disable`（步骤见 `docs/ssh/poc.md` M2/M6/M8）。
+- [ ] 验证 System Settings → Sharing → Remote Login 开关是否与 launchctl 状态一致（M3）。
+- [ ] 验证 `Allow access for` / `com.apple.access_ssh` 的实际生效；管理员与非管理员账户分别测试（M5）。
+- [ ] 验证应用防火墙放行、重启保持、关闭时现有 SSH 会话行为（M7/M8/M9）。
+- [ ] 验证 FileVault 重启后本地解锁前的 SSH 可达性（M10）。
+- [ ] 验证未签名 app 通过 `osascript` 提权；记录 SMAppService 在未签名/临时签名下的报错。→ 需要 helper 代码，T4 后补测（不计入 G1–G3）。
+- [ ] 验证从 DMG 直接运行（app translocation）时能否注册 helper；记录是否需要强制移动到 `/Applications`。→ 注册部分需 T4，本轮只记 quarantine/签名现状（M11）。
+- [ ] Windows 11 Pro 与 Home 各一台/VM：安装 OpenSSH Server 可选功能、启动 `sshd`、验证防火墙规则、重启保持（W2–W5、W10）。
+- [ ] Windows 验证非管理员查询状态、离线/WSUS 失败表现（W1/W2/W8）；UAC 安装 helper、命名管道 ACL → T5 后补测。
+- [ ] macOS 验证在 `/etc/ssh/sshd_config.d/` 写 `Port 2222` 后 stock socket-activated listener 是否变化（预期不变，M12）；自定义 LaunchDaemon 方案另立项，不在本轮。
+- [ ] Windows 验证自定义端口：改 `sshd_config`、重启服务、防火墙规则、22 是否停止监听（W6）。
+- [ ] Windows 验证随包 MSI 方案：固定版本下载、SHA256/Authenticode 校验、`msiexec /qn` 安装、服务名/端口、与 FoD 已装的冲突、卸载行为（W9，只在干净 VM/快照上做）。
+- [ ] Windows 验证端口占用检测：先占用目标端口，再开启，确认可拿到 PID/进程名并阻止；释放后成功（W7）。
+- [ ] 把命令、输出、结论回填 `docs/ssh/poc.md` 并提交（回帖只放摘要）。
 
 **Gate G1：** 如果 macOS `launchctl` 路径在目标版本不可靠，先决定回退到 `systemsetup` + Full Disk Access 引导，还是缩小功能范围；不要带着未验证路径进入实现。
 **Gate G2：** 如果 Windows Home 不可用，功能在 Home 上隐藏；支持矩阵按实测结果写死。
-**Gate G3：** 确认 macOS helper 必须在 Developer ID 签名下才能工作；未签名包不作为发布候选。
+**Gate G3：** 发布产物必须通过客观签名校验：`codesign --verify --strict`、`spctl -a -vvv -t install <pkg>`、`stapler validate` 全绿；证书与公证步骤见 `docs/ssh/signing-setup.md`。未签名构建不作为发布候选。
 
-**Acceptance:** 所有 Gate 有结论；研究文档中的“待验证”项有实测记录。
+**Acceptance:** 所有 Gate 有结论；`docs/ssh/poc.md` 的结果表已回填并提交；标注“T4/T5 后补测”的项不计入本轮。
 
 ---
 
@@ -273,11 +274,11 @@ T10 文档与发布
 
 ### Task 8 打包、签名、升级、卸载
 
-**Files:** `.github/workflows/release.yml`、`scripts/build-macos-pkg.mjs`、`src-tauri/tauri.conf.json`、`scripts/collect-installers.mjs`
+**Files:** `.github/workflows/release.yml`、`scripts/build-macos-pkg.mjs`、`src-tauri/tauri.conf.json`、`scripts/collect-installers.mjs`、`docs/ssh/signing-setup.md`
 
 - [ ] macOS：构建 universal helper（arm64 + x86_64），`lipo` 合并；放入 `Contents/Resources`。
 - [ ] macOS：plist 放入 `Contents/Library/LaunchDaemons`；确认 Tauri bundler 不会丢掉该目录，必要时在打包脚本中补。
-- [ ] macOS：按“helper → framework → app”顺序签名；hardened runtime；公证与 staple；`codesign --verify --deep --strict`、`spctl -a -vv`、`stapler validate`。
+- [ ] macOS：按“helper → framework → app → pkg(productsign) → dmg”顺序签名；hardened runtime；公证与 staple；校验用 `codesign --verify --strict`、`spctl -a -vvv -t install <pkg>`、`stapler validate`（与 Gate G3 一致）。
 - [ ] macOS：CI 增加 Developer ID 证书与公证密钥；当前未签名构建不得作为 SSH 功能的发布候选。
 - [ ] macOS：检测 app 是否从 DMG/非 `/Applications` 运行；需要时引导移动，避免 SMAppService 注册失败。
 - [ ] macOS：处理 app 被移动/删除后的 LaunchDaemon 残留：启动时检测并重新注册；helper 在 app bundle 不存在时退出，避免 KeepAlive crash loop；文档给出登录项清理步骤。
