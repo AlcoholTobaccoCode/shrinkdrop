@@ -1,7 +1,7 @@
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -63,6 +63,7 @@ function fixture() {
   }
 
   function commitFile(cwd: string, name: string, text: string) {
+    mkdirSync(dirname(join(cwd, name)), { recursive: true });
     writeFileSync(join(cwd, name), text);
     git(['add', '--', name], cwd);
     git(['commit', '-m', `Add ${name}`], cwd);
@@ -123,10 +124,12 @@ afterEach(() => {
 });
 
 describe('release scripts with isolated local remotes', () => {
-  it('bumps exactly four version files, creates an annotated tag, and publishes the same commit and tag to both remotes', () => {
+  it('bumps exactly four version files, tags the private release, and mirrors a filtered commit and tag to the public remote', () => {
     const f = fixture();
     f.git(['config', 'push.followTags', 'true']);
     f.git(['tag', '-a', 'unrelated-local-tag', '-m', 'Must remain local']);
+    f.commitFile(f.work, 'org.private/secret.txt', 'Organization-only content\n');
+    f.git(['push', '--no-follow-tags', '--quiet', 'org', 'main']);
     const before = f.localState();
 
     expectSuccess(f.release('patch', '--yes'));
@@ -139,11 +142,23 @@ describe('release scripts with isolated local remotes', () => {
     expect(f.git(['status', '--porcelain', '--untracked-files=all'])).toBe('');
     expect(f.git(['cat-file', '-t', 'refs/tags/v1.2.4'])).toBe('tag');
     expect(f.git(['rev-parse', 'v1.2.4^{}'])).toBe(head);
-    const tagObject = f.git(['rev-parse', 'refs/tags/v1.2.4']);
+
+    // 组织私仓：私密提交与其注释标签。
+    expect(f.git(['rev-parse', 'refs/heads/main'], f.org)).toBe(head);
+    expect(f.git(['cat-file', '-t', 'refs/tags/v1.2.4'], f.org)).toBe('tag');
+    expect(f.git(['rev-parse', 'v1.2.4^{}'], f.org)).toBe(head);
+    expect(f.git(['ls-tree', '-r', '--name-only', 'main'], f.org)).toContain('org.private/secret.txt');
+
+    // 公共仓库：镜像提交、同名标签、无私仓路径，且私有提交本身不在公共历史中。
+    const publicHead = f.git(['rev-parse', 'refs/heads/main'], f.origin);
+    expect(publicHead).not.toBe(head);
+    expect(f.git(['rev-parse', 'refs/tags/v1.2.4'], f.origin)).toBe(publicHead);
+    expect(f.git(['log', '-1', '--format=%B', 'main'], f.origin)).toContain(`Source-Commit: ${head}`);
+    expect(f.git(['show', 'main:package.json'], f.origin)).toContain('"version": "1.2.4"');
+    const publicPaths = f.git(['log', '--all', '--name-only', '--format=', 'main'], f.origin).split('\n');
+    expect(publicPaths.filter(path => path.startsWith('org.private'))).toEqual([]);
+    expect(f.command('git', ['cat-file', '-e', head], f.origin).status).not.toBe(0);
     for (const remote of [f.org, f.origin]) {
-      expect(f.git(['rev-parse', 'refs/heads/main'], remote)).toBe(head);
-      expect(f.git(['rev-parse', 'refs/tags/v1.2.4'], remote)).toBe(tagObject);
-      expect(f.git(['rev-parse', 'v1.2.4^{}'], remote)).toBe(head);
       expect(f.git(['for-each-ref', '--format=%(refname)', 'refs/tags'], remote)).toBe('refs/tags/v1.2.4');
     }
   }, 30_000);
@@ -219,6 +234,50 @@ describe('release scripts with isolated local remotes', () => {
     expect(f.remoteRefs(f.org)).toBe(orgBefore);
     expect(f.localState()).toEqual(localBefore);
     expect(readFileSync(join(f.work, 'untracked.txt'), 'utf8')).toBe('Untracked local content\n');
+  }, 30_000);
+
+  it('mirrors org main into public main without org.private or private history', () => {
+    const f = fixture();
+    const publisher = f.publisher(f.org, 'publisher');
+    const initial = f.git(['rev-parse', 'HEAD'], publisher);
+    const secret = f.commitFile(publisher, 'org.private/accounts.json', '{"key":"must-not-leak"}\n');
+    const feature = f.commitFile(publisher, 'feature.txt', 'Public feature\n');
+    f.git(['push', '--quiet', 'origin', 'main'], publisher);
+
+    expectSuccess(f.sync('--yes'));
+
+    const publicMain = f.git(['rev-parse', 'refs/heads/main'], f.origin);
+    expect(publicMain).not.toBe(feature);
+    expect(f.git(['rev-parse', 'main^'], f.origin)).toBe(initial);
+    expect(f.git(['show', 'main:feature.txt'], f.origin)).toBe('Public feature');
+    expect(f.git(['log', '-1', '--format=%B', 'main'], f.origin)).toContain(`Source-Commit: ${feature}`);
+    expect(f.git(['log', '--all', '--name-only', '--format=', 'main'], f.origin).split('\n'))
+      .not.toContain('org.private/accounts.json');
+    expect(f.command('git', ['cat-file', '-e', secret], f.origin).status).not.toBe(0);
+
+    const publicBefore = f.remoteRefs(f.origin);
+    const repeat = f.sync('--yes');
+    expectSuccess(repeat);
+    expect(repeat.stdout).toContain('无需推送');
+    expect(f.remoteRefs(f.origin)).toBe(publicBefore);
+  }, 30_000);
+
+  it('skips commits that only touch org.private and leaves public main unchanged', () => {
+    const f = fixture();
+    const publisher = f.publisher(f.org, 'publisher');
+    f.commitFile(publisher, 'org.private/secret.txt', 'Internal credentials\n');
+    f.commitFile(publisher, 'app.txt', 'Public application work\n');
+    f.git(['push', '--quiet', 'origin', 'main'], publisher);
+    expectSuccess(f.sync('--yes'));
+    const publicBefore = f.remoteRefs(f.origin);
+
+    f.commitFile(publisher, 'org.private/notes.txt', 'More internal notes\n');
+    f.git(['push', '--quiet', 'origin', 'main'], publisher);
+    const result = f.sync('--yes');
+
+    expectSuccess(result);
+    expect(result.stdout).toContain('无需推送');
+    expect(f.remoteRefs(f.origin)).toBe(publicBefore);
   }, 30_000);
 
   it('refuses to overwrite a diverged public main', () => {
