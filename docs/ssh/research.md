@@ -11,13 +11,15 @@
 | 协议层是否支持 | 支持。macOS 自带 OpenSSH Server；Windows 10 1809+/11 以可选功能提供 OpenSSH Server；两边都是 SSH-2，带 SFTP 子系统。 |
 | 策略层是否支持 | 有条件支持。启用/停用都需要管理员权限；macOS 官方 `systemsetup` 还要求 Full Disk Access，不能直接给普通 app 用；Windows 需要装可选功能、起服务、过防火墙。 |
 | “后台常驻” | 系统原生支持，不需要自写 daemon。macOS 保持 Remote Login 开启后由 launchd 按连接拉起 sshd；Windows 把 `sshd` 服务设为 Automatic 即可。 |
+| 自定义端口 | Windows 支持：改 `sshd_config` 的 `Port`、重启服务、同步防火墙。macOS v1 不支持：stock Remote Login 的监听端口由 launchd 的 `SockServiceName=ssh` 决定，改端口需要自建 LaunchDaemon，已超出“系统 Remote Login”模型。 |
+| Windows 安装来源 | 优先系统可选功能（FoD）；失败时提供“官网下载”和“内置安装（随包固定版 MSI）”；不静默安装随包版本。 |
 | “app 运行时” | 要“app 退出后无提示关闭”，必须有常驻特权 helper（macOS LaunchDaemon / Windows LocalSystem service）。没有 helper 也能做，但退出时要再弹一次管理员授权，体验不可接受。 |
 | 最大阻塞 | 当前安装包未签名、未公证（README 已注明）。macOS 的 SMAppService helper 需要 Developer ID 签名与 Team ID 关联；Windows 服务虽可未签名安装，但 SmartScreen/AV/企业策略会拦。 |
 | 能否上 Mac App Store | 不行。沙箱 app 不能安装 LaunchDaemon，也不能修改 Remote Login；只能 Developer ID 直发。 |
 | 能否复用现有 PIN/账号 | 不能。系统 sshd 使用 OS 账户 + 密码/公钥；分享功能的 PIN/账号体系只属于 axum 分享服务。要 app 管理凭据只能自研 SSH 服务，成本高且不再是“宿主机 ssh”。 |
 | 建议 | 不托管自己的 sshd；helper 只做控制面。先做“后台常驻”验证，再做 helper 支持“app 运行时”。 |
 
-证据标记：`[实测]` 本机 macOS 26.2；`[官方]` Apple/Microsoft 文档；`[社区]` 第三方实践或发行版实现；`[推断]` 工程判断，需 PoC 确认。
+证据标记：`[实测]` 本机 macOS 26.2；`[官方]` Apple/微软 文档；`[社区]` 第三方实践或发行版实现；`[推断]` 工程判断，需 PoC 确认。
 
 ## 与现有架构的关系
 
@@ -25,6 +27,22 @@
 - 设置持久化在 `settings.json`，窗口关闭时统一停分享、释放防休眠。见 `src-tauri/src/lib.rs` 的 `CloseRequested`。
 - 启动时已有 `SleepInhibitor.reconcile(...)` 的先例，SSH 也可以按“启动对齐系统状态、退出按生命周期收尾”的方式接入。
 - 安装包为 macOS 通用（Intel/Apple Silicon）DMG/PKG、Windows NSIS/MSI，当前未签名；README 明确写明“暂未配置开发者签名及 macOS 公证”。
+
+## sshd 从哪里来、谁启动
+
+| | macOS | Windows |
+|---|---|---|
+| sshd 来源 | 系统内置 `/usr/sbin/sshd` | Windows 可选功能 `OpenSSH.Server` |
+| 是否由 app 下载 | 否，系统自带 | 首选 FoD；失败时可运行随包固定版 MSI，或跳官网手动下载 |
+| 谁启动 | launchd job `com.openssh.sshd`，按连接拉起 | SCM 服务 `sshd`，常驻 |
+| 运行身份 | root | 系统服务账户（通常 LocalSystem） |
+| 配置文件 | `/etc/ssh/sshd_config` + `sshd_config.d/` | `%ProgramData%\ssh\sshd_config` |
+| 认证 | macOS 本地账户 / PAM | Windows 本地账户 / 密码或公钥 |
+
+- **不用用户自己装的 sshd**（例如 Homebrew 的 OpenSSH），也不走用户 PATH；固定使用系统路径/系统服务。
+- **不是 app 私有 sshd**：host key、账户、PAM/服务权限都在系统层；app 只做开关、生命周期、端口和状态展示。Windows 的随包 MSI 只是安装介质，装完仍是系统级 `sshd` 服务。
+- macOS 端口 22 的 listener 由 launchd 持有；Windows 的 `sshd` 由服务管理器持有。helper 只控制它们，不托管 sshd 进程。
+- 如果用户机器上已有别的 sshd 占用目标端口，按 `port_in_use` 处理；不接管、不杀进程。
 
 ## macOS
 
@@ -74,6 +92,17 @@
    - sshd 需要 root 做账户认证、PAM、setuid、host key 管理；从 app 里起子进程会与系统 job 冲突，也绕不开权限。
    - 正确做法是让 launchd 管 sshd，我们只控制 `com.openssh.sshd` 的 enable/disable。
 
+### 自定义端口（macOS）
+
+- stock job 是 socket activation：监听端口来自 `/System/Library/LaunchDaemons/ssh.plist` 的 `Sockets.Listeners.SockServiceName = ssh`，sshd 由 launchd 以 inetd 方式拉起。`sshd_config` 里的 `Port` 是否还能改变实际 listener，需要在 T0 实测确认；按机制推断不能。`[推断]`
+- 要真正改端口，必须新增/替换一个 LaunchDaemon：用自定义 `Sockets` 端口，或直接运行 `/usr/sbin/sshd -D -p <port>`；同时停用 stock `com.openssh.sshd`。
+- 这条路的代价：
+  - System Settings 的 Remote Login 开关不再反映真实状态；
+  - host key、PAM/ACL、防火墙、开机启动、卸载都要自己维护；
+  - 与系统 job 的 label/端口冲突需要处理。
+- **v1 决策：macOS 只支持 22。** UI 在 macOS 上隐藏端口输入或置灰；如果产品必须支持 macOS 自定义端口，单独立项做 `com.shrinkdrop.sshd`，不要和 stock Remote Login 混用。
+- TCP proxy（自定义端口 → 22）只是转发，仍依赖 22，且多一个常驻进程，不推荐。
+
 ### macOS 控制面建议
 
 - 常驻 helper：LaunchDaemon，root 运行，通过 Unix domain socket 或 XPC 接收固定动词（status/enable/disable/set-lifetime），不提供任意命令执行。
@@ -100,8 +129,9 @@
 | 配置 | `%ProgramData%\ssh\sshd_config`，缺失时首次启动生成 | `[官方]` |
 | host key | 默认在 `%ProgramData%\ssh`，首次服务启动自动生成 | `[官方]` |
 | 防火墙 | 安装时创建并启用 `OpenSSH-Server-In-TCP`（入站 22） | `[官方]` |
+| 端口 | 默认 22；`%ProgramData%\ssh\sshd_config` 的 `Port` 可改，重启服务后生效；防火墙需同步 | `[官方]` |
 | 启动类型 | 官方把 `Set-Service -Name sshd -StartupType Automatic` 列为“可选但推荐”，说明默认不是自动；后台常驻必须显式设置 | `[官方]` |
-| 认证 | 仅密码与 `publickey`；不支持 Microsoft Entra 账户 | `[官方]` |
+| 认证 | 仅密码与 `publickey`；不支持 微软 Entra 账户 | `[官方]` |
 | 管理员公钥 | 管理员组使用 `%ProgramData%\ssh\administrators_authorized_keys`，ACL 只允许 SYSTEM/Administrators | `[官方]` |
 | 家庭版 | 官方支持矩阵按 build 限定，未按 SKU 排除；Home 是否可选功能完整可用需实机确认 | `[官方]/[待验证]` |
 
@@ -139,10 +169,46 @@
    - 域环境可能通过 GPO 关闭可选功能、覆盖防火墙规则（本地规则不生效）、用 AppLocker/WDAC 拦 helper。
    - SmartScreen 对未签名 helper 不友好；Authenticode 签名不是功能必需，但发布必需。
 
+### 自定义端口（Windows）
+
+- 支持。改 `%ProgramData%\ssh\sshd_config` 的 `Port`，`Restart-Service sshd` 后生效；防火墙规则要对应新端口。
+- 注意 OpenSSH 的 `Port` 可以出现多次，多个 `Port` 会同时监听。要“换端口”而不是“加端口”，必须解析并禁用其它 active `Port` 行。
+- 建议 helper 用带标记的托管块（例如 `# shrinkdrop begin/end`），改前备份原文件，改后 `sshd -t` 校验；失败时回滚原配置。
+- 开启前检查端口占用：
+  - 被其它进程占用 → 返回 `port_in_use`，带端口/PID/进程名，不写配置、不启动服务；
+  - 被本机 `sshd` 占用且就是目标端口 → 视为幂等，不重复启动。
+- 防火墙：自定义端口用独立规则（如 `shrinkdrop-ssh-<port>`），不要改 stock `OpenSSH-Server-In-TCP`；关闭/卸载时删除自己创建的规则。
+- 端口范围 1–65535；<1024 在 Windows 上由 LocalSystem 绑定没有额外门槛，但仍提示可能与其他系统服务冲突。
+- 端口变更时现有 SSH 会话会断开；UI 需要确认与提示。
+
+### 安装来源与两手准备（Windows）
+
+优先顺序：
+
+1. **已有 sshd**：检测 `sshd` 服务或 `%SystemRoot%\System32\OpenSSH\sshd.exe` / `%ProgramFiles%\OpenSSH\sshd.exe`；已存在就直接使用，不重复安装。
+2. **系统可选功能（首选）**：`Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0`，由 Windows Update/FoD 提供，随系统更新，最省心。
+3. **官网下载（手动）**：FoD 失败/离线/被策略拦截时，打开官方发布页：
+   `https://github.com/PowerShell/Win32-OpenSSH/releases`
+   用户自行下载 `OpenSSH-Win64-v<version>.msi` 并安装；app 只负责打开页面和“重新检测”，不自动执行下载的文件。
+   也可以引导用户走 Windows 设置 → 可选功能 → OpenSSH Server（微软 Learn 的安装步骤），效果等同 FoD。
+4. **内置安装（随包）**：app 内固定一个经过验证的 `OpenSSH-Win64-v<version>.msi`，随安装包分发；用户点击“内置下载/内置安装”后，由 helper 校验并唤起 MSI。
+
+内置 MSI 的要求：
+
+- 固定版本 + 固定 SHA256，写入随包 manifest；升级 app 时才更新，不自动追最新。
+- 执行前校验 SHA256；若 MSI 带 Authenticode 签名，再校验签名；不匹配直接拒绝，不运行。
+- 通过 `msiexec /i "<msi>" /qn /norestart` 安装（helper 是 SYSTEM，session 0 不显示 MSI UI；进度由 app 展示）。
+- 记录 `installedByApp=true`；如果系统里已有 `sshd` 服务，禁止再装，避免 FoD 与 standalone 两套 OpenSSH 冲突。
+- 随包附 OpenSSH 的 BSD 许可证文本；MSI 约 6.9 MB，App 体积会增加。
+- 卸载 app 时**不自动删除系统级 OpenSSH**；只有明确提示“这是随包安装的 OpenSSH”且用户确认后才卸载，避免影响其他工具。
+- Win32-OpenSSH 的 release 目前多标注 preview；必须选一个验证过的版本并跟 app 版本一起更新，不能把它当“永远最新”的组件。
+
+> UI 文案可以叫“内置下载”，实际动作是“运行随包 MSI 安装”，不是再下载一次。
+
 ### Windows 控制面建议
 
-- helper Windows 服务，`LocalSystem`，安装时一次 UAC；命名管道只允许安装用户 SID 与 SYSTEM 访问。
-- 固定动词：`status`、`enable(lifetime)`、`disable`、`set_lifetime`。
+- helper Windows 服务，`LocalSystem`，安装时一次 UAC；命名管道只允许当前 console 用户 SID、Administrators 与 SYSTEM 访问。
+- 固定动词：`status`、`enable(lifetime, port)`、`disable`、`set_lifetime`、`set_port`。
 - 服务内部：
   - `OpenSCManager` / `OpenService("sshd")`；
   - `StartService` / `ControlService(SERVICE_CONTROL_STOP)`；
@@ -164,7 +230,7 @@ enabled --reboot, lifetime=persistent--> enabled（OS 负责）
 enabled --reboot, lifetime=app--> disabled（helper 负责不启动/关闭）
 ```
 
-错误态至少包含：`needs_admin`、`feature_missing`、`service_missing`、`firewall_blocked`、`managed_by_policy`、`port_conflict`、`helper_unavailable`、`unknown`。
+错误态至少包含：`needs_admin`、`feature_missing`、`service_missing`、`firewall_blocked`、`managed_by_policy`、`port_in_use`、`unsupported_custom_port`、`helper_unavailable`、`unknown`。
 
 ### 所有权规则
 
@@ -207,6 +273,7 @@ enabled --reboot, lifetime=app--> disabled（helper 负责不启动/关闭）
 - 开启 SSH 等于把本机账户的远程登录面暴露到局域网；系统 sshd 不认 app 的 PIN/链接 token，现有分享的访问控制不能复用。
 - 默认密码认证是主要风险；建议 UI 默认提示“仅限可信局域网”，并在后续版本提供“仅公钥登录”开关（macOS 写 `/etc/ssh/sshd_config.d/`，Windows 写 `%ProgramData%\ssh\sshd_config`，都要提权并重启服务）。
 - 建议默认只允许当前用户/管理员组；macOS 引导到 System Settings 的 “Allow access for”，Windows 用 `AllowGroups` 或防火墙限制。
+- 自定义端口不是安全边界，只降低自动化扫描噪音；仍需仅可信局域网、公钥登录、用户/组限制和防火墙。
 - 关闭服务会断开现有会话；不要在用户不知情时自动关闭。
 - 显示 host key 指纹和 `ssh user@host` 命令，方便用户首次连接时核对。
 - 不要在 helper 里暴露“执行任意命令”的接口；只接受固定动词和受控参数。
@@ -220,7 +287,8 @@ enabled --reboot, lifetime=app--> disabled（helper 负责不启动/关闭）
 ```text
 SshSettings {
   enabled: boolean,
-  lifetime: "app" | "persistent"
+  lifetime: "app" | "persistent",
+  port: number          // 默认 22；Windows 可改，macOS v1 固定 22
 }
 ```
 
@@ -235,7 +303,9 @@ SshRuntime {
   listening: boolean,
   username: string,
   host: string,
-  port: 22,
+  port: number,
+  installSource: "fod" | "standalone" | "bundled" | null,
+  bundledVersion: string | null,
   fingerprint: string | null,
   error: string | null
 }
@@ -243,16 +313,19 @@ SshRuntime {
 
 接入点：
 
-- `src-tauri/src/settings.rs`：`Settings` 增加 `ssh`，`SettingsView`/`SettingsUpdate` 同步；默认 `enabled=false`、`lifetime="persistent"`（或 `"app"`，产品决定）。
+- `src-tauri/src/settings.rs`：`Settings` 增加 `ssh`，`SettingsView` 包含 `ssh`；通用 `SettingsUpdate` 不包含 `ssh`，`enabled`/`lifetime`/`port` 走专用命令，默认 `enabled=false`、`lifetime="app"`、`port=22`。
 - `src-tauri/src/ssh/mod.rs`：`SshManager`，持有运行态与 helper 连接；启动时 `reconcile`，关窗时 `shutdown`。
-- `src-tauri/src/lib.rs`：`.manage(SshManager::default())`，注册 `ssh_status` / `ssh_enable` / `ssh_disable` / `ssh_set_lifetime`，在 `CloseRequested` 里调用 shutdown；注意与现有 share/power 清理一样避免重复执行。
-- `src/SettingsApp.vue`：新增“远程访问”或“SSH”分组；开关 + 生命周期二选一 + 状态/命令/指纹 + “打开系统设置”按钮。
-- `src/core/settings/types.ts`：同步 `SettingsView`、`SettingsUpdatePayload`、adapter 方法。
+- `src-tauri/src/lib.rs`：`.manage(SshManager::default())`，注册 `ssh_status` / `ssh_enable` / `ssh_disable` / `ssh_set_lifetime` / `ssh_set_port`，在 `CloseRequested` 里调用 shutdown；注意与现有 share/power 清理一样避免重复执行。
+- `src/SettingsApp.vue`：新增“远程访问”或“SSH”分组；开关 + 生命周期二选一 + 端口 + 状态/命令/指纹 + “打开系统设置”按钮。
+- `src/core/settings/types.ts`：同步 `SettingsView`、adapter 方法；`SettingsUpdatePayload` 不含 `ssh`，避免覆盖运行态。
 - helper：macOS 放 `Contents/Library/LaunchDaemons` + `Contents/Resources`；Windows 作为服务 exe 放进 resources，由安装器或首次提权安装。
 
 UI 建议：
 
 - 首次开启必须二次确认，说明“将允许局域网内使用本机账户登录”。
+- 端口输入：Windows 可编辑；macOS v1 只读显示 22。默认 22，范围 1–65535。
+- 开启前检测端口占用：被其它进程占用时显示端口/PID/进程名并阻止开启；被本机 sshd 占用且为目标端口时按幂等处理。
+- 端口变更时提示现有 SSH 会话会断开；失败要回滚配置/防火墙并显示原因。
 - 生命周期用二段选择，不要藏在下拉里；切换时说明当前是否已生效。
 - 状态展示“已开启 / 由系统开启 / 需要管理员 / 受策略管理 / 辅助服务未安装”。
 - 提供复制 `ssh user@ip` 命令和指纹；macOS 提供跳转 Sharing 设置的按钮。
@@ -262,8 +335,8 @@ UI 建议：
 
 | 阶段 | 内容 | 验收 |
 |---|---|---|
-| P0 验证 | 不写产品代码，只在测试机跑 macOS `launchctl` 路径与 Windows VM 可选功能路径 | System Settings/服务状态一致；重启保持；关闭断开；防火墙放行；Home 版可用 |
-| P1 常驻 | 设置开关 + 生命周期（先只做后台常驻）+ 一次性提权 + 状态展示 | 开启后另一台机器可 SSH；app 退出后仍可连；重启后仍可连；关闭有提示 |
+| P0 验证 | 不写产品代码，只在测试机跑 macOS `launchctl` 路径与 Windows VM 可选功能路径 | System Settings/服务状态一致；重启保持；关闭断开；防火墙放行；Home 版可用；端口占用检测可用 |
+| P1 常驻 | 设置开关 + 生命周期（先只做后台常驻）+ 一次性提权 + 状态展示 | 开启后另一台机器可 SSH；app 退出后仍可连；重启后仍可连；关闭有提示；Windows 自定义端口生效且占用时被拦截 |
 | P2 helper | macOS LaunchDaemon / Windows 服务 + IPC + 心跳 + 所有权 + app 运行时 | app 退出/崩溃后自动关闭；用户手动开启不被误关；helper 卸载干净 |
 | P3 加固 | 仅公钥、用户/组限制、指纹展示、日志、受管设备文案 | 默认配置通过安全评审；错误路径可诊断 |
 
@@ -293,7 +366,9 @@ sudo launchctl disable system/com.openssh.sshd
 - 应用防火墙开启时是否放行；受管机器是否被 MDM 禁止。
 - 重启后是否保持；关闭时现有 SSH 会话是否立即断开。
 - 未签名 app 通过 `osascript` 提权是否可行；SMAppService 未签名注册的实际报错。
-- macOS 14/15/26 各跑一遍；至少覆盖 Apple Silicon 与 Intel。
+- 在 `/etc/ssh/sshd_config.d/` 写 `Port 2222`，确认 stock socket-activated listener 是否变化；预期不变。若不变，记录“自定义端口需自建 LaunchDaemon”。
+- 如评估自定义端口方案，额外验证自定义 `com.shrinkdrop.sshd` LaunchDaemon（2222）与 stock job 的端口/label 冲突。
+- macOS 13/14/15/26 各跑一遍；至少覆盖 Apple Silicon 与 Intel。
 
 ### Windows（测试 VM，管理员）
 
@@ -314,26 +389,33 @@ Get-NetFirewallRule -Name OpenSSH-Server-In-TCP
 - 重启后服务是否自动启动；停止服务是否断开现有会话。
 - 域 GPO/AppLocker/SmartScreen 对 helper 的影响。
 - 管理员账户与非管理员账户的 SSH 登录差异；`administrators_authorized_keys` ACL。
+- 自定义端口 2222：改 `sshd_config`、重启 `sshd`、创建对应防火墙规则、确认 22 不再监听。
+- 占用检测：先占用 2222（例如临时监听），再开启，确认返回 `port_in_use` 且未写配置/未启动服务；释放后重试成功。
+- 配置文件有多个 active `Port` 行时的处理与回滚；`sshd -t` 校验失败时恢复备份。
+- 随包 MSI：固定版本哈希/签名校验、`msiexec /qn` 安装、服务名/安装路径、与 FoD 已装的冲突、卸载影响。
+- 官网下载页 `https://github.com/PowerShell/Win32-OpenSSH/releases` 可打开；手动安装后 app 能重新检测到 `sshd`。
 
 ## 参考
 
-- Apple：Use the systemsetup command-line utility on macOS Catalina 10.15（`-setremotelogin` 需要 Full Disk Access）  
+- Apple：Use the systemsetup command-line utility on macOS Catalina 10.15（`-setremotelogin` 需要 Full Disk Access）
   https://support.apple.com/en-us/101653
-- Apple：Allow a remote computer to access your Mac（Remote Login 的 GUI、Allow access for）  
+- Apple：Allow a remote computer to access your Mac（Remote Login 的 GUI、Allow access for）
   https://support.apple.com/guide/mac-help/allow-a-remote-computer-to-access-your-mac-mchlp1066/mac
-- Apple：SMAppService（macOS 13+ 的 LaunchDaemon/LaunchAgent/LoginItem 注册）  
+- Apple：SMAppService（macOS 13+ 的 LaunchDaemon/LaunchAgent/LoginItem 注册）
   https://developer.apple.com/documentation/servicemanagement/smappservice
-- Apple：Updating helper executables from earlier versions of macOS（`Contents/Library/LaunchDaemons`、`BundleProgram`、用户批准）  
+- Apple：Updating helper executables from earlier versions of macOS（`Contents/Library/LaunchDaemons`、`BundleProgram`、用户批准）
   https://developer.apple.com/documentation/servicemanagement/updating-helper-executables-from-earlier-versions-of-macos
-- nix-darwin：openssh module（因 FDA 改用 launchctl enable/bootstrap）  
+- nix-darwin：openssh module（因 FDA 改用 launchctl enable/bootstrap）
   https://github.com/nix-darwin/nix-darwin/blob/nix-darwin-26.05/modules/services/openssh.nix
-- NIST macOS Security：SSH disable rule（launchctl 状态检查与关闭命令）  
+- NIST macOS Security：SSH disable rule（launchctl 状态检查与关闭命令）
   https://github.com/usnistgov/macos_security/blob/tahoe/rules/system_settings/system_settings_ssh_disable.yaml
-- Microsoft：Get started with OpenSSH Server for Windows（安装、启动、防火墙、Home/11 分栏）  
+- 微软：Get started with OpenSSH Server for Windows（安装、启动、防火墙、Home/11 分栏）
   https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_install_firstuse
-- Microsoft：OpenSSH Server configuration for Windows（sshd_config、AllowGroups、administrators_authorized_keys、Entra 限制）  
+- 微软：OpenSSH Server configuration for Windows（sshd_config、AllowGroups、administrators_authorized_keys、Entra 限制）
   https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh-server-configuration
-- Microsoft：OpenSSH for Windows overview（版本矩阵、组件）  
+- 微软：OpenSSH for Windows overview（版本矩阵、组件）
   https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh-overview
-- Windows OS Hub：允许非管理员启停服务（`sc sdset` / SDDL 权限）  
+- 微软/PowerShell：Win32-OpenSSH releases（独立 MSI 发布页）
+  https://github.com/PowerShell/Win32-OpenSSH/releases
+- Windows OS Hub：允许非管理员启停服务（`sc sdset` / SDDL 权限）
   https://woshub.com/set-permissions-on-windows-service/
