@@ -97,4 +97,6 @@ gh workflow run release.yml --repo AlcoholTobaccoCode/shrinkdrop --ref main
 
 设计与进度见 [轻量版设计](docs/lite/design.md)、[实现计划](docs/lite/plan.md)、[2026-10-20 交互补充](docs/lite/2026-10-20-enhancements.md)、[局域网分享设计](docs/share/design.md)。实际验证见 [本次验收](docs/lite/2026-10-20-verification.md)、[初版验收](docs/lite/verification.md)。
 
-AI 接入调研见 [MCP 与 Skill 接入](docs/ai/mcp-and-skills.md)。
+AI 接入调研见 [MCP 与 Skill 接入](docs/ai/mcp-and-skills.md)。远程访问见 [SSH 调研](docs/ssh/research.md) 与 [开发计划](docs/ssh/plan.md)。
+
+发布相关见 [变更日志](CHANGELOG.md)、[Changelog 规范](docs/changelog-spec.md)、[包管理器接入方案](docs/distribution/package-managers.md)。
