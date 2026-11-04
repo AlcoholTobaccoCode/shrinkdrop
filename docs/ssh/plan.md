@@ -11,7 +11,7 @@
 
 第一轮落地（协议、领域模型、控制面、设置面板骨架）：见本节末尾的“第一轮记录”。
 
-第二轮新增（Windows 全功能 + macOS 只读路线；`cargo test` 140 项、`pnpm test` 128 项、`vue-tsc` 通过）：
+第二轮新增（Windows 全功能 + macOS 只读路线；`cargo test` 141 项 + helper 61 项、`pnpm test` 128 项、`vue-tsc`、`vite build` 通过）：
 
 - **T5 Windows helper**：新增 crate `src-tauri/ssh-helper`（`shrinkdrop-ssh-helper`）。
   - `helper.rs`：固定动词的业务核心（所有权、两种生命周期、端口占用预检、失败回滚、会话引用计数、卸载还原），平台无关、可在任意平台单测。
@@ -30,9 +30,9 @@
 - **T0 平台 PoC**：自测手册在 `docs/ssh/poc.md`，需 QingShan 在真实 Windows / macOS 测试机执行；Windows 上的 UAC、服务安装、真实 SSH 登录、Home SKU 可用性都还没实测。
 - **Windows E2E**：本轮只在 macOS 上做了交叉类型检查（`cargo check --target x86_64-pc-windows-msvc`），没有在 Windows 上编译、安装服务或跑真实登录。SmartScreen/AV、服务 ACL、管道 ACL 的实际行为需要真机验证。
 - **T4 macOS helper**：签名路线（Developer ID + SMAppService）未开始；不签名路线已落地为只读后端（`macos_readonly.rs`）。
-- **T8 打包/签名/升级**：helper 二进制尚未进入安装包（`src-tauri/tauri.conf.json` 的 `externalBin`/resources 未配置），随包 MSI 与 `.sha256` 清单未加入资源；因此 Windows 上的“安装辅助服务”当前找不到 exe。
+- **T8 打包/签名/升级**：helper 已作为 sidecar 进安装包（`tauri.windows.conf.json` + `scripts/build-ssh-helper.mjs`），但随包 OpenSSH MSI 与 `.sha256` 清单还没加入资源；升级替换服务二进制与安装器卸载钩子未接。
 - **T9 安全评审**：IPC DACL、SID + linked token 校验、命令白名单（`runner::resolve` 只放行 System32 下的已知工具）、失败路径不重试都已实现，但**未经独立安全评审或渗透测试**。
-- **T10 文档**：用户文档与故障排查还没写。
+- **T10 文档**：README「远程访问（SSH）」、隐私说明、发布检查表、故障排查（`docs/ssh/troubleshooting.md`）已补；发布说明与版本号待发版时写。
 
 ### 第一轮记录（2026-11-04）
 
@@ -346,7 +346,7 @@ T10 文档与发布
 **Files:** `README.md`、`docs/ssh/research.md`、`docs/ssh/plan.md`、`docs/privacy.md`、`docs/release-checklist.md`
 
 - [ ] 用户文档：如何开启、两种生命周期、端口设置（Windows 自定义 / macOS 固定 22）、如何连接、如何关闭、如何卸载 helper。
-- [ ] 故障排查：连不上、端口占用、端口改后未放行防火墙、睡眠、FileVault、非管理员、策略禁用、helper 未批准。
+- [x] 故障排查：连不上、端口占用、端口改后未放行防火墙、睡眠、FileVault、非管理员、策略禁用、helper 未批准（`docs/ssh/troubleshooting.md`）。
 - [ ] Windows 安装兜底说明：FoD 失败时“官网下载”链接、随包 MSI 版本/哈希、内置安装步骤、UAC/重启提示、卸载 app 不自动删除 OpenSSH。
 - [ ] 隐私说明：SSH 使用 OS 账户；应用不收集凭据；日志只在本地。
 - [ ] 安全说明：建议仅可信局域网、优先公钥、host key 指纹核对。
@@ -394,4 +394,4 @@ T10 文档与发布
 - [ ] 签名轨：macOS helper 走 SMAppService、签名/公证通过；不签名轨：macOS 无 helper 残留（G3b）。Windows helper 安装/卸载干净（签名可选，未签名时 README 写明 SmartScreen 步骤）。
 - [ ] 真实 SSH 登录验证通过；错误路径有可操作文案。
 - [ ] 现有压缩、分享、防休眠、设置与退出流程回归通过。
-- [ ] 文档、隐私说明、故障排查与发布检查表更新。
+- [x] 文档、隐私说明、故障排查与发布检查表更新。
