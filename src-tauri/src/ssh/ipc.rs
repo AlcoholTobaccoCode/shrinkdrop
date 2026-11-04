@@ -148,6 +148,22 @@ fn map_read_error(error: FrameError) -> SshError {
     }
 }
 
+/// 轮询直到条件成立或超时；返回是否成立。提权安装不等待子进程，必须靠这个确认就绪。
+pub fn wait_until_ready(mut ready: impl FnMut() -> bool, timeout: std::time::Duration) -> Option<()> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if ready() {
+            return Some(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(POLL);
+    }
+}
+
+const POLL: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// 打开一次会话的传输层；生产实现是 Windows 命名管道。
 pub trait Transport: Send + Sync {
     fn open(&self) -> Result<Session, SshError>;
@@ -404,6 +420,30 @@ mod tests {
         assert!(info.available);
         assert!(info.writable);
         assert!(info.version.is_some());
+    }
+
+    #[test]
+    fn wait_until_ready_stops_on_timeout_and_on_success() {
+        use std::cell::Cell;
+        use std::time::{Duration, Instant};
+
+        let attempts = Cell::new(0);
+        assert_eq!(
+            wait_until_ready(
+                || {
+                    attempts.set(attempts.get() + 1);
+                    true
+                },
+                Duration::from_millis(100)
+            ),
+            Some(())
+        );
+        assert_eq!(attempts.get(), 1, "第一次就绪时不该继续轮询");
+
+        let start = Instant::now();
+        let never = wait_until_ready(|| false, Duration::from_millis(120));
+        assert_eq!(never, None);
+        assert!(start.elapsed() >= Duration::from_millis(120));
     }
 
     #[test]

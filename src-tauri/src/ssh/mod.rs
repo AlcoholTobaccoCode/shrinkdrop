@@ -21,6 +21,8 @@ use platform::Platform;
 
 #[cfg(target_os = "macos")]
 mod macos_readonly;
+// 只有 Windows 后端和测试用到 IPC 客户端；其它平台的构建里不引入，避免死代码。
+#[cfg(any(target_os = "windows", test))]
 mod ipc;
 mod unavailable;
 #[cfg(target_os = "windows")]

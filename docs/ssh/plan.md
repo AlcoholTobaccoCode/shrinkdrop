@@ -302,10 +302,11 @@ T10 文档与发布
 - [ ] macOS：检测 app 是否从 DMG/非 `/Applications` 运行；需要时引导移动，避免 SMAppService 注册失败。
 - [ ] macOS：处理 app 被移动/删除后的 LaunchDaemon 残留：启动时检测并重新注册；helper 在 app bundle 不存在时退出，避免 KeepAlive crash loop；文档给出登录项清理步骤。
 - [ ] Windows：签名 app 与 helper（Authenticode + 时间戳）；配置 Tauri Windows 签名。
-- [ ] Windows：随包固定版 `OpenSSH-Win64-v<version>.msi` + SHA256 manifest + OpenSSH LICENCE；构建时校验哈希（若有签名一并校验），失败则阻断发布；体积增加约 7 MB。
+- [ ] Windows：随包固定版 `OpenSSH-Win64-v<version>.msi` + SHA256 manifest + OpenSSH LICENCE；构建时校验哈希，失败则阻断发布。**校验与安装逻辑已实现（`ssh-helper/src/bundled.rs`），但 MSI 与清单还没加入仓库/构建产物。**
 - [ ] Windows：随包 MSI 只在用户点击“内置安装”时运行；不静默安装；卸载 app 不自动删除系统级 OpenSSH。
-- [ ] Windows：helper 放入安装包/ProgramData；首次提权安装；升级时替换服务二进制。
-- [ ] Windows：NSIS/MSI 卸载路径停止并删除服务；恢复 `sshd_config` 备份；删除 `shrinkdrop-ssh-<port>` 防火墙规则；保留/清理状态按产品决定。
+- [x] Windows：helper 作为 sidecar 进安装包（`src-tauri/tauri.windows.conf.json` 的 `externalBin` + `scripts/build-ssh-helper.mjs` 生成 `binaries/shrinkdrop-ssh-helper-<triple>.exe`，CI 在 Windows job 里先构建）；首次开启时由 UAC 提权安装服务。
+- [ ] Windows：升级时替换服务二进制（未做；当前升级会因 exe 被占用而需要先停服务）。
+- [ ] Windows：NSIS/MSI 卸载路径停止并删除服务（`--uninstall-service` 已实现，但还没接进安装器卸载钩子）；恢复 `sshd_config` 备份与删除 `shrinkdrop-ssh-<port>` 规则由 `shutdown_helper`/卸载时的 `Helper::uninstall` 完成。
 - [ ] 版本握手：app/helper 版本不一致时给“更新辅助服务”入口，不静默失败。
 - [ ] 体积与启动开销：记录 helper 大小、服务常驻内存、开启耗时。
 

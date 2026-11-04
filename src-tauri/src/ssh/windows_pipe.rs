@@ -16,13 +16,19 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
-use super::ipc::{Session, Transport};
+use super::ipc::{wait_until_ready, Session, Transport};
 use super::SshError;
 
 pub const PIPE_NAME: &str = r"\\.\pipe\shrinkdrop-ssh-helper";
 pub const SERVICE_NAME: &str = "ShrinkdropSshHelper";
 const HELPER_EXE: &str = "shrinkdrop-ssh-helper.exe";
 const ERROR_CANCELLED: u32 = 1223;
+/// 提权安装后等待服务可连的上限；卸载后等待管道消失的上限。
+const INSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const UNINSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+
+
 
 pub struct WindowsPipeTransport {
     helper_path: std::path::PathBuf,
@@ -93,11 +99,27 @@ impl Transport for WindowsPipeTransport {
     }
 
     fn install(&self) -> Result<(), SshError> {
-        run_elevated(&self.helper_path, "--install-service")
+        run_elevated(&self.helper_path, "--install-service")?;
+        // ShellExecuteW 不等待子进程：必须等管道真的可连，才算安装完成。
+        wait_until_ready(|| self.open().is_ok(), INSTALL_TIMEOUT).ok_or_else(|| {
+            SshError::with_detail(
+                ErrorCode::HelperUnavailable,
+                "辅助服务已启动安装，但尚未就绪；稍后重试或在服务管理器里检查",
+            )
+        })?;
+        Ok(())
     }
 
     fn uninstall(&self) -> Result<(), SshError> {
-        run_elevated(&self.helper_path, "--uninstall-service")
+        run_elevated(&self.helper_path, "--uninstall-service")?;
+        // 反过来：等管道消失，避免 UI 立刻显示“仍在运行”。
+        wait_until_ready(|| self.open().is_err(), UNINSTALL_TIMEOUT).ok_or_else(|| {
+            SshError::with_detail(
+                ErrorCode::HelperUnavailable,
+                "辅助服务仍在运行；稍后重试或在服务管理器里停止",
+            )
+        })?;
+        Ok(())
     }
 }
 
