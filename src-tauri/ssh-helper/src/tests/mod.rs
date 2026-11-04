@@ -255,3 +255,36 @@ fn enabling_on_a_port_the_config_already_listens_to_does_not_rewrite() {
     subject.enable(SshLifetime::Persistent, 2222).unwrap();
     assert_eq!(fake.lock().config, "Port 2222\nPasswordAuthentication yes\n");
 }
+
+#[test]
+fn concurrent_enable_from_two_clients_does_not_double_start() {
+    use std::sync::Arc;
+
+    let (fake, subject) = make_helper();
+    let subject = Arc::new(subject);
+    let mut handles = Vec::new();
+    for _ in 0..2 {
+        let subject = subject.clone();
+        handles.push(std::thread::spawn(move || {
+            // 用非 22 端口：22 走系统既有规则，看不到“重复建规则”。
+            subject.enable(SshLifetime::Persistent, 2222)
+        }));
+    }
+    for handle in handles {
+        handle.join().unwrap().unwrap();
+    }
+    let state = fake.lock();
+    assert_eq!(state.rules.len(), 1, "并发开启不应重复建规则");
+    assert!(matches!(state.svc, Some(Svc::Running { .. })));
+}
+
+#[test]
+fn status_does_not_block_while_a_client_holds_an_attached_session() {
+    let (_, subject) = make_helper();
+    subject.enable(SshLifetime::App, 22).unwrap();
+    // 长连接持有引用计数；状态查询必须仍能返回（helper 按连接并发处理）。
+    subject.attach().unwrap();
+    assert!(subject.status().unwrap().os_enabled);
+    subject.detach().unwrap();
+    assert!(!subject.status().unwrap().os_enabled);
+}

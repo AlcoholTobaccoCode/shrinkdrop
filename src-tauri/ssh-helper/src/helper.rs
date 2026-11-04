@@ -64,6 +64,9 @@ pub struct Helper {
     bundled_msi: Option<String>,
     sessions: Mutex<Sessions>,
     state: Mutex<StateFile>,
+    /// 串行化所有会改系统状态的动词：helper 现在并发处理多条连接，
+    /// 两个客户端同时 enable 会互相覆盖配置与所有权。
+    operation: Mutex<()>,
 }
 
 impl Helper {
@@ -85,6 +88,7 @@ impl Helper {
             bundled_msi: None,
             sessions: Mutex::new(Sessions::default()),
             state: Mutex::new(state),
+            operation: Mutex::new(()),
         }
     }
 
@@ -96,6 +100,13 @@ impl Helper {
 
     fn control(&self) -> SshdControl {
         SshdControl::new(self.runner.clone())
+    }
+
+    /// 进入一个会改系统状态的动作；同一时刻只允许一个。
+    fn begin_operation(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.operation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn lock_state(&self) -> std::sync::MutexGuard<'_, StateFile> {
@@ -198,6 +209,7 @@ impl Helper {
     }
 
     pub fn enable(&self, lifetime: SshLifetime, port: u16) -> Result<HelperStatus, Failure> {
+        let _operation = self.begin_operation();
         if port == 0 {
             return Err(Failure::new(ErrorCode::UnsupportedCustomPort));
         }
@@ -276,6 +288,12 @@ impl Helper {
     }
 
     pub fn disable(&self) -> Result<HelperStatus, Failure> {
+        let _operation = self.begin_operation();
+        self.disable_locked()
+    }
+
+    /// 已持有操作锁时使用；避免 `uninstall` → `disable` 的自死锁。
+    fn disable_locked(&self) -> Result<HelperStatus, Failure> {
         let control = self.control();
         let mut state = self.lock_state().clone();
         if !state.owned {
@@ -301,6 +319,7 @@ impl Helper {
     }
 
     pub fn set_lifetime(&self, lifetime: SshLifetime) -> Result<HelperStatus, Failure> {
+        let _operation = self.begin_operation();
         let control = self.control();
         let mut state = self.lock_state().clone();
         state.lifetime = lifetime;
@@ -315,6 +334,7 @@ impl Helper {
     }
 
     pub fn set_port(&self, port: u16) -> Result<HelperStatus, Failure> {
+        let _operation = self.begin_operation();
         if port == 0 {
             return Err(Failure::new(ErrorCode::UnsupportedCustomPort));
         }
@@ -400,6 +420,7 @@ impl Helper {
     }
 
     fn close_owned_instance(&self) -> Result<(), Failure> {
+        let _operation = self.begin_operation();
         let mut state = self.lock_state().clone();
         if !state::should_close_on_detach(&state) {
             return Ok(());
@@ -418,6 +439,7 @@ impl Helper {
     /// 只在系统里还没有 sshd 时允许；安装完成后回到“关闭但已安装”的状态，
     /// 由 UI 再触发一次 enable。路径由 helper 自己定位，不接受调用方传路径。
     pub fn install_bundled(&self) -> Result<(), Failure> {
+        let _operation = self.begin_operation();
         let msi = self
             .bundled_msi
             .as_deref()
@@ -433,9 +455,10 @@ impl Helper {
 
     /// 卸载：关闭自己开的实例、还原配置与启动类型、删除自建防火墙规则。
     pub fn uninstall(&self) -> Result<(), Failure> {
+        let _operation = self.begin_operation();
         let state = self.lock_state().clone();
         if state.owned {
-            let _ = self.disable();
+            let _ = self.disable_locked();
         }
         config::restore_backup(self.config_io.as_ref(), &self.config_path)
             .map_err(Failure::from)?;

@@ -114,10 +114,11 @@ app 侧：`ssh_status` 返回 `SshSnapshot { runtime, ssh }`，把 `status` 的�
 1. 开启前先读系统状态；已开启则 `owned=false`，不改写任何系统配置。
 2. 只有 `owned=true` 且 `lifetime=app` 才允许在最后一个客户端退出后关闭。
 3. 用户从 System Settings / 服务管理器手动开关后，helper 只报告状态，不抢控制权。
-4. app 以**进程**为粒度持有一个 helper 会话：本地 `attach` 计数只决定何时发 `detach`（0→1 发一次 `attach`，1→0 发一次 `detach`），主窗口与设置窗口共享同一会话。
+4. app 以**进程**为粒度持有一个 helper 会话：本地 `attach` 计数只决定何时发 `detach`（0→1 发一次 `attach`，1→0 发一次 `detach`），主窗口与设置窗口共享同一会话。这条长连接会被 helper 保持，因此 helper 必须**并发处理多条连接**（每连接一个线程），否则持会话期间的状态查询会被堵住。
 5. helper 侧按**连接**计数：每个会话在收到 `attach` 后计数 +1，`detach` 或**连接断开**（含 app 崩溃/强杀）时 -1；归零且 `owned && app` 才关闭 sshd。因此崩溃兜底不依赖心跳超时。
 6. 多开 app 实例时，每个实例各自持有一个会话，计数由 helper 汇总；最后一个实例退出才关闭。
 7. 心跳（5s）与宽限（15s）尚未实现：当前是断开即结算，语义更保守（不会留下开着的 sshd）。
+8. 会改系统状态的动词（`enable`/`disable`/`set_lifetime`/`set_port`/`install_bundled`/卸载）在 helper 内串行化，两个客户端同时开启不会重复建规则或互相覆盖状态。
 
 ## 8. 超时与心跳
 

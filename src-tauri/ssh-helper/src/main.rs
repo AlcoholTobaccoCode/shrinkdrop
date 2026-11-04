@@ -141,15 +141,20 @@ mod windows_service {
         SetServiceStatus(STATUS_HANDLE, &status);
     }
 
-    /// 管道主循环：一次一个客户端；先鉴权，再进协议循环。
+    /// 管道主循环：每个连接一个线程。
+    ///
+    /// `lifetime=app` 时 app 会持有一条长连接（`attach`），所以不能串行处理：
+    /// 否则持会话期间的状态查询与关闭请求全被堵住。
     fn serve(helper: Helper) -> Result<(), String> {
         use std::io::BufReader;
+        use std::sync::Arc;
 
         let installer_sid = std::fs::read_to_string(INSTALLER_SID_PATH)
             .map(|value| value.trim().to_string())
             .ok()
             .filter(|value| value.starts_with("S-1-"));
         let installer_sid = installer_sid.ok_or("缺少安装者 SID，请重新安装辅助服务")?;
+        let helper = Arc::new(helper);
 
         loop {
             if unsafe { STOPPING } {
@@ -164,19 +169,23 @@ mod windows_service {
             // 鉴权失败：读一帧拿到 id，回 needs_admin 后断开，不进入任何状态机。
             if let Err(error) = pipe::authorize_client(handle) {
                 let file = unsafe { std::fs::File::from_raw_handle(handle as RawHandle) };
-                let mut reader = BufReader::new(file.try_clone().map_err(|_| "管道复制失败".to_string())?);
+                let mut reader =
+                    BufReader::new(file.try_clone().map_err(|_| "管道复制失败".to_string())?);
                 let mut writer = file;
                 let _ = refuse_session(&mut reader, &mut writer, &error);
                 continue;
             }
             let file = unsafe { std::fs::File::from_raw_handle(handle as RawHandle) };
             let reader_file = file.try_clone().map_err(|error| error.to_string())?;
-            let mut reader = BufReader::new(reader_file);
-            let mut writer = file;
-            match serve_session(&helper, &mut reader, &mut writer) {
-                SessionEnd::Shutdown => return Ok(()),
-                SessionEnd::Closed | SessionEnd::Protocol(_) => continue,
-            }
+            let helper = helper.clone();
+            // 线程只持有这一个连接；连接结束（含 app 崩溃）时 session 会结算引用计数。
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(reader_file);
+                let mut writer = file;
+                if serve_session(&helper, &mut reader, &mut writer) == SessionEnd::Shutdown {
+                    unsafe { STOPPING = true };
+                }
+            });
         }
     }
 
