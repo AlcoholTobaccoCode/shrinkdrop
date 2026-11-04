@@ -7,6 +7,23 @@
 
 > 执行方式：按 Task 顺序推进；Task 4 与 Task 5 可并行；Task 6 在 Task 3 的 IPC 契约稳定后即可并行。每个 Task 完成后再进入依赖它的 Task，不跨阶段提前接平台代码。
 
+## 进度（2026-11-04，第一轮）
+
+已落地（核心状态机与协议有单测，`cargo test --locked` 与 `pnpm test` 通过）：
+
+- **T1 协议文档**：`docs/ssh/helper-protocol.md`；帧/动词/错误码/状态文件/IPC 认证/威胁模型全部定稿。
+- **T2 设置与领域模型**：`shrinkdrop-ssh-core`（`SshLifetime`、`ErrorCode`、`StateFile`、帧编解码）、`SshSettings`、`SshRuntime`、`Settings.ssh`、前端类型同步；旧 `settings.json` 缺失 `ssh` 时按默认值加载。
+- **T3 控制面**：`SshBackend` trait、`SshManager` 状态机（所有权、进程内会话计数、失败不落盘、启动对齐、退出收尾）、7 个 `ssh_*` 命令；假后端覆盖核心转移：所有权、两种生命周期、失败不落盘、Busy、helper 缺失/未批准、进程内会话计数。
+- **T6 设置界面（部分）**：远程访问分组、二次确认、生命周期、只读/可编辑端口、状态卡、端口占用提示、连接命令与指纹、中英文错误文案；设置窗口在挂载与聚焦时用 `ssh_status`（`SshSnapshot`）回填期望状态。
+
+本轮未做，依赖外部条件：
+
+- **T0 平台 PoC**：需要 Windows 机器/虚拟机与管理员授权，且会真实开关宿主机 Remote Login；不适合在开发机静默执行。
+- **T3 真实后端**：`helper` 未随包提供，`UnavailableBackend` 只返回 `helper_unavailable`，运行态带 `backendAvailable=false`；设置窗口因此禁用开关、隐藏安装入口，状态卡显示“此版本暂不包含”。这是当前的真实能力，不是占位文案。
+- **T4/T5 helper**：依赖 T0 结论与 Developer ID 签名（Gate G3）；未验证的系统路径不提前实现。
+- **T6 剩余**：已开启时改端口的二次确认、macOS“打开 Sharing 设置”入口、Windows FoD 失败的两手准备（随 T5）、SSH 面板的组件级键盘/aria 测试（现只有会话与文案单测）。
+- **T7–T10**：按计划顺延。
+
 ## 0. 已定决策
 
 | 项 | 决策 |
@@ -14,7 +31,7 @@
 | 架构 | 系统 sshd + 特权 helper；helper 只做控制面，不托管 sshd 进程 |
 | sshd 来源 | macOS 系统内置；Windows 首选 OS 可选功能，失败时可用随包固定版 MSI 或官网手动安装；安装后都是系统级 sshd |
 | Windows 安装来源 | 优先系统可选功能（FoD）；失败时 UI 提供“官网下载”和“内置安装（随包固定版 MSI）”；不静默安装随包版本 |
-| macOS 支持 | 功能限定 macOS 13+（SMAppService）；更低版本隐藏该功能，不引入 SMJobBless |
+| macOS 支持 | 功能限定 macOS 13+（SMAppService）；更低版本禁用开关并提示，不引入 SMJobBless |
 | Windows 支持 | Windows 10 1809+ / Windows 11；Home 是否可用由 Task 0 实测确认 |
 | 账户要求 | v1 仅管理员账户可操作；标准用户显示明确提示，不做降权授权代理 |
 | 端口 | 默认 22；Windows 支持自定义（1–65535）；macOS v1 固定 22，自定义端口需自建 LaunchDaemon，单独立项 |
@@ -82,19 +99,19 @@ T10 文档与发布
 
 **Files:** `docs/ssh/helper-protocol.md`（新建）
 
-- [ ] 定义消息帧：newline-delimited JSON，单条上限 64 KiB，请求/响应带 `id`。
-- [ ] 定义握手：`hello { protocol, appVersion }`，helper 返回 `{ helperVersion, protocol }`；版本不匹配时返回 `helper_version_mismatch`。
-- [ ] 定义固定动词：`status`、`enable`、`disable`、`set_lifetime`、`attach`、`detach`、`shutdown_helper`；禁止任意命令/路径参数。卸载 helper 不走 IPC，由 app/安装器的提权流程单独处理。
-- [ ] `enable` 携带 `lifetime` 与 `port`；`status` 返回实际端口、监听状态、安装来源（FoD/standalone/bundled）、随包版本与 `port_in_use` 详情（port/pid/process）。
-- [ ] 定义错误码：`unsupported_os`、`unsupported_custom_port`、`needs_admin`、`helper_unavailable`、`helper_version_mismatch`、`feature_missing`、`service_missing`、`service_start_failed`、`service_stop_failed`、`firewall_blocked`、`policy_blocked`、`port_in_use`、`busy`、`internal`。
-- [ ] 定义状态文件：`version`、`desired`、`lifetime`、`port`、`owned`、`installed_by_app`、`enabled_at`、`previous_start_type`、`previous_config_path`、`last_error`；root/SYSTEM 所有，原子写。
-- [ ] 定义所有权/引用计数：只有 `owned=true` 且 `lifetime=app` 才在最后一个客户端退出后关闭；用户手动开启的实例不自动关闭。
-- [ ] 定义心跳与超时：心跳 5s，helper 宽限 15s；命令超时 10s；连接超时 2s。
-- [ ] 定义 IPC 认证：
-  - macOS：Unix socket 仅本机；校验 peer UID 属于 admin 组且属于当前 console 会话；socket 权限 0600/0660。
+- [x] 定义消息帧：newline-delimited JSON，单条上限 64 KiB，请求/响应带 `id`。
+- [x] 定义握手：`hello { protocol, app_version }`，helper 返回 `{ helper_version, protocol }`；版本不匹配时返回 `helper_version_mismatch`，且该会话只允许 `hello`/`status`。
+- [x] 定义固定动词：`status`、`enable`、`disable`、`set_lifetime`、`attach`、`detach`、`shutdown_helper`；禁止任意命令/路径参数。卸载 helper 不走 IPC，由 app/安装器的提权流程单独处理。
+- [x] `enable` 携带 `lifetime` 与 `port`；`status` 返回实际端口、监听状态、安装来源（`system`/`fod`/`bundled`）、随包版本与 `port_in_use` 详情（port/pid/process）。
+- [x] 定义错误码：`unsupported_os`、`unsupported_custom_port`、`needs_admin`、`helper_unavailable`、`helper_version_mismatch`、`feature_missing`、`service_missing`、`service_start_failed`、`service_stop_failed`、`firewall_blocked`、`policy_blocked`、`port_in_use`、`busy`、`internal`、`unsupported_verb`、`frame_too_large`、`timeout`。
+- [x] 定义状态文件：`version`、`desired`、`lifetime`、`port`、`owned`、`installed_by_app`、`enabled_at`、`previous_start_type`、`previous_config_path`、`last_error`；root/SYSTEM 所有，原子写。
+- [x] 定义所有权/引用计数：只有 `owned=true` 且 `lifetime=app` 才在最后一个客户端退出后关闭；用户手动开启的实例不自动关闭；app 以进程为粒度持有一个 helper 会话，本地计数只决定何时 `detach`（helper 侧按连接计数属 T7）。
+- [x] 定义心跳与超时：心跳 5s，helper 宽限 15s；命令超时 10s；连接超时 2s。
+- [x] 定义 IPC 认证：
+  - macOS：Unix socket 仅本机；权限 `0660`（root:admin），非管理员进程在 connect 阶段即失败；已连接 peer 用 `getpeereid()`/`LOCAL_PEERCRED` 取 UID，要求等于当前 console 用户且属于 admin 组。
   - Windows：命名管道拒绝远程客户端；ACL 仅 SYSTEM、Administrators、当前 console 用户 SID；helper 再用 linked token 复核调用方是管理员。
-- [ ] 定义日志与脱敏：不记录凭据、不记录完整环境变量；记录动词、结果、错误码；单文件大小上限与轮转。
-- [ ] 威胁模型：本地低权限进程、同用户恶意进程、路径注入、命令注入、状态文件篡改、版本降级。
+- [x] 定义日志与脱敏：不记录凭据、不记录完整环境变量；记录动词、结果、错误码；单文件大小上限与轮转。
+- [x] 威胁模型：本地低权限进程、同用户恶意进程、路径注入、命令注入、状态文件篡改、版本降级。
 
 **Acceptance:** 协议文档评审通过；app 与 helper 可独立按文档实现；没有“执行任意命令”的接口。
 
@@ -104,15 +121,15 @@ T10 文档与发布
 
 **Files:** `src-tauri/src/settings.rs`、`src-tauri/src/ssh/mod.rs`、`src-tauri/ssh-core/src/lib.rs`、`src/core/settings/types.ts`
 
-- [ ] 新增 `SshLifetime { App, Persistent }`，serde 序列化为 `app` / `persistent`。
-- [ ] 新增 `SshSettings { enabled, lifetime, port }`，默认 `enabled=false`、`lifetime=App`、`port=22`。
-- [ ] 端口校验：1–65535；macOS v1 只接受 22；非法值不写入。
-- [ ] `Settings` 增加 `ssh` 字段；旧 `settings.json` 缺失该字段时使用默认值。
-- [ ] 新增 `SshRuntime`：`supported`、`platform`、`helperInstalled`、`helperApproved`、`osEnabled`、`owned`、`listening`、`address`、`port`、`installSource`、`bundledVersion`、`fingerprint`、`error`。
-- [ ] 新增 `SshErrorCode`，与协议错误码一一对应。
-- [ ] `SettingsView` 包含 `ssh`；`SettingsUpdatePayload` 不包含 `ssh`，避免通用“保存设置”覆盖 SSH 运行态；`enabled`/`lifetime` 都走专用 `ssh_*` 命令持久化。
-- [ ] 前端 `SettingsView` / `defaultSettings()` 同步类型。
-- [ ] 单元测试：默认值、旧 JSON 反序列化、roundtrip、非法 lifetime 拒绝。
+- [x] 新增 `SshLifetime { App, Persistent }`，serde 序列化为 `app` / `persistent`。
+- [x] 新增 `SshSettings { enabled, lifetime, port }`，默认 `enabled=false`、`lifetime=App`、`port=22`。
+- [x] 端口校验：命令层拒绝 0 与非 1–65535 的值；macOS 拒绝非 22（`unsupported_custom_port`），历史设置里的自定义端口在运行态归一为 22 且不写回系统。
+- [x] `Settings` 增加 `ssh` 字段；旧 `settings.json` 缺失该字段时使用默认值。
+- [x] 新增 `SshRuntime`：`supported`、`platform`、`admin`（启动时快照）、`backendAvailable`、`username`、`helperInstalled`、`helperApproved`、`osEnabled`、`owned`、`listening`、`address`、`port`、`installSource`、`bundledVersion`、`fingerprint`、`portInUse`、`error`；`ssh_status` 返回 `SshSnapshot { runtime, ssh }`，`ssh_*` 返回 `SshOutcome { runtime, ssh, error }`。
+- [x] 新增 `SshErrorCode`，与协议错误码一一对应。
+- [x] `SettingsView` 包含 `ssh`；`SettingsUpdatePayload` 不包含 `ssh`，避免通用“保存设置”覆盖 SSH 运行态；`enabled`/`lifetime` 都走专用 `ssh_*` 命令持久化。
+- [x] 前端 `SettingsView` / `defaultSettings()` 同步类型。
+- [x] 单元测试：默认值、旧 JSON 反序列化、roundtrip、非法 lifetime 拒绝。
 
 **Acceptance:** `cargo test` 通过；现有设置文件可无损加载；前端类型检查通过。
 
@@ -120,30 +137,31 @@ T10 文档与发布
 
 ### Task 3 SshManager、命令与假后端测试
 
-**Files:** `src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、`src-tauri/ssh-core/Cargo.toml`、`src-tauri/ssh-helper/Cargo.toml`、`src-tauri/src/ssh/mod.rs`、`src-tauri/src/ssh/backend.rs`、`src-tauri/src/lib.rs`
+**Files:** `src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、`src-tauri/ssh-core/Cargo.toml`、`src-tauri/src/ssh/mod.rs`、`src-tauri/src/ssh/platform.rs`、`src-tauri/src/ssh/unavailable.rs`、`src-tauri/src/lib.rs`（`ssh-helper` crate 随 T4/T5 新增）
 
-- [ ] 定义 `SshBackend` trait：`status`、`enable`、`disable`、`set_lifetime`、`set_port`、`install_helper`、`uninstall_helper`。
-- [ ] 建立 workspace：`src-tauri/Cargo.toml` 增加 `[workspace] members = ["ssh-core", "ssh-helper"]`、`default-members = ["."]`（根 package 自动是成员）；app 通过 path 依赖 `shrinkdrop-ssh-core`。
+- [x] 定义 `SshBackend` trait：`helper_info`、`status`、`enable`、`disable`、`set_lifetime`、`set_port`、`attach`、`detach`、`install_helper`、`uninstall_helper`（`shutdown_helper` 留给 T4/T8 的升级路径）。
+- [x] 建立 workspace：`src-tauri/Cargo.toml` 增加 `[workspace] members = ["ssh-core"]`、`default-members = ["."]`；app 通过 path 依赖 `shrinkdrop-ssh-core`（`ssh-helper` 成员随 T4/T5 加入）。
 - [ ] `ssh-helper` 是独立 bin crate，不依赖 `tauri`/`shrinkdrop_lib`，只依赖 `ssh-core` 与平台 crate；避免 helper 链接 GUI 依赖。
 - [ ] 提供构建命令/脚本：`cargo build -p shrinkdrop-ssh-helper`；macOS universal 合并留给 Task 8。
-- [ ] 实现 `SshManager`：持有 runtime、helper 连接、引用计数、最后一次错误。
-- [ ] 状态机：`disabled → enabling → enabled → disabling → disabled`，附错误态。
-- [ ] `enable`：先读 OS 状态；已开启则 `owned=false`，不重复操作；关闭则开启并置 `owned=true`。
+- [x] 实现 `SshManager`：持有 runtime、期望状态、进程内会话计数、最后一次错误（真实 helper 连接在 T4/T5 的后端里）。
+- [x] 状态机：`disabled → enabling → enabled → disabling → disabled`；错误记录在 `runtime.error`，失败后回到操作前阶段。
+- [x] `enable`：先读 OS 状态；已开启则 `owned=false`，不重复操作；关闭则开启并置 `owned=true`。
 - [ ] 端口预检：开启/改端口前检查目标端口；被其它进程占用返回 `port_in_use`（含 PID/进程名），不写配置、不启动；被本机 sshd 占用且为目标端口则按幂等处理。
-- [ ] `set_port`：未开启时只持久化；已开启时 Windows 预检并重配/重启，macOS 端口非 22 直接 `unsupported_custom_port`。
-- [ ] 失败回滚：配置/防火墙/服务启动失败时恢复到操作前状态，不把 `enabled=true` 写入 settings。
-- [ ] `disable`：仅 `owned=true` 时关闭 OS；否则只清 desired，UI 提示“仍由系统开启”。
-- [ ] `set_lifetime`：`app` 时 attach 并让后端把 Windows 服务设为按需启动；`persistent` 时 detach、保持开启并设为自动启动。
-- [ ] `reconcile`：启动/聚焦时读取 helper 与 OS 状态，更新 runtime；不覆盖用户手动状态。
-- [ ] 启动时仅当 `enabled=true` 且 helper 已安装/已批准才 attach；helper 缺失时只显示错误，不在启动阶段弹管理员授权。
-- [ ] `address` 复用分享服务的局域网地址探测（`if-addrs`/`share::net`），`username` 取当前系统用户。
-- [ ] 能力门禁：macOS `>= 13`、Windows build `>= 17763`；不满足时 `supported=false`，UI 隐藏/禁用，不尝试安装 helper。
-- [ ] `shutdown`：`lifetime=app` 且 owned 时请求关闭；`persistent` 时只 detach；失败只记录，不阻塞关窗。
-- [ ] 注册命令：`ssh_status`、`ssh_enable`、`ssh_disable`、`ssh_set_lifetime`、`ssh_set_port`、`ssh_install_helper`、`ssh_uninstall_helper`。
-- [ ] `lib.rs`：`.manage(SshManager::default())`；启动时 reconcile；`CloseRequested` 调用 shutdown，注意幂等。
-- [ ] 覆盖 Cmd+Q/系统退出：如 Tauri 提供 `RunEvent::ExitRequested`，同样调用幂等 shutdown；不能只依赖窗口关闭事件。
-- [ ] 假后端测试：已开启不抢占、关闭只关自己、两种生命周期、helper 缺失、版本不匹配、超时、手动覆盖、重复 enable/disable、多客户端引用计数。
-- [ ] 失败语义：特权操作失败时不得把 `enabled=true` 写入 settings；返回错误码给 UI。
+- [x] `set_port`：未开启时只持久化；已开启时 Windows 预检并重配/重启，macOS 端口非 22 直接 `unsupported_custom_port`。
+- [x] 失败语义（控制面）：操作失败时状态回到操作前，不把 `enabled=true` 写入 settings。
+- [ ] 失败回滚（系统层）：配置/防火墙/服务启动失败时恢复原文件与规则——属于 helper，随 T4/T5。
+- [x] `disable`：仅 `owned=true` 时关闭 OS；否则只清 desired，UI 提示“仍由系统开启”。
+- [x] `set_lifetime`：`app` 时 attach 并让后端把 Windows 服务设为按需启动；`persistent` 时 detach、保持开启并设为自动启动。
+- [x] `reconcile`：启动/聚焦时读取 helper 与 OS 状态，更新 runtime；不覆盖用户手动状态。
+- [x] 启动时仅当 `enabled=true` 且 helper 已安装/已批准才 attach；helper 缺失时只显示错误，不在启动阶段弹管理员授权。
+- [x] `address` 复用分享服务的局域网地址探测（`if-addrs`/`share::net`），`username` 取当前系统用户。
+- [x] 能力门禁：macOS `>= 13`、Windows build `>= 17763`；不满足时 `supported=false`，UI 置灰并提示，不尝试安装 helper。
+- [x] `shutdown`：释放 helper 会话；`lifetime=app` 的实例由 helper 在宽限期后关闭；失败只记录，不阻塞关窗。
+- [x] 注册命令：`ssh_status`、`ssh_enable`、`ssh_disable`、`ssh_set_lifetime`、`ssh_set_port`、`ssh_install_helper`、`ssh_uninstall_helper`。
+- [x] `lib.rs`：`.manage(SshManager::default())`；启动时 reconcile；`CloseRequested` 调用 shutdown，注意幂等。
+- [x] 覆盖 Cmd+Q/系统退出：如 Tauri 提供 `RunEvent::ExitRequested`，同样调用幂等 shutdown；不能只依赖窗口关闭事件。
+- [x] 假后端测试：已开启不抢占、关闭只关自己、两种生命周期切换、失败不落盘（enable/disable/set_lifetime/set_port）、Busy、helper 缺失与未批准、进程内会话计数、macOS 端口归一。版本不匹配与超时属客户端（T4/T5）。
+- [x] 失败语义：特权操作失败时不得把 `enabled=true` 写入 settings；返回错误码给 UI。
 
 **Acceptance:** 纯逻辑单测覆盖所有状态转移；`cargo test` 通过；无平台特权操作进入测试。
 
@@ -207,26 +225,26 @@ T10 文档与发布
 
 **Files:** `src/SettingsApp.vue`、`src/core/settings/types.ts`、`src/core/settings/session.ts`、`src/platform/native.ts`、`src/core/i18n.ts`、`tests/core/ssh-settings.test.ts`
 
-- [ ] 新增“远程访问”设置分组（建议放在“分享”和“关于”之间）。
-- [ ] 主开关：`role="switch"`；首次开启弹二次确认，说明使用 OS 账户、局域网暴露、睡眠/FileVault 限制。
-- [ ] 生命周期二段选择：`仅应用运行时` / `后台常驻`；`app` 需要 helper，未安装时置灰并给出安装入口。
-- [ ] 端口输入：Windows 可编辑（1–65535，默认 22）；macOS 只读显示 22；非法值不提交。
-- [ ] 端口占用提示：开启/修改端口时显示“端口被 <进程> (PID) 占用”，阻止应用并允许重试；不使用模态阻塞整个设置窗口。
+- [x] 新增“远程访问”设置分组（建议放在“分享”和“关于”之间）。
+- [x] 主开关：`role="switch"`；首次开启弹二次确认，说明使用 OS 账户与局域网暴露；睡眠/FileVault 限制常驻在面板底部提示。
+- [x] 生命周期二段选择：`仅应用运行时` / `后台常驻`；`app` 需要 helper，未安装时置灰并给出安装入口。
+- [x] 端口输入：Windows 可编辑（1–65535，默认 22）；macOS 只读显示运行态端口（恒为 22）；非法值不提交。
+- [x] 端口占用提示：开启/修改端口时显示“端口被 <进程> (PID) 占用”，阻止应用并允许重试；不使用模态阻塞整个设置窗口。
 - [ ] 已开启时改端口：二次确认会断开现有 SSH 会话；失败时恢复旧端口并展示错误。
-- [ ] 状态卡：已开启/系统已开启/需要管理员/受策略管理/helper 未安装/监听中/错误码。
-- [ ] 非管理员账户：禁用开关并说明“SSH 需要管理员账户”，不弹无意义的 UAC/授权。
-- [ ] 展示 `ssh user@ip`、端口、host key 指纹；提供复制命令。
+- [x] 状态卡：此版本不包含/不支持/需要管理员/已开启（应用管理）/系统已启用/监听中/未开启；策略禁用与端口占用等以错误码文案展示。
+- [x] 非管理员账户：禁用开关并说明“SSH 需要管理员账户”，不弹无意义的 UAC/授权。
+- [x] 展示 `ssh user@ip`、端口、host key 指纹；提供复制命令。
 - [ ] macOS 提供“打开 Sharing 设置”；Windows 提供“打开服务/可选功能”说明。
-- [ ] helper 安装/卸载入口：安装时解释 UAC/管理员授权；卸载时说明会关闭 SSH（若 owned）。
+- [x] helper 安装/卸载入口：安装时解释 UAC/管理员授权；卸载时说明会关闭 SSH（若 owned）。
 - [ ] Windows 缺少 sshd 时的两手准备：
   - “官网下载”：打开 `https://github.com/PowerShell/Win32-OpenSSH/releases`，用户手动装完点“重新检测”；URL 固定在后端，前端不能传任意 URL；同时给出 Windows 设置 → 可选功能的微软官方步骤；
   - “内置安装（随包）”：UI 可叫“内置下载”，实际是运行随包 MSI；展示随包版本，调用 helper 校验并运行 MSI；显示安装中/失败/需要重启；
   - 两者都失败时保留错误详情，不循环重试。
 - [ ] 适配器方法：`sshStatus`、`sshEnable`、`sshDisable`、`sshSetLifetime`、`sshSetPort`、`sshInstallHelper`、`sshUninstallHelper`、`sshInstallBundledOpenSsh`、`sshOpenOpenSshDownload`、`sshRecheckOpenSsh`。
-- [ ] 事件同步：`ssh-status` 推送到设置窗口与主窗口；窗口聚焦时刷新。
-- [ ] 错误码到中英文文案的映射；不显示内部路径/命令输出。
+- [x] 事件同步：`ssh-status` 广播；设置窗口在挂载与获得焦点时刷新（主窗口目前不展示 SSH 状态）。
+- [x] 错误码到中英文文案的映射；不显示内部路径/命令输出。
 - [ ] 测试：关闭默认、首次确认、取消不产生特权操作、lifetime 切换、helper 缺失、错误态、键盘/aria。
-- [ ] 现有分享/压缩设置回归：新增字段不影响 `settings_update`。
+- [x] 现有分享/压缩设置回归：新增字段不影响 `settings_update`。
 
 **Acceptance:** 设置界面可完成 enable/disable/切换生命周期/设置端口；端口占用有明确提示；所有状态有明确文案；Vitest 与类型检查通过。
 

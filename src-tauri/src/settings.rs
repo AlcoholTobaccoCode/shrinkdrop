@@ -12,6 +12,7 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::share::auth::{self, Account, Permissions, Protection};
 use crate::share::{GroupOptions, ShareManager, ShareOptions};
+use crate::ssh::SshSettings;
 
 const SETTINGS_FILE: &str = "settings.json";
 const MAX_CONCURRENCY: u8 = 5;
@@ -179,6 +180,8 @@ pub struct Settings {
     pub general: General,
     pub compression: CompressionSettings,
     pub share: ShareSettings,
+    /// 远程访问的期望状态；运行态由 `ssh_status` 单独返回，不写进 settings.json。
+    pub ssh: SshSettings,
 }
 
 pub struct SettingsState {
@@ -253,6 +256,7 @@ pub struct SettingsView {
     general: General,
     compression: CompressionSettings,
     share: ShareView,
+    ssh: SshSettings,
 }
 
 #[derive(Serialize)]
@@ -288,6 +292,7 @@ pub fn view(settings: &Settings) -> SettingsView {
     SettingsView {
         general: settings.general.clone(),
         compression: settings.compression.clone(),
+        ssh: settings.ssh.clone(),
         share: ShareView {
             port: settings.share.port,
             upload_dir: settings.share.upload_dir.clone(),
@@ -437,6 +442,15 @@ fn persist(app: &AppHandle, settings: &Settings) -> Result<(), String> {
     fs::rename(&temp, &path).map_err(|_| "无法保存设置".to_string())
 }
 
+/// 只更新 SSH 的期望状态：`settings_update` 不带 ssh 字段，避免通用保存覆盖运行态。
+pub fn save_ssh(app: &AppHandle, state: &SettingsState, ssh: SshSettings) -> Result<(), String> {
+    let mut settings = state.get();
+    settings.ssh = ssh;
+    validate(&settings)?;
+    state.replace(settings.clone());
+    persist(app, &settings)
+}
+
 fn validate(settings: &Settings) -> Result<(), String> {
     if !(1..=MAX_CONCURRENCY).contains(&settings.compression.concurrency) {
         return Err(format!("并发数需要在 1 到 {MAX_CONCURRENCY} 之间"));
@@ -444,6 +458,7 @@ fn validate(settings: &Settings) -> Result<(), String> {
     if settings.share.port != 0 && settings.share.port < 1024 {
         return Err("端口需要大于等于 1024，或填 0 使用自动端口".to_string());
     }
+    settings.ssh.validate()?;
     let mut slugs = HashSet::new();
     for group in &settings.share.groups {
         if !valid_slug(&group.slug) {

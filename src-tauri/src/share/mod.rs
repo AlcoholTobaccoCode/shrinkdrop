@@ -3,7 +3,7 @@
 //! 参考 file-share 的能力形状，服务端用 axum 重写；压缩链路保持原样。
 
 pub mod auth;
-mod net;
+pub(crate) mod net;
 mod server;
 
 use std::collections::{HashMap, HashSet};

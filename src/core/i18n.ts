@@ -239,7 +239,78 @@ const en: Record<string, string> = {
   '当前未开放访问：在设置里开启「允许公开访问」，或改用 PIN/账号保护':
     'Access is closed. Enable “Allow public access” in Settings, or use PIN/account protection.',
   '没有检测到局域网地址，目前只能在本机访问':
-    'No LAN address detected; the share is only reachable on this machine.'
+    'No LAN address detected; the share is only reachable on this machine.',
+  // 远程访问（SSH）
+  '远程访问': 'Remote access',
+  '允许通过 SSH 远程登录本机': 'Allow SSH logins to this computer',
+  '开启后，局域网内的设备可以用系统账户通过 SSH 连接这台电脑。':
+    'While on, devices on your LAN can sign in over SSH with a system account.',
+  '确认开启远程访问？': 'Turn on remote access?',
+  '这会把这台电脑的 SSH 端口暴露到局域网，并使用系统账户登录。可以随时关闭。':
+    'This exposes this computer’s SSH port to the LAN and uses system accounts for sign-in. You can turn it off anytime.',
+  '确认开启': 'Turn on',
+  '生命周期': 'Lifetime',
+  '仅应用运行时': 'While the app runs',
+  '后台常驻': 'Always on',
+  '退出应用后自动关闭 SSH，最安全。':
+    'SSH turns off when the app quits — the safest option.',
+  '应用退出后仍然保持开启，重启后也保持。':
+    'Stays on after the app quits and after a reboot.',
+  'Windows 可以自定义端口；修改会断开现有 SSH 会话。':
+    'Windows allows a custom port; changing it drops existing SSH sessions.',
+  'macOS 的系统远程登录固定使用 22 端口。':
+    'macOS Remote Login always uses port 22.',
+  '状态': 'Status',
+  '当前系统不支持': 'Not supported on this system',
+  '需要管理员账户': 'Administrator account required',
+  '已开启（由 shrinkdrop 管理）': 'On — managed by shrinkdrop',
+  '系统已启用': 'Enabled by the system',
+  '未开启': 'Off',
+  '端口 {port} 已被 {process} (PID {pid}) 占用。':
+    'Port {port} is in use by {process} (PID {pid}).',
+  '需要安装辅助服务才能开启远程访问。':
+    'Install the helper service to turn remote access on.',
+  '安装辅助服务': 'Install helper service',
+  '卸载辅助服务': 'Uninstall helper service',
+  'SSH 需要管理员账户，请用管理员账户打开应用。':
+    'SSH requires an administrator account. Reopen the app with one.',
+  '连接命令': 'Connection command',
+  '复制': 'Copy',
+  '主机指纹': 'Host key fingerprint',
+  '仅建议在可信局域网内开启，优先使用公钥登录。':
+    'Use only on a trusted LAN, and prefer public-key sign-in.',
+  '睡眠或 FileVault 未解锁时无法连接。':
+    'Unreachable while the Mac sleeps or FileVault is still locked.',
+  '当前系统版本不支持远程访问。': 'This macOS version does not support remote access.',
+  'macOS 版只支持 22 端口。': 'The macOS build only supports port 22.',
+  '需要管理员账户才能开关远程访问。':
+    'An administrator account is required to toggle remote access.',
+  '辅助服务未安装或不可用。': 'The helper service is not installed or unavailable.',
+  '辅助服务版本不匹配，需要更新。': 'The helper service version does not match; update it.',
+  '系统未安装 OpenSSH Server。': 'OpenSSH Server is not installed.',
+  '系统里没有 sshd 服务。': 'There is no sshd service on this system.',
+  '启动 sshd 失败。': 'Failed to start sshd.',
+  '停止 sshd 失败。': 'Failed to stop sshd.',
+  '防火墙阻止了 SSH 端口。': 'The firewall blocks the SSH port.',
+  '系统策略禁止开启远程访问。': 'A system policy blocks remote access.',
+  '端口已被其它进程占用。': 'The port is already in use by another process.',
+  '上一个远程访问操作还没结束。': 'A previous remote access action is still running.',
+  '远程访问操作失败，请重试。': 'Remote access failed. Try again.',
+  '辅助服务不支持该操作。': 'The helper service does not support that action.',
+  '辅助服务返回的数据异常。': 'The helper service returned unexpected data.',
+  '辅助服务响应超时。': 'The helper service timed out.',
+  '此版本暂不包含': 'Not in this build',
+  '此版本暂不包含远程访问控制面，需要带辅助服务的签名版本。':
+    'This build has no remote-access control plane; it needs a signed build with the helper service.',
+  '辅助服务等待系统批准：在「登录项」里允许 shrinkdrop 后重试。':
+    'The helper is waiting for system approval. Allow shrinkdrop in Login Items, then retry.',
+  '卸载辅助服务会同时关闭由 shrinkdrop 开启的 SSH。':
+    'Uninstalling the helper also turns off SSH instances shrinkdrop started.',
+  '安装辅助服务需要管理员授权（系统密码或 UAC）。':
+    'Installing the helper needs administrator authorization (system password or UAC).',
+  '由 shrinkdrop 开启的 SSH 会在退出应用后关闭；系统已有的实例不受影响。':
+    'SSH started by shrinkdrop turns off when the app quits; instances the system already ran are untouched.',
+  '监听中': 'Listening'
 };
 
 export const i18n = reactive({ lang: 'zh' as Lang });

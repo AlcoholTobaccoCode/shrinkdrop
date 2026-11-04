@@ -1,0 +1,11 @@
+[package]
+name = "shrinkdrop-ssh-core"
+version = "0.1.6"
+description = "shrinkdrop SSH helper 协议与共享类型"
+authors = ["Tinypng Cross Platform"]
+license = "MIT-0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

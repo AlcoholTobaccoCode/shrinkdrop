@@ -1,5 +1,5 @@
-import { createNativeAdapter, createNativeSettingsAdapter, createNativeShareAdapter } from './native';
-import { createBrowserAdapter, createBrowserSettingsAdapter, createBrowserShareAdapter } from './web';
+import { createNativeAdapter, createNativeSettingsAdapter, createNativeShareAdapter, createNativeSshAdapter } from './native';
+import { createBrowserAdapter, createBrowserSettingsAdapter, createBrowserShareAdapter, createBrowserSshAdapter } from './web';
 
 export function isTauriRuntime(scope: unknown = globalThis): boolean {
   return typeof scope === 'object' && scope !== null && '__TAURI_INTERNALS__' in scope;
@@ -11,6 +11,10 @@ export function createLiteAdapter() {
 
 export function createShareAdapter() {
   return isTauriRuntime() ? createNativeShareAdapter() : createBrowserShareAdapter();
+}
+
+export function createSshAdapter() {
+  return isTauriRuntime() ? createNativeSshAdapter() : createBrowserSshAdapter();
 }
 
 export function createSettingsAdapter() {

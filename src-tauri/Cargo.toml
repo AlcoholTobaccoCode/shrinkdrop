@@ -38,3 +38,8 @@ qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 argon2 = "0.5"
 hmac = "0.12"
+shrinkdrop-ssh-core = { path = "ssh-core" }
+
+[workspace]
+members = ["ssh-core"]
+default-members = ["."]

@@ -1,16 +1,70 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { createSettingsSession } from './core/settings/session';
-import { createSettingsAdapter } from './platform';
+import { createSshSession } from './core/ssh/session';
+import { sshCommand, sshErrorMessages } from './core/ssh/messages';
+import type { SshLifetime } from './core/ssh/types';
+import { createSettingsAdapter, createSshAdapter } from './platform';
 import { setLanguage, t } from './core/i18n';
 import type { KeepAwake, Language, Permissions, Protection, StartFace } from './core/settings/types';
 import { version as appVersion } from '../package.json';
 
 const session = createSettingsSession(createSettingsAdapter());
+const sshSession = createSshSession(createSshAdapter());
 
-type Section = 'general' | 'compression' | 'share' | 'about';
+type Section = 'general' | 'compression' | 'share' | 'ssh' | 'about';
 const section = ref<Section>('general');
 const view = computed(() => session.state.view);
+const ssh = computed(() => sshSession.state.runtime);
+const sshSettings = computed(() => sshSession.state.settings);
+const sshBusy = computed(() => sshSession.state.busy);
+/** Windows 才能改端口；macOS 的 stock Remote Login 由 launchd 固定监听 22。 */
+const sshPortEditable = computed(() => ssh.value.platform === 'windows');
+const sshConfirming = ref(false);
+const sshCopied = ref(false);
+const sshErrorCopy = computed(() => {
+  if (sshSession.state.detail) return sshSession.state.detail;
+  const code = sshSession.state.error;
+  return code ? t(sshErrorMessages[code] ?? sshErrorMessages.internal) : '';
+});
+const sshStateLabel = computed(() => {
+  if (!ssh.value.backendAvailable) return t('此版本暂不包含');
+  if (!ssh.value.supported) return t('当前系统不支持');
+  if (!ssh.value.admin) return t('需要管理员账户');
+  if (ssh.value.osEnabled && ssh.value.owned) return t('已开启（由 shrinkdrop 管理）');
+  if (ssh.value.osEnabled) return t('系统已启用');
+  if (ssh.value.listening) return t('监听中');
+  return t('未开启');
+});
+const sshLifetimeHint = computed(() => {
+  if (sshSettings.value.lifetime === 'persistent') {
+    return t('应用退出后仍然保持开启，重启后也保持。');
+  }
+  return ssh.value.owned
+    ? t('退出应用后自动关闭 SSH，最安全。')
+    : t('由 shrinkdrop 开启的 SSH 会在退出应用后关闭；系统已有的实例不受影响。');
+});
+const sshPortHint = computed(() => {
+  const owner = ssh.value.portInUse;
+  return owner
+    ? t('端口 {port} 已被 {process} (PID {pid}) 占用。', {
+        port: owner.port,
+        process: owner.process,
+        pid: owner.pid
+      })
+    : '';
+});
+const sshConnection = computed(() => sshCommand(ssh.value));
+/** 没有辅助服务就没有可审计的特权控制面：开关只读，避免假装可用。 */
+const sshToggleBlocked = computed(
+  () =>
+    !ssh.value.backendAvailable ||
+    !ssh.value.supported ||
+    !ssh.value.admin ||
+    !ssh.value.helperInstalled ||
+    !ssh.value.helperApproved ||
+    sshBusy.value
+);
 // 防休眠依赖 macOS 的 caffeinate 与 LaunchDaemon，仅在 Mac 上展示该设置。
 const isMac = /Mac/i.test(navigator.userAgent);
 async function applyWindowTitle() {
@@ -26,6 +80,17 @@ onMounted(async () => {
   const loaded = await session.load();
   setLanguage(loaded.general.language);
   void applyWindowTitle();
+  void sshSession.load();
+  void sshSession.subscribe();
+  try {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
+    // 系统设置/服务管理器可能在本窗口之外改了 SSH，聚焦时重新对齐。
+    await getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (focused) void sshSession.load();
+    });
+  } catch {
+    // 浏览器预览没有窗口焦点事件。
+  }
 });
 watch(() => view.value.general.language, value => {
   setLanguage(value);
@@ -237,6 +302,48 @@ function clearGroupPin(group: { id: string }) {
   void session.setGroupPin(group.id, null);
 }
 
+function toggleSsh(event: Event) {
+  const checked = (event.target as HTMLInputElement).checked;
+  if (!checked) {
+    sshConfirming.value = false;
+    void sshSession.disable();
+    return;
+  }
+  // 首次开启不直接调特权接口：先说明系统账户/局域网暴露，再让用户确认。
+  sshConfirming.value = true;
+}
+
+function confirmSshEnable() {
+  sshConfirming.value = false;
+  void sshSession.enable(sshSettings.value.lifetime, sshSettings.value.port);
+}
+
+function setSshLifetime(lifetime: SshLifetime) {
+  if (sshSettings.value.lifetime === lifetime) return;
+  void sshSession.setLifetime(lifetime);
+}
+
+function setSshPort(event: Event) {
+  const value = Number((event.target as HTMLInputElement).value);
+  if (!Number.isInteger(value) || value < 1 || value > 65535) {
+    (event.target as HTMLInputElement).value = String(sshSettings.value.port);
+    return;
+  }
+  void sshSession.setPort(value);
+}
+
+async function copySshConnection() {
+  try {
+    await navigator.clipboard.writeText(sshConnection.value);
+    sshCopied.value = true;
+    setTimeout(() => {
+      sshCopied.value = false;
+    }, 1500);
+  } catch {
+    // 没有剪贴板权限时保持原文可选，由用户手动复制。
+  }
+}
+
 </script>
 
 <template>
@@ -246,6 +353,7 @@ function clearGroupPin(group: { id: string }) {
             <button class="settings-tab" :aria-current="section === 'general'" @click="section = 'general'">{{ t('通用') }}</button>
             <button class="settings-tab" :aria-current="section === 'compression'" @click="section = 'compression'">{{ t('压缩') }}</button>
             <button class="settings-tab" :aria-current="section === 'share'" @click="section = 'share'">{{ t('分享') }}</button>
+            <button class="settings-tab" :aria-current="section === 'ssh'" @click="section = 'ssh'">{{ t('远程访问') }}</button>
             <button class="settings-tab" :aria-current="section === 'about'" @click="section = 'about'">{{ t('关于') }}</button>
           </nav>
 
@@ -452,6 +560,91 @@ function clearGroupPin(group: { id: string }) {
               </div>
               <p v-if="view.share.protection === 'link'" class="settings-hint">{{ t('未开启公开访问时，链接模式下的访客无法打开分享。') }}</p>
               <p class="settings-hint">{{ t('分享运行中修改端口或保护方式会自动重启服务，旧链接随即失效。') }}</p>
+            </section>
+
+            <section v-else-if="section === 'ssh'" class="settings-section">
+              <div class="settings-row settings-row--switch">
+                <span>{{ t('允许通过 SSH 远程登录本机') }}</span>
+                <label class="switch">
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    :checked="sshSettings.enabled || sshConfirming"
+                    :disabled="sshToggleBlocked"
+                    :aria-label="t('允许通过 SSH 远程登录本机')"
+                    @change="toggleSsh"
+                  />
+                  <span class="switch-track" aria-hidden="true"><span /></span>
+                </label>
+              </div>
+              <p class="settings-hint">{{ t('开启后，局域网内的设备可以用系统账户通过 SSH 连接这台电脑。') }}</p>
+
+              <div v-if="sshConfirming" class="settings-block" role="alertdialog" :aria-label="t('确认开启远程访问？')">
+                <p><strong>{{ t('确认开启远程访问？') }}</strong></p>
+                <p class="settings-hint">{{ t('这会把这台电脑的 SSH 端口暴露到局域网，并使用系统账户登录。可以随时关闭。') }}</p>
+                <div class="settings-inline">
+                  <button class="button button--primary" @click="confirmSshEnable">{{ t('确认开启') }}</button>
+                  <button class="button button--quiet" @click="sshConfirming = false">{{ t('取消') }}</button>
+                </div>
+              </div>
+
+              <div class="settings-row settings-row--stack">
+                <span>{{ t('生命周期') }}</span>
+                <div class="settings-choices">
+                  <label><input type="radio" name="ssh-lifetime" :checked="sshSettings.lifetime === 'app'" :disabled="sshBusy" @change="setSshLifetime('app')" />{{ t('仅应用运行时') }}</label>
+                  <label><input type="radio" name="ssh-lifetime" :checked="sshSettings.lifetime === 'persistent'" :disabled="sshBusy" @change="setSshLifetime('persistent')" />{{ t('后台常驻') }}</label>
+                </div>
+              </div>
+              <p class="settings-hint">{{ sshLifetimeHint }}</p>
+
+              <div class="settings-row">
+                <span>{{ t('端口') }}</span>
+                <input
+                  v-if="sshPortEditable"
+                  class="settings-number"
+                  type="number"
+                  min="1"
+                  max="65535"
+                  :value="sshSettings.port"
+                  :aria-label="t('端口')"
+                  @change="setSshPort"
+                />
+                <span v-else class="settings-path">{{ sshSettings.port }}</span>
+              </div>
+              <p class="settings-hint">{{ sshPortEditable ? t('Windows 可以自定义端口；修改会断开现有 SSH 会话。') : t('macOS 的系统远程登录固定使用 22 端口。') }}</p>
+
+              <div class="settings-block">
+                <div class="settings-row">
+                  <span>{{ t('状态') }}</span>
+                  <strong>{{ sshStateLabel }}</strong>
+                </div>
+                <p v-if="sshPortHint" class="settings-hint settings-hint--warning" role="note">{{ sshPortHint }}</p>
+                <p v-if="sshErrorCopy" class="notice notice--error" role="alert">{{ sshErrorCopy }}</p>
+                <p v-if="!ssh.backendAvailable" class="settings-hint">{{ t('此版本暂不包含远程访问控制面，需要带辅助服务的签名版本。') }}</p>
+                <template v-else>
+                  <p v-if="!ssh.helperInstalled" class="settings-hint">{{ t('需要安装辅助服务才能开启远程访问。') }}</p>
+                  <p v-else-if="!ssh.helperApproved" class="settings-hint settings-hint--warning" role="note">{{ t('辅助服务等待系统批准：在「登录项」里允许 shrinkdrop 后重试。') }}</p>
+                  <div v-if="ssh.supported && ssh.admin" class="settings-inline">
+                    <button v-if="!ssh.helperInstalled" class="button" :disabled="sshBusy" @click="sshSession.installHelper()">{{ t('安装辅助服务') }}</button>
+                    <button v-else class="button button--quiet" :disabled="sshBusy" @click="sshSession.uninstallHelper()">{{ t('卸载辅助服务') }}</button>
+                  </div>
+                  <p v-if="ssh.supported && ssh.admin" class="settings-hint">{{ ssh.helperInstalled ? t('卸载辅助服务会同时关闭由 shrinkdrop 开启的 SSH。') : t('安装辅助服务需要管理员授权（系统密码或 UAC）。') }}</p>
+                </template>
+                <p v-if="ssh.supported && !ssh.admin" class="settings-hint settings-hint--warning">{{ t('SSH 需要管理员账户，请用管理员账户打开应用。') }}</p>
+              </div>
+
+              <div class="settings-block">
+                <div class="settings-row">
+                  <span>{{ t('连接命令') }}</span>
+                  <div class="settings-path-row">
+                    <code class="settings-path">{{ sshConnection }}</code>
+                    <button class="button" @click="copySshConnection">{{ sshCopied ? t('已复制') : t('复制') }}</button>
+                  </div>
+                </div>
+                <p v-if="ssh.fingerprint" class="settings-hint">{{ t('主机指纹') }}：{{ ssh.fingerprint }}</p>
+                <p class="settings-hint">{{ t('仅建议在可信局域网内开启，优先使用公钥登录。') }}</p>
+                <p class="settings-hint">{{ t('睡眠或 FileVault 未解锁时无法连接。') }}</p>
+              </div>
             </section>
 
             <section v-else class="settings-section">

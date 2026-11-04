@@ -1,5 +1,7 @@
 import type { LiteAdapter, SourceFile } from '../core/lite/types';
 import type { ShareAdapter } from '../core/share/types';
+import type { SshAdapter, SshErrorCode, SshOutcome, SshRuntime, SshSettingsView } from '../core/ssh/types';
+import { defaultSshRuntime, defaultSshSettings } from '../core/ssh/types';
 import type { SettingsAdapter, SettingsEvent, SettingsMutation, SettingsUpdatePayload } from '../core/settings/types';
 import { defaultSettings } from '../core/settings/types';
 import { emptyShareStatus } from '../core/share/types';
@@ -71,6 +73,72 @@ export function createBrowserShareAdapter(): ShareAdapter {
     qrSvg: desktopRequired,
     onStatus: async () => () => {},
     setTitle: async title => { if (typeof document !== 'undefined') document.title = title; }
+  };
+}
+//#endregion
+
+//#region 浏览器预览的远程访问占位
+/**
+ * 预览里模拟一台已安装辅助服务的 macOS：可以把开关、生命周期、状态卡都点一遍。
+ * 真实特权操作只存在于桌面版。
+ */
+export function createBrowserSshAdapter(): SshAdapter {
+  let runtime: SshRuntime = {
+    ...defaultSshRuntime(),
+    supported: true,
+    platform: 'macos',
+    admin: true,
+    backendAvailable: true,
+    username: 'you',
+    helperInstalled: true,
+    helperApproved: true,
+    address: '192.168.1.20'
+  };
+  let settings: SshSettingsView = defaultSshSettings();
+  const result = (error: SshErrorCode | null): SshOutcome => ({
+    runtime: { ...runtime, error },
+    ssh: settings,
+    error
+  });
+  return {
+    status: async () => ({ runtime: { ...runtime }, ssh: { ...settings } }),
+    enable: async (lifetime, port) => {
+      settings = { enabled: true, lifetime, port };
+      runtime = { ...runtime, osEnabled: true, owned: true, listening: true, port };
+      return result(null);
+    },
+    disable: async () => {
+      settings = { ...settings, enabled: false };
+      runtime = { ...runtime, osEnabled: false, owned: false, listening: false };
+      return result(null);
+    },
+    setLifetime: async lifetime => {
+      settings = { ...settings, lifetime };
+      return result(null);
+    },
+    setPort: async port => {
+      if (runtime.platform === 'macos' && port !== 22) return result('unsupported_custom_port');
+      settings = { ...settings, port };
+      runtime = { ...runtime, port };
+      return result(null);
+    },
+    installHelper: async () => {
+      runtime = { ...runtime, helperInstalled: true, helperApproved: true };
+      return result(null);
+    },
+    uninstallHelper: async () => {
+      settings = { ...settings, enabled: false };
+      runtime = {
+        ...runtime,
+        helperInstalled: false,
+        helperApproved: false,
+        osEnabled: false,
+        owned: false,
+        listening: false
+      };
+      return result(null);
+    },
+    onStatus: async () => () => {}
   };
 }
 //#endregion

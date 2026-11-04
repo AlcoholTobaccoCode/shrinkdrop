@@ -7,6 +7,7 @@ mod overwrite;
 mod power;
 mod settings;
 mod share;
+mod ssh;
 
 pub fn run() {
     tauri::Builder::default()
@@ -16,12 +17,15 @@ pub fn run() {
         .manage(share::ShareManager::default())
         .manage(settings::SettingsState::default())
         .manage(power::SleepInhibitor::default())
+        .manage(ssh::SshManager::default())
         .setup(|app| {
             let loaded = settings::load(&app.handle());
             // 启动时恢复防休眠档位；若上次异常退出留下了系统级设置，这里一并纠正。
             let inhibitor = app.state::<power::SleepInhibitor>();
             inhibitor.bind_dir(settings::keep_awake_dir(&app.handle()));
             let _ = inhibitor.reconcile(loaded.general.keep_awake);
+            // 启动对齐：读系统状态，不覆盖用户手动开启的实例，也不在此弹授权。
+            app.state::<ssh::SshManager>().reconcile(loaded.ssh.clone());
             app.state::<settings::SettingsState>().replace(loaded);
             Ok(())
         })
@@ -57,6 +61,8 @@ pub fn run() {
                 window.state::<share::ShareManager>().shutdown_now();
                 // 结束防休眠子进程，避免应用退出后继续阻止系统睡眠。
                 window.state::<power::SleepInhibitor>().release();
+                // 释放 helper 会话；lifetime=app 的实例由 helper 在宽限期后关闭。
+                window.state::<ssh::SshManager>().shutdown();
                 if let Some(settings) = window.app_handle().get_webview_window("settings") {
                     let _ = settings.close();
                 }
@@ -102,8 +108,21 @@ pub fn run() {
             share::share_set_active_group,
             share::share_open_upload_dir,
             share::share_preview_item,
-            share::share_save_items
+            share::share_save_items,
+            ssh::ssh_status,
+            ssh::ssh_enable,
+            ssh::ssh_disable,
+            ssh::ssh_set_lifetime,
+            ssh::ssh_set_port,
+            ssh::ssh_install_helper,
+            ssh::ssh_uninstall_helper
         ])
-        .run(tauri::generate_context!())
-        .expect("启动 Tauri 应用失败");
+        .build(tauri::generate_context!())
+        .expect("启动 Tauri 应用失败")
+        .run(|app, event| {
+            // Cmd+Q / 系统退出不经过 CloseRequested，这里再兜一次幂等 shutdown。
+            if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+                app.state::<ssh::SshManager>().shutdown();
+            }
+        });
 }

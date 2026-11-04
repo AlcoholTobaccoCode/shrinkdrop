@@ -1,3 +1,6 @@
+import type { SshSettingsView } from '../ssh/types';
+import { defaultSshSettings } from '../ssh/types';
+
 export type StartFace = 'last' | 'compress' | 'share';
 /** macOS 防休眠档位：关 / 阻止空闲休眠 / 彻底不休眠（含合盖）。 */
 export type KeepAwake = 'off' | 'idle' | 'always';
@@ -53,6 +56,7 @@ export interface SettingsView {
     accounts: AccountView[];
     groups: GroupView[];
   };
+  ssh: SshSettingsView;
 }
 
 export interface SettingsMutation {
@@ -115,6 +119,7 @@ export function defaultSettings(): SettingsView {
       allowFolderUpload: false,
       accounts: [],
       groups: []
-    }
+    },
+    ssh: defaultSshSettings()
   };
 }

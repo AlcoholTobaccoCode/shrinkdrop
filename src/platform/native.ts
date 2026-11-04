@@ -1,6 +1,7 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import type { BulkOverwriteResult, BulkSaveResult, CompressionResult, LiteAdapter, ProgressEvent, SourceFile } from '../core/lite/types';
 import type { ShareAdapter, ShareStatus } from '../core/share/types';
+import type { SshAdapter, SshOutcome, SshRuntime, SshSnapshot } from '../core/ssh/types';
 import type { Face, GroupAccessPatch, Permissions, SettingsAdapter, SettingsMutation, SettingsUpdatePayload, SettingsView } from '../core/settings/types';
 
 export type NativeInvoke = <T = unknown>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -113,6 +114,24 @@ export function createNativeSettingsAdapter(invoke: NativeInvoke = tauriInvoke):
       invoke<SettingsMutation>('share_group_access', { id, ...patch }),
     setGroupPin: (id: string, pin: string | null) =>
       invoke<SettingsMutation>('share_group_set_pin', { id, pin })
+  };
+}
+//#endregion
+
+//#region 远程访问接口
+export function createNativeSshAdapter(invoke: NativeInvoke = tauriInvoke): SshAdapter {
+  return {
+    status: () => invoke<SshSnapshot>('ssh_status'),
+    enable: (lifetime, port) => invoke<SshOutcome>('ssh_enable', { lifetime, port }),
+    disable: () => invoke<SshOutcome>('ssh_disable'),
+    setLifetime: lifetime => invoke<SshOutcome>('ssh_set_lifetime', { lifetime }),
+    setPort: port => invoke<SshOutcome>('ssh_set_port', { port }),
+    installHelper: () => invoke<SshOutcome>('ssh_install_helper'),
+    uninstallHelper: () => invoke<SshOutcome>('ssh_uninstall_helper'),
+    onStatus: async handler => {
+      const { listen } = await import('@tauri-apps/api/event');
+      return listen<SshRuntime>('ssh-status', event => handler(event.payload));
+    }
   };
 }
 //#endregion
