@@ -326,7 +326,9 @@ const en: Record<string, string> = {
   '内置版本 {version}；安装前校验 SHA256，不会静默安装。':
     'Bundled version {version}; its SHA256 is verified before installing, and nothing installs silently.',
   '安装完成后回到这里重新开启；如果系统提示重启，请先重启。':
-    'Come back and turn it on again once installed; restart first if Windows asks you to.'
+    'Come back and turn it on again once installed; restart first if Windows asks you to.',
+  '无法确认：22 端口被其它进程占用，或没有权限读取系统状态。':
+    'Unconfirmed: port 22 is held by another process, or the system state cannot be read without more privileges.'
 };
 
 export const i18n = reactive({ lang: 'zh' as Lang });

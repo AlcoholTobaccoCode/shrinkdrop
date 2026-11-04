@@ -32,7 +32,8 @@
 - **T4 macOS helper**：签名路线（Developer ID + SMAppService）未开始；不签名路线已落地为只读后端（`macos_readonly.rs`）。
 - **T8 打包/签名/升级**：helper 已作为 sidecar 进安装包（`tauri.windows.conf.json` + `scripts/build-ssh-helper.mjs`），但随包 OpenSSH MSI 与 `.sha256` 清单还没加入资源；升级替换服务二进制与安装器卸载钩子未接。
 - **T9 安全评审**：IPC DACL、SID + linked token 校验、命令白名单（`runner::resolve` 只放行 System32 下的已知工具）、失败路径不重试都已实现，但**未经独立安全评审或渗透测试**。
-- **T10 文档**：README「远程访问（SSH）」、隐私说明、发布检查表、故障排查（`docs/ssh/troubleshooting.md`）已补；发布说明与版本号待发版时写。
+- **T10 文档**：README「远程访问（SSH）」、隐私说明、发布检查表、故障排查（`docs/ssh/troubleshooting.md`）、macOS 回归路线（`docs/ssh/macos-regression.md`）已补；发布说明与版本号待发版时写。
+- **macOS 真机回归**：路线已写好并提交，尚未执行；执行人 QingShan。
 
 ### 第一轮记录（2026-11-04）
 
@@ -286,6 +287,7 @@ T10 文档与发布
 - [ ] helper 版本不匹配/未批准/被策略禁用：降级为只读状态，不循环重试。
 - [x] 卸载：owned 时先关闭 SSH、还原 `sshd_config` 与启动类型、删除自建防火墙规则、清空状态文件；不删除系统 OpenSSH。
 - [ ] 平台 E2E 记录：normal / crash / reboot / manual override / uninstall 五种场景。**未在 Windows 真机执行**。
+- [x] macOS 回归路线：`docs/ssh/macos-regression.md`（只读语义 R1–R6 + 现有功能 R7–R11 + 按基线还原）。
 
 **Acceptance:** 两种生命周期的行为与文档一致；异常路径不留下“以为关了但其实还开着”的状态。
 

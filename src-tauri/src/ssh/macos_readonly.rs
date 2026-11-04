@@ -10,9 +10,7 @@ use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::process::Command;
 use std::time::Duration;
 
-use shrinkdrop_ssh_core::{
-    ErrorCode, HelperStatus, InstallSource, OsState, PortOwner, SshLifetime,
-};
+use shrinkdrop_ssh_core::{ErrorCode, HelperStatus, InstallSource, OsState, SshLifetime};
 
 use super::{HelperInfo, SshBackend, SshError};
 
@@ -157,15 +155,9 @@ impl ReadOnlyBackend {
             lifetime: SshLifetime::Persistent,
             install_source: InstallSource::System,
             bundled_version: None,
-            port_in_use: if probe.listening && probe.os_state() == OsState::Unknown {
-                Some(PortOwner {
-                    port: PROBE_PORT,
-                    pid: 0,
-                    process: "unknown".to_string(),
-                })
-            } else {
-                None
-            },
+            // 只读路线不查监听者（没有特权、也没有 lsof 依赖），宁可不说，
+            // 也不要编一个 `unknown (PID 0)` 让用户去追。
+            port_in_use: None,
             fingerprint: probe.fingerprint,
         }
     }
@@ -328,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn read_only_status_marks_occupied_port_as_unknown_owner() {
+    fn read_only_status_never_fabricates_a_port_owner() {
         let status = ReadOnlyBackend::status_from(Probe {
             job_loaded: false,
             job_missing: true,
@@ -336,6 +328,7 @@ mod tests {
             fingerprint: None,
         });
         assert!(!status.os_enabled);
-        assert_eq!(status.port_in_use.map(|owner| owner.port), Some(PROBE_PORT));
+        assert_eq!(status.os_state, Some(OsState::Unknown));
+        assert_eq!(status.port_in_use, None, "查不到监听者就不要编一个 PID 0");
     }
 }

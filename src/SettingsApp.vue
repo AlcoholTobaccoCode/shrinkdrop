@@ -660,7 +660,8 @@ async function copySshConnection() {
                   </div>
                   <p v-if="ssh.supported && ssh.admin" class="settings-hint">{{ ssh.helperInstalled ? t('卸载辅助服务会同时关闭由 shrinkdrop 开启的 SSH。') : t('安装辅助服务需要管理员授权（系统密码或 UAC）。') }}</p>
                 </template>
-                <p v-if="ssh.supported && !ssh.admin" class="settings-hint settings-hint--warning">{{ t('SSH 需要管理员账户，请用管理员账户打开应用。') }}</p>
+                <p v-if="ssh.supported && !ssh.admin && !sshManual" class="settings-hint settings-hint--warning">{{ t('SSH 需要管理员账户，请用管理员账户打开应用。') }}</p>
+                <p v-if="sshManual && ssh.osState === 'unknown'" class="settings-hint settings-hint--warning" role="note">{{ t('无法确认：22 端口被其它进程占用，或没有权限读取系统状态。') }}</p>
                 <template v-if="sshNeedsInstall">
                   <p class="settings-hint settings-hint--warning" role="note">{{ t('系统未安装 OpenSSH Server。可以先去 Windows 设置 → 可选功能里安装，或使用下面两种兜底。') }}</p>
                   <div class="settings-inline">
