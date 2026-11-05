@@ -1225,7 +1225,13 @@ mod tests {
     fn helper_missing_surfaces_helper_unavailable() {
         let backend = FakeBackend::new();
         backend.lock().helper = HelperInfo::default();
-        let manager = SshManager::new(backend.clone(), Platform::MacOs, SshSettings::default());
+        // 显式给 supported：这条测的是 helper 缺失，不该随宿主平台（CI 上是 Windows）漂移。
+        let manager = SshManager::with_capabilities(
+            backend.clone(),
+            Platform::MacOs,
+            true,
+            SshSettings::default(),
+        );
         let runtime = manager.refresh();
         assert_eq!(runtime.error, Some(ErrorCode::HelperUnavailable));
         assert!(!runtime.helper_installed);
@@ -1417,7 +1423,12 @@ mod tests {
 
     #[test]
     fn read_only_runtime_exposes_unknown_state_without_claiming_enabled() {
-        let manager = SshManager::new(Arc::new(ReadOnlyFake), Platform::MacOs, SshSettings::default());
+        let manager = SshManager::with_capabilities(
+            Arc::new(ReadOnlyFake),
+            Platform::MacOs,
+            true,
+            SshSettings::default(),
+        );
         let runtime = manager.refresh();
         assert!(runtime.read_only);
         assert!(runtime.backend_available);
@@ -1429,7 +1440,12 @@ mod tests {
 
     #[test]
     fn read_only_rejects_every_write_and_keeps_desired_state() {
-        let manager = SshManager::new(Arc::new(ReadOnlyFake), Platform::MacOs, SshSettings::default());
+        let manager = SshManager::with_capabilities(
+            Arc::new(ReadOnlyFake),
+            Platform::MacOs,
+            true,
+            SshSettings::default(),
+        );
         manager.refresh();
 
         for runtime in [
