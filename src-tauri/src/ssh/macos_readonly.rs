@@ -212,13 +212,24 @@ impl SshBackend for ReadOnlyBackend {
     }
 }
 
+/// 共享面板的深链候选：带 `?RemoteLogin` 锚点的会尽量滚到“远程登录”那一项，
+/// 但锚点不是公开 API，部分系统版本会忽略（实测 macOS 26.2 两种都能加载 Sharing 面板），
+/// 所以保留不带锚点的形式作为第二选择。
+pub const SHARING_LINKS: [&str; 2] = [
+    "x-apple.systempreferences:com.apple.Sharing-Settings.extension?RemoteLogin",
+    "x-apple.systempreferences:com.apple.Sharing-Settings.extension",
+];
+
 /// 打开系统设置里的“共享”面板；失败时由 UI 退回文字步骤。
 pub fn open_sharing_settings() -> io::Result<()> {
-    let deep_link = Command::new("/usr/bin/open")
-        .arg("x-apple.systempreferences:com.apple.Sharing-Settings.extension")
-        .status();
-    if deep_link.is_ok_and(|status| status.success()) {
-        return Ok(());
+    for link in SHARING_LINKS {
+        if Command::new("/usr/bin/open")
+            .arg(link)
+            .status()
+            .is_ok_and(|status| status.success())
+        {
+            return Ok(());
+        }
     }
     let pane = Command::new("/usr/bin/open")
         .args(["-b", "com.apple.systempreferences"])

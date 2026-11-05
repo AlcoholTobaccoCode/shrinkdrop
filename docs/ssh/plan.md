@@ -29,12 +29,12 @@
 
 - **T0 平台 PoC**：自测手册在 `docs/ssh/poc.md`，需 QingShan 在真实 Windows / macOS 测试机执行；Windows 上的 UAC、服务安装、真实 SSH 登录、Home SKU 可用性都还没实测。
 - **Windows E2E**：本轮只在 macOS 上做了交叉类型检查（`cargo check --target x86_64-pc-windows-msvc`），没有在 Windows 上编译、安装服务或跑真实登录。SmartScreen/AV、服务 ACL、管道 ACL 的实际行为需要真机验证。
-- **T4 macOS helper**：签名路线（Developer ID + SMAppService）未开始；不签名路线已落地为只读后端（`macos_readonly.rs`）。
+- **T4 macOS helper**：未开始。签名只是前置条件之一——即使有 Developer ID，还要实现 `SMAppService` helper（安装/审批/崩溃兜底，估 1–2 天）；不签名路线已落地为只读后端（`macos_readonly.rs`）。
 - **T8 打包/签名/升级**：helper 已作为 sidecar 进安装包（`tauri.windows.conf.json` + `scripts/build-ssh-helper.mjs`），但随包 OpenSSH MSI 与 `.sha256` 清单还没加入资源；升级替换服务二进制与安装器卸载钩子未接。
 - **T9 安全评审**：IPC DACL、SID + linked token 校验、命令白名单（`runner::resolve` 只放行 System32 下的已知工具）、失败路径不重试都已实现，但**未经独立安全评审或渗透测试**。
 - **T10 文档**：README「远程访问（SSH）」、隐私说明、发布检查表、故障排查（`docs/ssh/troubleshooting.md`）、macOS 回归路线（`docs/ssh/macos-regression.md`）已补；发布说明与版本号待发版时写。
 - **macOS 真机回归**：路线已写好并提交（`docs/ssh/macos-regression.md`），尚未执行；执行人 QingShan。
-- **未签名构建的可运行性**：本轮已在本机实测——`pnpm tauri build --bundles app` 产出 ad-hoc 签名的 arm64 bundle，去掉 `com.apple.quarantine` 后可启动（`docs/ssh/unsigned-build.md`）。真机 R1–R11 仍未跑。
+- **未签名构建的可运行性**：已在本机实测——`pnpm tauri build --bundles app` 产出 ad-hoc 签名的 arm64 bundle，去掉 `com.apple.quarantine` 后可启动；macOS 真机回归（R1–R11）由 QingShan 跑通。自签/证书的能力边界见 `docs/ssh/unsigned-build.md` §3。
 
 ### 第一轮记录（2026-11-04）
 

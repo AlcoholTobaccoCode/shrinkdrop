@@ -47,13 +47,41 @@ macOS 15+ 已移除“右键 → 打开”的旧入口。
   再用 `sudo xattr -rd com.apple.provenance /Applications/shrinkdrop.app`（部分系统版本需要）。
 - **不要**对来源不明的包这么做；这里只针对本仓库的构建产物。
 
-## 3. 自签（可选，比 ad-hoc 体面一点）
+## 3. 自签名到底能做到什么
+
+三种“自签名”，能力完全不同：
+
+| 方式 | 能启动 | 别人机器不弹提示 | 有 Team ID | 应用内开关 |
+|---|---|---|---|---|
+| 链接器 ad-hoc（构建产物自带） | ✅ | ❌ | ❌ | ❌ |
+| `codesign --force --deep --sign -`（重签 ad-hoc） | ✅ | ❌ | ❌ | ❌ |
+| 钥匙串自建 Code Signing 证书 | ✅（本机信任后） | ❌ | ❌ | ❌ |
+| Apple Developer 免费账号（Apple Development 证书） | ✅ | ❌（仅团队内） | ✅ | 取决于是否实现 helper |
+| Developer ID + 公证（99 美元/年） | ✅ | ✅ | ✅ | 需实现 helper |
+
+关键点：**签名不是唯一的前置条件。** macOS 的应用内开关需要
+（1）`SMAppService` 注册 LaunchDaemon 的 helper 实现——**这一版还没做**（plan 的 T4）；
+（2）app 与 helper 同 Team ID 签名。
+所以：
+
+- 只做 ad-hoc：能跑，开关还是没有；
+- 自建证书：能跑（本机信任后），开关还是没有，而且换台机器要重新信任；
+- 就算买了 Developer ID，也还要先把 T4 的 helper 写完（估 1–2 天，含安装/卸载/崩溃兜底）。
+
+自签命令（只是让签名信息完整，不改变上面任何一行）：
 
 ```bash
 codesign --force --deep --sign - /Applications/shrinkdrop.app
 ```
 
-`-` 是 ad-hoc，仍然过不了 Gatekeeper，只是签名信息更完整；**不会**让应用内开关可用。
+自建证书签名：
+
+```bash
+# 钥匙串访问 → 证书助理 → 创建证书 → 类型选“代码签名”，然后用它的名字：
+codesign --force --deep --sign "shrinkdrop self-signed" /Applications/shrinkdrop.app
+```
+
+⚠️ 自签证书签出来的 app 不要在别的机器上 `spctl --master-disable` 来“解决”问题；那是关 Gatekeeper，等于对所有下载生效。
 
 ## 4. 打开后怎么验
 
