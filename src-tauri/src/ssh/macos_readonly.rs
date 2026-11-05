@@ -319,6 +319,29 @@ mod tests {
         assert!(backend.install_helper().is_err());
     }
 
+    /// 在真实系统上跑一次只读探测，验证三态自洽（不做任何写操作）。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn real_probe_is_coherent_and_read_only() {
+        let probe = probe();
+        let state = probe.os_state();
+        eprintln!(
+            "probe: state={state:?} job_loaded={} job_missing={} listening={} fingerprint={:?}",
+            probe.job_loaded, probe.job_missing, probe.listening, probe.fingerprint
+        );
+        match state {
+            OsState::Enabled => assert!(probe.job_loaded, "已开启必须能读到 launchd job"),
+            OsState::Disabled => {
+                assert!(!probe.job_loaded);
+                assert!(!probe.listening, "未开启却有人在 22 监听，三态应判成 unknown");
+            }
+            OsState::Unknown => assert!(!probe.job_loaded),
+        }
+        // 只读：探测不得产生 helper 或改动系统配置。
+        assert!(ReadOnlyBackend.helper_info().available);
+        assert!(!ReadOnlyBackend.helper_info().writable);
+    }
+
     #[test]
     fn read_only_status_never_fabricates_a_port_owner() {
         let status = ReadOnlyBackend::status_from(Probe {

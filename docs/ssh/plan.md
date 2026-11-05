@@ -33,7 +33,8 @@
 - **T8 打包/签名/升级**：helper 已作为 sidecar 进安装包（`tauri.windows.conf.json` + `scripts/build-ssh-helper.mjs`），但随包 OpenSSH MSI 与 `.sha256` 清单还没加入资源；升级替换服务二进制与安装器卸载钩子未接。
 - **T9 安全评审**：IPC DACL、SID + linked token 校验、命令白名单（`runner::resolve` 只放行 System32 下的已知工具）、失败路径不重试都已实现，但**未经独立安全评审或渗透测试**。
 - **T10 文档**：README「远程访问（SSH）」、隐私说明、发布检查表、故障排查（`docs/ssh/troubleshooting.md`）、macOS 回归路线（`docs/ssh/macos-regression.md`）已补；发布说明与版本号待发版时写。
-- **macOS 真机回归**：路线已写好并提交，尚未执行；执行人 QingShan。
+- **macOS 真机回归**：路线已写好并提交（`docs/ssh/macos-regression.md`），尚未执行；执行人 QingShan。
+- **未签名构建的可运行性**：本轮已在本机实测——`pnpm tauri build --bundles app` 产出 ad-hoc 签名的 arm64 bundle，去掉 `com.apple.quarantine` 后可启动（`docs/ssh/unsigned-build.md`）。真机 R1–R11 仍未跑。
 
 ### 第一轮记录（2026-11-04）
 
