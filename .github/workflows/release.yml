@@ -2,6 +2,11 @@ name: Desktop installers
 
 on:
   workflow_dispatch:
+    inputs:
+      force_build:
+        description: '即使该版本已打标签也构建（手动验证用，不发布 Release）'
+        type: boolean
+        default: false
   push:
     branches: [main]
     tags: ['v*']
@@ -49,7 +54,7 @@ jobs:
 
   tauri:
     needs: version
-    if: needs.version.outputs.tagged != 'true'
+    if: needs.version.outputs.tagged != 'true' || inputs.force_build == true
     name: Build ${{ matrix.artifact }}
     timeout-minutes: 45
     strategy:
