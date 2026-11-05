@@ -86,13 +86,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+      # 必须在 cargo test 之前：build.rs 会校验 externalBin 指向的 sidecar 是否存在。
+      - name: Build SSH helper sidecar
+        if: matrix.artifact == 'windows-x64'
+        run: node scripts/build-ssh-helper.mjs
       - run: pnpm test
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
       # 默认成员只含主 crate；helper 的平台无关测试单独跑。
       - run: cargo test --manifest-path src-tauri/Cargo.toml -p shrinkdrop-ssh-helper --locked
-      - name: Build SSH helper sidecar
-        if: matrix.artifact == 'windows-x64'
-        run: node scripts/build-ssh-helper.mjs
       - uses: tauri-apps/tauri-action@v0
         with:
           args: ${{ matrix.args }} --ci -- --locked
