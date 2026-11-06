@@ -59,12 +59,17 @@ pub fn is_admin() -> bool {
     false
 }
 
-/// `whoami /groups` 的 CSV 行里，Administrators 组（S-1-5-32-544）必须是启用状态。
+/// `whoami /groups` 的 CSV 里是否出现 Administrators（S-1-5-32-544）。
+///
+/// 只要出现就算管理员账户 —— UAC 关闭提权时该行会写成「仅用于拒绝的组 / Group used for
+/// deny only」，但那仍然表示这个账户是管理员，只是当前进程没提权。真正的操作权限由
+/// helper 与 UAC 决定，这里只回答“这个账户能不能安装/管理辅助服务”。
+/// 反过来，用属性文本过滤会踩本地化：中文 Windows 不出现 "deny"，英文 Windows 出现，
+/// 同一账户在两个系统上结论就不一样了。
 pub fn parse_windows_admin(groups: &str) -> bool {
-    groups.lines().any(|line| {
-        let line = line.to_lowercase();
-        line.contains("s-1-5-32-544") && !line.contains("deny")
-    })
+    groups
+        .lines()
+        .any(|line| line.to_lowercase().contains("s-1-5-32-544"))
 }
 
 fn macos_version() -> Option<u32> {
@@ -124,12 +129,21 @@ mod tests {
 
     #[test]
     fn windows_admin_group_is_detected_from_whoami() {
-        let admin = r#""Administrators","S-1-5-32-544","Enabled group","Enabled",""
+        let elevated = r#""Administrators","S-1-5-32-544","Enabled group","Enabled",""
+"Users","S-1-5-32-545","Mandatory group","Enabled",""
+"#;
+        // 未提权的管理员：Attributes 列是本地化文本，中英文都必须判成管理员。
+        let filtered_zh = r#""Administrators","S-1-5-32-544","仅用于拒绝的组","已启用",""
+"Users","S-1-5-32-545","强制组","已启用",""
+"#;
+        let filtered_en = r#""Administrators","S-1-5-32-544","Group used for deny only","Enabled",""
 "Users","S-1-5-32-545","Mandatory group","Enabled",""
 "#;
         let standard = r#""Users","S-1-5-32-545","Mandatory group","Enabled",""
 "#;
-        assert!(parse_windows_admin(admin));
+        assert!(parse_windows_admin(elevated));
+        assert!(parse_windows_admin(filtered_zh));
+        assert!(parse_windows_admin(filtered_en));
         assert!(!parse_windows_admin(standard));
     }
 

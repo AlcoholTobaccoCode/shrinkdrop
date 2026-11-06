@@ -156,6 +156,8 @@ pub struct SshRuntime {
     pub fingerprint: Option<String>,
     pub port_in_use: Option<PortOwner>,
     pub error: Option<ErrorCode>,
+    /// 错误的可读细节（Win32 错误码、哪一步失败）。UI 用它把“不知道为什么失败”变成可诊断。
+    pub error_detail: Option<String>,
 }
 
 impl SshRuntime {
@@ -180,7 +182,13 @@ impl SshRuntime {
             fingerprint: None,
             port_in_use: None,
             error: None,
+            error_detail: None,
         }
+    }
+
+    fn set_error(&mut self, error: &SshError) {
+        self.error = Some(error.code);
+        self.error_detail = error.detail.clone();
     }
 }
 
@@ -225,7 +233,7 @@ impl Inner {
                 self.runtime.listening = false;
                 self.runtime.owned = false;
                 self.runtime.port_in_use = None;
-                self.runtime.error = Some(error.code);
+                self.runtime.set_error(&error);
             }
         }
         self.sync_phase();
@@ -245,6 +253,7 @@ impl Inner {
         self.runtime.port_in_use = status.port_in_use;
         self.runtime.fingerprint = status.fingerprint;
         self.runtime.error = None;
+        self.runtime.error_detail = None;
     }
 
     fn sync_phase(&mut self) {
@@ -257,6 +266,7 @@ impl Inner {
 
     fn busy(&mut self) -> SshRuntime {
         self.runtime.error = Some(ErrorCode::Busy);
+        self.runtime.error_detail = None;
         self.runtime.clone()
     }
 
@@ -276,7 +286,7 @@ impl Inner {
             }
             Err(error) => {
                 self.record(error.clone());
-                self.runtime.error = Some(error.code);
+                self.runtime.set_error(&error);
                 Err(error.code)
             }
         }
@@ -289,7 +299,7 @@ impl Inner {
         self.clients -= 1;
         if self.clients == 0 {
             if let Err(error) = self.backend.detach() {
-                self.runtime.error = Some(error.code);
+                self.runtime.set_error(&error);
             }
         }
     }
@@ -394,15 +404,18 @@ impl SshManager {
         let mut inner = self.lock();
         if !inner.supported {
             inner.runtime.error = Some(ErrorCode::UnsupportedOs);
+            inner.runtime.error_detail = None;
             return inner.runtime.clone();
         }
         if inner.runtime.read_only {
             // 只读模式绝不写系统状态，也不写 enabled：开关由系统设置负责。
             inner.runtime.error = Some(ErrorCode::ReadOnly);
+            inner.runtime.error_detail = None;
             return inner.runtime.clone();
         }
         if inner.platform == Platform::MacOs && port != MACOS_PORT {
             inner.runtime.error = Some(ErrorCode::UnsupportedCustomPort);
+            inner.runtime.error_detail = None;
             return inner.runtime.clone();
         }
         if matches!(inner.phase, Phase::Enabling | Phase::Disabling) {
@@ -440,6 +453,7 @@ impl SshManager {
                         inner.phase = Phase::Disabled;
                         inner.refresh();
                         inner.runtime.error = Some(code);
+                        inner.runtime.error_detail = None;
                     }
                 }
             }
@@ -447,7 +461,7 @@ impl SshManager {
                 inner.record(error.clone());
                 inner.phase = Phase::Disabled;
                 inner.refresh();
-                inner.runtime.error = Some(error.code);
+                inner.runtime.set_error(&error);
             }
         }
         inner.runtime.clone()
@@ -457,6 +471,7 @@ impl SshManager {
         let mut inner = self.lock();
         if inner.runtime.read_only {
             inner.runtime.error = Some(ErrorCode::ReadOnly);
+            inner.runtime.error_detail = None;
             return inner.runtime.clone();
         }
         if matches!(inner.phase, Phase::Enabling | Phase::Disabling) {
@@ -485,7 +500,7 @@ impl SshManager {
                 inner.record(error.clone());
                 inner.phase = Phase::Enabled;
                 inner.refresh();
-                inner.runtime.error = Some(error.code);
+                inner.runtime.set_error(&error);
             }
         }
         inner.runtime.clone()
@@ -495,6 +510,7 @@ impl SshManager {
         let mut inner = self.lock();
         if inner.runtime.read_only {
             inner.runtime.error = Some(ErrorCode::ReadOnly);
+            inner.runtime.error_detail = None;
             return inner.runtime.clone();
         }
         if inner.settings.lifetime == lifetime {
@@ -517,7 +533,7 @@ impl SshManager {
                 Err(error) => {
                     inner.record(error.clone());
                     inner.refresh();
-                    inner.runtime.error = Some(error.code);
+                    inner.runtime.set_error(&error);
                 }
             }
         } else {
@@ -531,14 +547,17 @@ impl SshManager {
         let mut inner = self.lock();
         if inner.runtime.read_only {
             inner.runtime.error = Some(ErrorCode::ReadOnly);
+            inner.runtime.error_detail = None;
             return inner.runtime.clone();
         }
         if port == 0 {
             inner.runtime.error = Some(ErrorCode::Internal);
+            inner.runtime.error_detail = None;
             return inner.runtime.clone();
         }
         if inner.platform == Platform::MacOs && port != MACOS_PORT {
             inner.runtime.error = Some(ErrorCode::UnsupportedCustomPort);
+            inner.runtime.error_detail = None;
             return inner.runtime.clone();
         }
         inner.refresh();
@@ -551,7 +570,7 @@ impl SshManager {
                 Err(error) => {
                     inner.record(error.clone());
                     inner.refresh();
-                    inner.runtime.error = Some(error.code);
+                    inner.runtime.set_error(&error);
                 }
             }
         } else {
@@ -565,10 +584,12 @@ impl SshManager {
         let mut inner = self.lock();
         if !inner.supported {
             inner.runtime.error = Some(ErrorCode::UnsupportedOs);
+            inner.runtime.error_detail = None;
             return inner.runtime.clone();
         }
         if inner.runtime.read_only {
             inner.runtime.error = Some(ErrorCode::ReadOnly);
+            inner.runtime.error_detail = None;
             return inner.runtime.clone();
         }
         match inner.backend.install_helper() {
@@ -576,7 +597,7 @@ impl SshManager {
             Err(error) => {
                 inner.record(error.clone());
                 inner.refresh();
-                inner.runtime.error = Some(error.code);
+                inner.runtime.set_error(&error);
             }
         }
         inner.runtime.clone()
@@ -587,10 +608,12 @@ impl SshManager {
         let mut inner = self.lock();
         if !inner.supported {
             inner.runtime.error = Some(ErrorCode::UnsupportedOs);
+            inner.runtime.error_detail = None;
             return inner.runtime.clone();
         }
         if inner.runtime.read_only {
             inner.runtime.error = Some(ErrorCode::ReadOnly);
+            inner.runtime.error_detail = None;
             return inner.runtime.clone();
         }
         let result = inner.backend.install_bundled();
@@ -603,7 +626,7 @@ impl SshManager {
             }
             Err(error) => {
                 inner.record(error.clone());
-                inner.runtime.error = Some(error.code);
+                inner.runtime.set_error(&error);
             }
         }
         inner.runtime.clone()
@@ -613,6 +636,7 @@ impl SshManager {
         let mut inner = self.lock();
         if inner.runtime.read_only {
             inner.runtime.error = Some(ErrorCode::ReadOnly);
+            inner.runtime.error_detail = None;
             return inner.runtime.clone();
         }
         if inner.runtime.owned {
@@ -624,7 +648,7 @@ impl SshManager {
             Ok(()) => {}
             Err(error) => {
                 inner.record(error.clone());
-                inner.runtime.error = Some(error.code);
+                inner.runtime.set_error(&error);
             }
         }
         inner.settings.enabled = false;
@@ -874,7 +898,7 @@ mod tests {
         port: u16,
         lifetime: SshLifetime,
         helper: HelperInfo,
-        fail_next: Option<ErrorCode>,
+        fail_next: Option<SshError>,
         fail_attach: bool,
         calls: Vec<&'static str>,
         attach_calls: u32,
@@ -927,7 +951,11 @@ mod tests {
         }
 
         fn fail_next(&self, code: ErrorCode) {
-            self.lock().fail_next = Some(code);
+            self.lock().fail_next = Some(SshError::new(code));
+        }
+
+        fn fail_next_detail(&self, code: ErrorCode, detail: &str) {
+            self.lock().fail_next = Some(SshError::with_detail(code, detail));
         }
 
         fn calls(&self) -> Vec<&'static str> {
@@ -978,8 +1006,8 @@ mod tests {
                 if !state.helper.installed {
                     return Err(SshError::new(ErrorCode::HelperUnavailable));
                 }
-                if let Some(code) = state.fail_next.take() {
-                    return Err(SshError::new(code));
+                if let Some(error) = state.fail_next.take() {
+                    return Err(error);
                 }
                 state.os_enabled = true;
                 state.owned = true;
@@ -994,8 +1022,8 @@ mod tests {
             {
                 let mut state = self.lock();
                 state.calls.push("disable");
-                if let Some(code) = state.fail_next.take() {
-                    return Err(SshError::new(code));
+                if let Some(error) = state.fail_next.take() {
+                    return Err(error);
                 }
                 state.os_enabled = false;
                 state.owned = false;
@@ -1008,8 +1036,8 @@ mod tests {
             {
                 let mut state = self.lock();
                 state.calls.push("set_lifetime");
-                if let Some(code) = state.fail_next.take() {
-                    return Err(SshError::new(code));
+                if let Some(error) = state.fail_next.take() {
+                    return Err(error);
                 }
                 state.lifetime = lifetime;
             }
@@ -1020,8 +1048,8 @@ mod tests {
             {
                 let mut state = self.lock();
                 state.calls.push("set_port");
-                if let Some(code) = state.fail_next.take() {
-                    return Err(SshError::new(code));
+                if let Some(error) = state.fail_next.take() {
+                    return Err(error);
                 }
                 state.port = port;
             }
@@ -1062,8 +1090,8 @@ mod tests {
             {
                 let mut state = self.lock();
                 state.calls.push("install_bundled");
-                if let Some(code) = state.fail_next.take() {
-                    return Err(SshError::new(code));
+                if let Some(error) = state.fail_next.take() {
+                    return Err(error);
                 }
             }
             Ok(self.status_of())
@@ -1299,6 +1327,26 @@ mod tests {
         manager.set_port(2200);
         assert_eq!(manager.desired().port, 2200);
         assert_eq!(backend.calls(), vec!["enable", "set_port"]);
+    }
+
+    #[test]
+    fn failed_action_keeps_the_actionable_detail() {
+        let (backend, manager) = fixture(Platform::MacOs);
+        backend.fail_next_detail(
+            ErrorCode::ServiceStartFailed,
+            "启动 sshd 失败（错误 5），sshd_config 已回滚",
+        );
+        let runtime = manager.enable(SshLifetime::App, 22);
+        assert_eq!(runtime.error, Some(ErrorCode::ServiceStartFailed));
+        assert_eq!(
+            runtime.error_detail.as_deref(),
+            Some("启动 sshd 失败（错误 5），sshd_config 已回滚"),
+            "UI 需要具体原因，不能只剩一个错误码"
+        );
+        // 成功的一次刷新必须清掉旧细节，否则会一直挂在面板上。
+        let runtime = manager.refresh();
+        assert_eq!(runtime.error, None);
+        assert_eq!(runtime.error_detail, None);
     }
 
     #[test]

@@ -10,11 +10,17 @@ import {
   type SshSettingsView
 } from './types';
 
+/** 正在执行的耗时操作；UI 用它显示“在做什么 + 已等多久”。 */
+export type SshAction = 'install' | 'uninstall' | 'enable' | 'disable' | 'port';
+
 export interface SshSession {
   adapter: SshAdapter;
   state: {
     loaded: boolean;
     busy: boolean;
+    action: SshAction | null;
+    /** 当前操作已等待的秒数，由 1s 定时器推进。 */
+    elapsed: number;
     runtime: SshRuntime;
     settings: SshSettingsView;
     error: SshErrorCode | null;
@@ -41,6 +47,8 @@ export function createSshSession(adapter: SshAdapter): SshSession {
   const state = reactive({
     loaded: false,
     busy: false,
+    action: null as SshAction | null,
+    elapsed: 0,
     runtime: defaultSshRuntime(),
     settings: defaultSshSettings(),
     error: null as SshErrorCode | null,
@@ -52,6 +60,16 @@ export function createSshSession(adapter: SshAdapter): SshSession {
     state.runtime = outcome.runtime;
     state.settings = outcome.ssh;
     state.error = outcome.error ?? outcome.runtime.error;
+  }
+
+  /** 1s 心跳：装服务要等 UAC + 服务启动，最多 30s，没有反馈就是“干等”。 */
+  function startTicker() {
+    state.elapsed = 0;
+    const started = Date.now();
+    const timer = setInterval(() => {
+      state.elapsed = Math.floor((Date.now() - started) / 1000);
+    }, 1000);
+    return () => clearInterval(timer);
   }
 
   async function load() {
@@ -68,24 +86,29 @@ export function createSshSession(adapter: SshAdapter): SshSession {
     return state.runtime;
   }
 
-  async function run(action: () => Promise<SshOutcome>) {
+  async function run(kind: SshAction | null, action: () => Promise<SshOutcome>) {
     state.busy = true;
+    state.action = kind;
     state.detail = '';
+    const stop = kind ? startTicker() : () => {};
     try {
       apply(await action());
     } catch (error) {
       state.error = 'internal';
       state.detail = typeof error === 'string' ? error : '';
     } finally {
+      stop();
       state.busy = false;
+      state.action = null;
     }
   }
 
-  const enable = (lifetime: SshLifetime, port: number) => run(() => adapter.enable(lifetime, port));
-  const disable = () => run(() => adapter.disable());
-  const setLifetime = (lifetime: SshLifetime) => run(() => adapter.setLifetime(lifetime));
-  const setPort = (port: number) => run(() => adapter.setPort(port));
-  const installHelper = () => run(() => adapter.installHelper());
+  const enable = (lifetime: SshLifetime, port: number) =>
+    run('enable', () => adapter.enable(lifetime, port));
+  const disable = () => run('disable', () => adapter.disable());
+  const setLifetime = (lifetime: SshLifetime) => run(null, () => adapter.setLifetime(lifetime));
+  const setPort = (port: number) => run('port', () => adapter.setPort(port));
+  const installHelper = () => run('install', () => adapter.installHelper());
   async function openSharingSettings() {
     try {
       await adapter.openSharingSettings();
@@ -93,7 +116,7 @@ export function createSshSession(adapter: SshAdapter): SshSession {
       state.detail = typeof error === 'string' ? error : '';
     }
   }
-  const installBundledOpenSsh = () => run(() => adapter.installBundledOpenSsh());
+  const installBundledOpenSsh = () => run('install', () => adapter.installBundledOpenSsh());
   async function openOpenSshDownload() {
     try {
       await adapter.openOpenSshDownload();
@@ -101,7 +124,7 @@ export function createSshSession(adapter: SshAdapter): SshSession {
       state.detail = typeof error === 'string' ? error : '';
     }
   }
-  const uninstallHelper = () => run(() => adapter.uninstallHelper());
+  const uninstallHelper = () => run('uninstall', () => adapter.uninstallHelper());
 
   /** 主窗口改了 SSH 状态时，设置窗口跟随刷新。 */
   async function subscribe() {

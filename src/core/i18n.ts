@@ -336,7 +336,18 @@ const en: Record<string, string> = {
   '连不上时先确认：两台设备在同一网段、Windows 防火墙对当前网络放行、以及安全软件没有拦截入站。':
     'If the connection fails, check that both devices are on the same subnet, Windows Firewall allows the current network, and security software is not blocking inbound connections.',
   'Windows 防火墙只对「专用」或「域」网络放行；网络被识别为「公用」时需要在系统里改成专用，或手动放行该端口。':
-    'Windows Firewall only allows Private or Domain networks. If the network is classified as Public, switch it to Private or allow the port manually.'
+    'Windows Firewall only allows Private or Domain networks. If the network is classified as Public, switch it to Private or allow the port manually.',
+  '辅助服务已安装但连不上：点下面的按钮重装一次（会重启服务），或检查「服务」里的 ShrinkdropSshHelper。':
+    'The helper is installed but not reachable. Reinstall it with the button below (this restarts the service), or check ShrinkdropSshHelper in Services.',
+  '正在安装辅助服务': 'Installing the helper service',
+  '正在卸载辅助服务': 'Removing the helper service',
+  '正在开启远程访问': 'Turning on remote access',
+  '正在关闭远程访问': 'Turning off remote access',
+  '正在应用端口': 'Applying the port',
+  '正在应用设置': 'Applying settings',
+  '正在安装…': 'Installing…',
+  '具体原因': 'Details',
+  '，已等待 {seconds} 秒': ', waiting {seconds}s'
 };
 
 export const i18n = reactive({ lang: 'zh' as Lang });

@@ -51,6 +51,8 @@ export interface SshRuntime {
   fingerprint: string | null;
   portInUse: SshPortOwner | null;
   error: SshErrorCode | null;
+  /** 错误的具体原因（哪一步失败、Win32 错误码），UI 用作可诊断的第二行。 */
+  errorDetail: string | null;
 }
 
 export interface SshSettingsView {
@@ -108,7 +110,8 @@ export function defaultSshRuntime(): SshRuntime {
     bundledVersion: null,
     fingerprint: null,
     portInUse: null,
-    error: null
+    error: null,
+    errorDetail: null
   };
 }
 

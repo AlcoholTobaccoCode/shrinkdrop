@@ -142,8 +142,16 @@ macOS：
 Windows：
 
 - 命名管道 `\\.\pipe\shrinkdrop-ssh-helper`，`PIPE_REJECT_REMOTE_CLIENTS`。
-- DACL 只允许 SYSTEM、Administrators、当前 console 用户 SID。
-- 从客户端 PID 取 token，用 linked token 复核 Administrators 组；不能只依赖 UI 判断。
+- DACL 只允许 SYSTEM、Administrators、安装者账户 SID。
+- 每次连接从客户端 PID 取 token，按下面任一条放行：
+  1. `TokenUser` 的账户 SID 等于安装时记录的安装者 SID —— **不要求 app 自己提权**；
+  2. token 已提权（`TokenElevation`）；
+  3. token 属于 Administrators，或 UAC 过滤前 token（linked token）属于 Administrators。
+- 比较账户用 `TokenUser` 的 SID，不看组名、也不看 `whoami` 的属性文本：`whoami /groups` 的
+  “仅用于拒绝的组 / Group used for deny only” 是本地化的，按文本判断会让同一账户在中文
+  Windows 与英文 Windows 上得到不同结论。UAC 的授权点在**安装那一刻**，装完之后这类
+  固定动词的控制面不该再要求每次提权 —— 否则 helper 存在的意义就没了。
+- 鉴权失败回 `needs_admin`，并在 `detail` 里带哪一步失败（含 Win32 错误码），设置面板会显示这一行。
 
 ## 10. 日志与脱敏
 
@@ -155,7 +163,7 @@ Windows：
 
 | 威胁 | 处理 |
 |---|---|
-| 本地低权限进程连 socket | macOS：socket `0660` 直接拒绝连接；Windows：命名管道 ACL + 管理员组复核，回 `needs_admin` |
+| 本地低权限进程连 socket | macOS：socket `0660` 直接拒绝连接；Windows：命名管道 ACL（SYSTEM / Administrators / 安装者账户）+ 复核调用方账户，回 `needs_admin` |
 | 同用户恶意进程冒充 app | 只接受固定动词；不能借 helper 执行任意命令或改任意文件 |
 | 路径注入 | 协议里没有路径参数；helper 内部使用固定常量路径 |
 | 命令注入 | 不拼 shell 字符串；`launchctl` / `sc` 全部固定 argv |

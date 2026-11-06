@@ -81,6 +81,26 @@ const sshNeedsInstall = computed(
 const sshBundledAvailable = computed(() => Boolean(ssh.value.bundledVersion));
 
 /** 没有辅助服务就没有可审计的特权控制面：开关只读，避免假装可用。 */
+const sshActionLabels: Record<string, string> = {
+  install: '正在安装辅助服务',
+  uninstall: '正在卸载辅助服务',
+  enable: '正在开启远程访问',
+  disable: '正在关闭远程访问',
+  port: '正在应用端口'
+};
+/** 耗时操作的可观察进度：做什么 + 已等多久（服务安装要等 UAC 与 SCM，最长 30s）。 */
+const sshProgressText = computed(() => {
+  if (!sshBusy.value) return '';
+  const action = sshSession.state.action;
+  const label = sshActionLabels[action ?? ''] ?? '正在应用设置';
+  const seconds = sshSession.state.elapsed;
+  const waited = seconds >= 2 ? t('，已等待 {seconds} 秒', { seconds: String(seconds) }) : '';
+  return `${t(label)}…${waited}`;
+});
+const sshInstallLabel = computed(() =>
+  sshSession.state.action === 'install' ? t('正在安装…') : t('安装辅助服务')
+);
+
 const sshToggleBlocked = computed(
   () =>
     !ssh.value.backendAvailable ||
@@ -659,8 +679,10 @@ async function copySshConnection() {
                   <span>{{ t('状态') }}</span>
                   <strong>{{ sshStateLabel }}</strong>
                 </div>
+                <p v-if="sshProgressText" class="settings-hint" role="status" aria-live="polite">{{ sshProgressText }}</p>
                 <p v-if="sshPortHint" class="settings-hint settings-hint--warning" role="note">{{ sshPortHint }}</p>
                 <p v-if="sshErrorCopy" class="notice notice--error" role="alert">{{ sshErrorCopy }}</p>
+                <p v-if="sshErrorCopy && ssh.errorDetail" class="settings-hint">{{ t('具体原因') }}：{{ ssh.errorDetail }}</p>
                 <p v-if="!ssh.backendAvailable" class="settings-hint">{{ t('此版本暂不包含远程访问控制面，需要带辅助服务的签名版本。') }}</p>
                 <p v-else-if="sshManual" class="settings-hint">{{ t('状态由系统设置管理，应用只读；开启或关闭请到「共享 → 远程登录」。') }}</p>
                 <template v-else>
@@ -668,8 +690,9 @@ async function copySshConnection() {
                   <p v-if="!ssh.helperInstalled" class="settings-hint">{{ t('需要安装辅助服务才能开启远程访问。') }}</p>
                   <p v-if="!ssh.helperInstalled && sshIsWindows" class="settings-hint">{{ t('安装后在「服务」里确认 ShrinkdropSshHelper 处于“正在运行”；被安全软件拦截时服务会启动失败。') }}</p>
                   <p v-else-if="!ssh.helperApproved && sshIsMac" class="settings-hint settings-hint--warning" role="note">{{ t('辅助服务等待系统批准：在「登录项」里允许 shrinkdrop 后重试。') }}</p>
+                  <p v-else-if="!ssh.helperApproved && sshIsWindows" class="settings-hint settings-hint--warning" role="note">{{ t('辅助服务已安装但连不上：点下面的按钮重装一次（会重启服务），或检查「服务」里的 ShrinkdropSshHelper。') }}</p>
                   <div v-if="ssh.supported && ssh.admin" class="settings-inline">
-                    <button v-if="!ssh.helperInstalled" class="button" :disabled="sshBusy" @click="sshSession.installHelper()">{{ t('安装辅助服务') }}</button>
+                    <button v-if="!ssh.helperInstalled || !ssh.helperApproved" class="button" :disabled="sshBusy" @click="sshSession.installHelper()">{{ sshInstallLabel }}</button>
                     <button v-else class="button button--quiet" :disabled="sshBusy" @click="sshSession.uninstallHelper()">{{ t('卸载辅助服务') }}</button>
                   </div>
                   <p v-if="ssh.supported && ssh.admin" class="settings-hint">{{ ssh.helperInstalled ? t('卸载辅助服务会同时关闭由 shrinkdrop 开启的 SSH。') : t('安装辅助服务需要管理员授权（系统密码或 UAC）。') }}</p>

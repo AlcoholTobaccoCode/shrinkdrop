@@ -167,7 +167,7 @@ mod windows_service {
                 format!("{:?} {}", error.code, error.detail.unwrap_or_default())
             })?;
             // 鉴权失败：读一帧拿到 id，回 needs_admin 后断开，不进入任何状态机。
-            if let Err(error) = pipe::authorize_client(handle) {
+            if let Err(error) = pipe::authorize_client(handle, &installer_sid) {
                 let file = unsafe { std::fs::File::from_raw_handle(handle as RawHandle) };
                 let mut reader =
                     BufReader::new(file.try_clone().map_err(|_| "管道复制失败".to_string())?);

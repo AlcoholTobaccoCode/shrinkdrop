@@ -96,7 +96,7 @@ export function createBrowserSshAdapter(): SshAdapter {
   };
   let settings: SshSettingsView = defaultSshSettings();
   const result = (error: SshErrorCode | null): SshOutcome => ({
-    runtime: { ...runtime, error },
+    runtime: { ...runtime, error, errorDetail: null },
     ssh: settings,
     error
   });

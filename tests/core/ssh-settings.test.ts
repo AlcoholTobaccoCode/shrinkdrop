@@ -50,6 +50,40 @@ function fixture(initial: SshOutcome) {
 }
 
 describe('ssh session', () => {
+  it('shows which action is running and how long it has waited', async () => {
+    const initial = outcome(runtime(), null);
+    let release: (value: SshOutcome) => void = () => {};
+    const { adapter, session } = fixture(initial);
+    adapter.installHelper = vi.fn(
+      () => new Promise<SshOutcome>(resolve => { release = resolve; })
+    );
+    vi.useFakeTimers();
+    try {
+      const pending = session.installHelper();
+      expect(session.state.busy).toBe(true);
+      expect(session.state.action).toBe('install');
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(session.state.elapsed).toBe(3);
+      release(initial);
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(session.state.busy).toBe(false);
+    expect(session.state.action).toBeNull();
+  });
+
+  it('keeps the backend error detail so the panel can name the failing step', async () => {
+    const failed = outcome(
+      runtime({ errorDetail: '启动 sshd 失败（错误 5），sshd_config 已回滚' }),
+      'service_start_failed'
+    );
+    const { session } = fixture(failed);
+    await session.load();
+    expect(session.state.error).toBe('service_start_failed');
+    expect(session.state.runtime.errorDetail).toBe('启动 sshd 失败（错误 5），sshd_config 已回滚');
+  });
+
   it('loads the runtime and surfaces the helper error', async () => {
     const helperMissing = outcome(runtime({ helperInstalled: false }), 'helper_unavailable');
     const { session } = fixture(helperMissing);

@@ -2,8 +2,12 @@
 //!
 //! 两条独立的防线，缺一不可：
 //! 1. 管道 DACL：只允许 SYSTEM、Administrators、安装者账户，并拒绝远程客户端；
-//! 2. 每次连接校验调用方进程 token 是否属于 Administrators（用 linked token，
-//!    这样普通提权前后的同一管理员账户都算通过），否则回 `needs_admin`。
+//! 2. 每次连接校验调用方：与安装者同一账户（TokenUser 的 SID 比较，与提权状态无关），
+//!    或属于 Administrators（含 UAC 过滤后 token 的 linked token），否则回 `needs_admin`。
+//!
+//! 之所以按“安装者账户”放行，而不是要求 app 自己提权：helper 本来就是替普通权限的
+//! app 做特权操作的；DACL 已经把这根管道限定给 SYSTEM / Administrators / 安装者账户，
+//! 安装那一刻的 UAC 就是授权点。要求每次操作都提权等于让 helper 失去意义。
 //!
 //! 只做这两件事：管道里没有任何“执行命令”的入口，见 `session.rs` 的固定动词。
 
@@ -15,8 +19,9 @@ use windows_sys::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
 use windows_sys::Win32::Security::{
-    CheckTokenMembership, CreateWellKnownSid, GetTokenInformation, TokenLinkedToken, TokenUser,
-    WinBuiltinAdministratorsSid, SECURITY_ATTRIBUTES, TOKEN_LINKED_TOKEN, TOKEN_QUERY, TOKEN_USER,
+    CheckTokenMembership, CreateWellKnownSid, GetTokenInformation, TokenElevation, TokenLinkedToken,
+    TokenUser, WinBuiltinAdministratorsSid, SECURITY_ATTRIBUTES, TOKEN_ELEVATION,
+    TOKEN_LINKED_TOKEN, TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
 use windows_sys::Win32::System::Pipes::{
@@ -51,10 +56,6 @@ const ERROR_NO_SUCH_LOGON_SESSION: u32 = 1312;
 
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-fn needs_admin() -> Failure {
-    Failure::with_detail(ErrorCode::NeedsAdmin, "需要管理员账户才能操作远程访问")
 }
 
 /// 安装时把当前（已提权的）管理员账户 SID 写进状态目录，供管道 DACL 使用。
@@ -171,31 +172,66 @@ pub fn accept(handle: HANDLE) -> Result<(), Failure> {
     Ok(())
 }
 
-/// 校验调用方：必须是 Administrators 成员（含 UAC 过滤后的 linked token）。
-pub fn authorize_client(pipe: HANDLE) -> Result<(), Failure> {
+/// 校验调用方：与安装者同一账户，或属于 Administrators（含 UAC 过滤后的 linked token）。
+///
+/// 账户身份用 `TokenUser` 的 SID 判断：它不受提权过滤影响，也不依赖本地化的组名，
+/// 因此在中文 Windows、Microsoft 账户、以及 UAC 关闭/开启的情况下结论一致。
+pub fn authorize_client(pipe: HANDLE, installer_sid: &str) -> Result<(), Failure> {
     let mut pid = 0u32;
+    let mut token: HANDLE = std::ptr::null_mut();
     unsafe {
         if GetNamedPipeClientProcessId(pipe, &mut pid) == 0 {
-            return Err(needs_admin());
+            return Err(refusal(format!("无法读取客户端进程（错误 {}）", GetLastError())));
+        }
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return Err(refusal(format!("无法打开客户端进程（错误 {}）", GetLastError())));
+        }
+        let opened = OpenProcessToken(process, TOKEN_QUERY, &mut token);
+        CloseHandle(process);
+        if opened == 0 {
+            return Err(refusal(format!("无法读取客户端凭据（错误 {}）", GetLastError())));
         }
     }
-    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-    if process.is_null() {
-        return Err(needs_admin());
-    }
-    let mut token: HANDLE = std::ptr::null_mut();
-    let opened = unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) };
-    unsafe { CloseHandle(process) };
-    if opened == 0 {
-        return Err(needs_admin());
-    }
-    let allowed = unsafe { is_admin_token(token) || linked_token_is_admin(token) };
-    unsafe { CloseHandle(token) };
-    if allowed {
-        Ok(())
+
+    let owner = unsafe { token_user_sid(token) };
+    let same_account = owner.as_deref() == Some(installer_sid);
+    let elevated = unsafe { token_is_elevated(token) };
+    let admin = unsafe { is_admin_token(token) };
+    // 只在必要时才去取 linked token：普通用户没有它，查询会失败。
+    let linked_admin = if elevated || admin {
+        false
     } else {
-        Err(needs_admin())
+        unsafe { linked_token_is_admin(token) }
+    };
+    unsafe { CloseHandle(token) };
+
+    if same_account || elevated || admin || linked_admin {
+        return Ok(());
     }
+    Err(refusal(format!(
+        "调用账户既不是安装者账户，也不是管理员（提权={elevated} 管理员组={admin} 关联令牌={linked_admin}）"
+    )))
+}
+
+fn refusal(detail: String) -> Failure {
+    Failure::with_detail(ErrorCode::NeedsAdmin, format!("辅助服务拒绝访问：{detail}"))
+}
+
+unsafe fn token_is_elevated(token: HANDLE) -> bool {
+    let mut info: TOKEN_ELEVATION = std::mem::zeroed();
+    let mut size = 0u32;
+    if GetTokenInformation(
+        token,
+        TokenElevation,
+        &mut info as *mut TOKEN_ELEVATION as *mut c_void,
+        std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+        &mut size,
+    ) == 0
+    {
+        return false;
+    }
+    info.TokenIsElevated != 0
 }
 
 unsafe fn is_admin_token(token: HANDLE) -> bool {

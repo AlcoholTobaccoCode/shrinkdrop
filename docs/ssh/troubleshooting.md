@@ -28,7 +28,7 @@
 | `service_missing` | 系统里没有 `sshd` 服务。同上。 |
 | `service_start_failed` | 服务起不来。常见原因：`sshd_config` 被别的工具改坏（helper 已在改前备份、失败回滚）、端口刚被抢占。 |
 | `firewall_blocked` | `netsh` 建规则失败（组策略、安全软件或权限不足）。改端口后会重新建规则。 |
-| `needs_admin` | 当前账户不是管理员，或 UAC 被取消。 |
+| `needs_admin` | 当前账户既不是安装辅助服务的那个账户，也不是管理员；或 UAC 被取消、授权被拒。面板下方的「具体原因」会写明是哪一步失败。 |
 | `policy_blocked` | 组策略 / MDM 禁止。需要管理员在域策略里放开。 |
 | `helper_unavailable` | 辅助服务未安装或没在运行。Windows：点面板的「安装辅助服务」，它会重新安装并启动服务；已装过就 `sc query ShrinkdropSshHelper` 看是否被停掉或被安全软件拦截。 |
 | `helper_version_mismatch` | 辅助服务与 app 版本不一致。重装一次辅助服务。 |
@@ -40,7 +40,11 @@
 - Windows 首次安装会弹 UAC，显示“未知发布者”是因为当前版本未签名；确认后服务以
   LocalSystem 运行，只监听本机命名管道 `\\.\pipe\shrinkdrop-ssh-helper`。
 - 安装会等到服务进入 RUNNING 才返回成功；起不来会带上 Win32 错误码，常见是 5（权限）、
-  1053（启动超时）和安全软件拦截。
+  1053（启动超时）和安全软件拦截。安装期间面板会显示「正在安装辅助服务…已等待 N 秒」，
+  没看到 UAC 弹窗时先看任务栏。
+- 安装后由**安装辅助服务时用的那个 Windows 账户**控制远程访问，不需要每次再用
+  “以管理员身份运行”。换成另一个账户打开应用会显示 `needs_admin`；卸载后重装即可换账户。
+- 面板报错时下面会有一行「具体原因」，反馈问题时把它一起发出来，比错误码有用。
 - 服务已装但面板显示未安装：服务可能被停掉了。`sc query ShrinkdropSshHelper` 看状态，
   `sc start ShrinkdropSshHelper` 启动，或在面板里卸载后重装。
 - 卸载辅助服务会：关闭由 shrinkdrop 开启的 SSH、还原 `sshd_config` 与启动类型、
