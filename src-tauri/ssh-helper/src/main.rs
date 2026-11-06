@@ -27,6 +27,7 @@ mod windows_service {
     use std::sync::Arc;
 
     use shrinkdrop_ssh_helper::config::FsConfigIo;
+    use shrinkdrop_ssh_helper::diag;
     use shrinkdrop_ssh_helper::helper::Helper;
     use shrinkdrop_ssh_helper::pipe;
     use shrinkdrop_ssh_helper::runner::SystemRunner;
@@ -110,10 +111,12 @@ mod windows_service {
             std::ptr::null_mut(),
         );
         report(SERVICE_START_PENDING);
+        diag::log("service: 启动");
         report(SERVICE_RUNNING);
         if let Err(error) = serve(helper()) {
-            eprintln!("helper stopped: {error}");
+            diag::log(&format!("service: serve 退出 {error}"));
         }
+        diag::log("service: 停止");
         report(SERVICE_STOPPED);
     }
 
@@ -125,6 +128,9 @@ mod windows_service {
     ) -> u32 {
         if control == SERVICE_CONTROL_STOP {
             STOPPING = true;
+            // 主循环可能正阻塞在 ConnectNamedPipe；自己连一下把 accept 唤醒，
+            // 否则 SCM 会一直等（安装升级时表现为“无法停止旧辅助服务”）。
+            std::thread::spawn(pipe::poke);
         }
         0
     }
@@ -158,25 +164,61 @@ mod windows_service {
 
         loop {
             if unsafe { STOPPING } {
+                diag::log("serve: 收到停止请求，退出主循环");
                 return Ok(());
             }
-            let handle = pipe::create_pipe(&installer_sid).map_err(|error| {
-                format!("{:?} {}", error.code, error.detail.unwrap_or_default())
-            })?;
-            pipe::accept(handle).map_err(|error| {
-                format!("{:?} {}", error.code, error.detail.unwrap_or_default())
-            })?;
+            let handle = match pipe::create_pipe(&installer_sid) {
+                Ok(handle) => handle,
+                Err(error) => {
+                    // 单个实例创建失败不该杀掉整个服务：记录后稍等重试。
+                    diag::log(&format!(
+                        "serve: 创建管道失败 {:?} {}",
+                        error.code,
+                        error.detail.as_deref().unwrap_or_default()
+                    ));
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    continue;
+                }
+            };
+            // 客户端可能在 ConnectNamedPipe 之前就断开（例如 app 只是在探测管道是否存在），
+            // 这种错误只关掉这一个实例。之前的 `?` 会让整个服务退出，表现就是
+            // “面板说连不上、具体原因 helper 连接中断”。
+            if let Err(error) = pipe::accept(handle) {
+                diag::log(&format!(
+                    "serve: 接受连接失败 {:?} {}",
+                    error.code,
+                    error.detail.as_deref().unwrap_or_default()
+                ));
+                unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
+                continue;
+            }
             // 鉴权失败：读一帧拿到 id，回 needs_admin 后断开，不进入任何状态机。
             if let Err(error) = pipe::authorize_client(handle, &installer_sid) {
+                diag::log(&format!(
+                    "serve: 拒绝连接 {}",
+                    error.detail.as_deref().unwrap_or_default()
+                ));
                 let file = unsafe { std::fs::File::from_raw_handle(handle as RawHandle) };
-                let mut reader =
-                    BufReader::new(file.try_clone().map_err(|_| "管道复制失败".to_string())?);
-                let mut writer = file;
-                let _ = refuse_session(&mut reader, &mut writer, &error);
+                match file.try_clone() {
+                    Ok(clone) => {
+                        let mut reader = BufReader::new(clone);
+                        let mut writer = file;
+                        let _ = refuse_session(&mut reader, &mut writer, &error);
+                    }
+                    Err(_) => {
+                        diag::log("serve: 管道复制失败，直接断开");
+                    }
+                }
                 continue;
             }
             let file = unsafe { std::fs::File::from_raw_handle(handle as RawHandle) };
-            let reader_file = file.try_clone().map_err(|error| error.to_string())?;
+            let reader_file = match file.try_clone() {
+                Ok(clone) => clone,
+                Err(error) => {
+                    diag::log(&format!("serve: 管道复制失败 {error}"));
+                    continue;
+                }
+            };
             let helper = helper.clone();
             // 线程只持有这一个连接；连接结束（含 app 崩溃）时 session 会结算引用计数。
             std::thread::spawn(move || {

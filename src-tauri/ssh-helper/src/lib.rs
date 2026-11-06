@@ -9,6 +9,7 @@
 //! Windows 专属的管道 ACL/调用方鉴权在 `pipe.rs`，服务外壳在 `main.rs`。
 
 pub mod bundled;
+pub mod diag;
 pub mod config;
 pub mod helper;
 pub mod runner;

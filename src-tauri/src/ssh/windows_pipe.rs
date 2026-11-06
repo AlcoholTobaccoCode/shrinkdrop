@@ -13,6 +13,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     OPEN_EXISTING,
 };
+use windows_sys::Win32::System::Pipes::WaitNamedPipeW;
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
@@ -23,6 +24,8 @@ pub const PIPE_NAME: &str = r"\\.\pipe\shrinkdrop-ssh-helper";
 pub const SERVICE_NAME: &str = "ShrinkdropSshHelper";
 const HELPER_EXE: &str = "shrinkdrop-ssh-helper.exe";
 const ERROR_CANCELLED: u32 = 1223;
+/// 231 = 所有管道实例都已被占用；等一条空闲实例再连。
+const ERROR_PIPE_BUSY: u32 = 231;
 /// 提权安装后等待服务可连的上限；卸载后等待管道消失的上限。
 const INSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const UNINSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
@@ -56,27 +59,45 @@ fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// 打开本机管道；`\\.\pipe\*` 不是文件系统路径，只能靠 CreateFileW 判定存在。
+/// 管道是否存在：`WaitNamedPipeW(…, 0)` 不建立连接，实例全忙也算“存在”。
+///
+/// 之前用 `CreateFileW` 探测：每次探测都会占用一条连接、再立刻断开，helper 那边会看到
+/// 一次“连上却没数据”的会话；这既浪费也制造竞态，服务端一旦把它当成致命错误就会退出。
+fn pipe_exists() -> bool {
+    let name = wide(PIPE_NAME);
+    let ok = unsafe { WaitNamedPipeW(name.as_ptr(), 0) };
+    ok != 0 || unsafe { GetLastError() } == ERROR_PIPE_BUSY
+}
+
+/// 打开本机管道。实例全忙（`ERROR_PIPE_BUSY`）是正常竞态：helper 每次只挂一条待连
+/// 实例，等它建好再重试，最多约 1 秒。
 fn open_pipe() -> Result<std::fs::File, SshError> {
     let name = wide(PIPE_NAME);
-    let handle = unsafe {
-        CreateFileW(
-            name.as_ptr(),
-            FILE_GENERIC_READ | FILE_GENERIC_WRITE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            std::ptr::null(),
-            OPEN_EXISTING,
-            0,
-            std::ptr::null_mut(),
-        )
-    };
-    if handle == INVALID_HANDLE_VALUE {
-        let error = unsafe { GetLastError() };
-        return Err(pipe_unavailable(&format!(
-            "无法连接辅助服务（错误 {error}），请先在设置中安装"
-        )));
+    let mut last_error = 0u32;
+    for _ in 0..5 {
+        let handle = unsafe {
+            CreateFileW(
+                name.as_ptr(),
+                FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        if handle != INVALID_HANDLE_VALUE {
+            return Ok(unsafe { std::fs::File::from_raw_handle(handle) });
+        }
+        last_error = unsafe { GetLastError() };
+        if last_error != ERROR_PIPE_BUSY {
+            break;
+        }
+        unsafe { WaitNamedPipeW(name.as_ptr(), 200) };
     }
-    Ok(unsafe { std::fs::File::from_raw_handle(handle) })
+    Err(pipe_unavailable(&format!(
+        "无法连接辅助服务（错误 {last_error}），请先在设置中安装"
+    )))
 }
 
 impl Transport for WindowsPipeTransport {
@@ -95,7 +116,7 @@ impl Transport for WindowsPipeTransport {
 
     fn installed(&self) -> bool {
         // 管道存在即服务在跑；服务已装但停止时返回 false，UI 据此提示“启动/安装”。
-        open_pipe().is_ok()
+        pipe_exists()
     }
 
     fn install(&self) -> Result<(), SshError> {

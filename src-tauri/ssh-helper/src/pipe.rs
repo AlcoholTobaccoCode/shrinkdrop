@@ -23,7 +23,10 @@ use windows_sys::Win32::Security::{
     TokenUser, WinBuiltinAdministratorsSid, SECURITY_ATTRIBUTES, TOKEN_ELEVATION,
     TOKEN_LINKED_TOKEN, TOKEN_QUERY, TOKEN_USER,
 };
-use windows_sys::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
+};
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, PIPE_REJECT_REMOTE_CLIENTS,
     PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
@@ -104,6 +107,26 @@ unsafe fn sid_to_string(sid: *mut c_void) -> Option<String> {
     let text = wide_to_string(out);
     windows_sys::Win32::Foundation::LocalFree(out as *mut c_void);
     text
+}
+
+/// 纯粹为了把主循环从 `ConnectNamedPipe` 里唤醒（服务停止时用）。
+/// 只连接并立刻关闭，不发送任何数据；未授权路径会把它当成一次被拒绝的连接丢弃。
+pub fn poke() {
+    let name = wide(PIPE_NAME);
+    unsafe {
+        let handle = CreateFileW(
+            name.as_ptr(),
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        );
+        if handle != INVALID_HANDLE_VALUE {
+            CloseHandle(handle);
+        }
+    }
 }
 
 /// 创建带 DACL 的管道：`D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;<installer>)`。

@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-11-06
+
+### Fixed
+
+- 修复「辅助服务已安装但连不上 / 具体原因：helper 连接中断」：helper 把每一次单连接失败都当致命错误，服务随即退出；而 app 判断「管道是否存在」时又会先连一条再立刻断开，两者撞上就必然触发。现在服务端单次连接失败只丢弃该连接并记日志，客户端改用 `WaitNamedPipeW` 探测存在性，遇到实例全忙时重试。
+- 服务停止不再卡住：收到 `SERVICE_CONTROL_STOP` 时主动唤醒阻塞在 `ConnectNamedPipe` 的主循环，升级时不会出现「无法停止旧辅助服务」。
+
+### Added
+
+- helper 诊断日志 `C:\ProgramData\shrinkdrop\helper.log`（1 MB 轮转）：启动、停止、拒绝连接、单连接失败都会留痕。
+- Windows 安装包（NSIS）新增「安装结束后删除安装包」选项，默认勾选；安装器在覆盖文件前先停止辅助服务，升级无需手动卸载。
+
 ## [0.1.8] - 2026-11-06
 
 ### Fixed
@@ -37,7 +49,8 @@
 
 本版本作为 changelog 基线，之前版本未追溯。
 
-[Unreleased]: ../../compare/v0.1.8...HEAD
+[Unreleased]: ../../compare/v0.1.9...HEAD
+[0.1.9]: ../../compare/v0.1.8...v0.1.9
 [0.1.8]: ../../compare/v0.1.7...v0.1.8
 [0.1.7]: ../../compare/v0.1.6...v0.1.7
 [0.1.6]: ../../releases/tag/v0.1.6

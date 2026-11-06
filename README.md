@@ -69,6 +69,8 @@ pnpm tauri build
 
 普通用户请前往 [最新正式版下载](https://github.com/AlcoholTobaccoCode/shrinkdrop/releases/latest)，在 **Assets** 中直接下载 Windows x64（`.exe`、`.msi`）或 macOS 通用（`.pkg` 推荐，`.dmg` 保留拖拽安装；两者都支持 Intel 和 Apple Silicon）安装包，无需登录 GitHub。安装包暂未配置开发者签名及 macOS 公证。
 
+Windows 安装包（NSIS）最后一页有「安装结束后删除安装包」选项，默认勾选；升级时安装器会先停掉 `ShrinkdropSshHelper`，避免它锁住辅助服务的可执行文件。
+
 每次构建先检查 `package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 和 `Cargo.lock` 的应用版本一致，再运行前端和 Rust 测试并生成安装包。`main` 构建保存在 Actions 的 **Artifacts**；产物名为 `shrinkdrop-<版本>-<平台>-<运行编号>-<重跑次数>`，包含安装包、`SHA256SUMS.txt` 和记录提交、版本及构建链接的 `build-info.json`。这些 Actions 产物保留 **90 天**，下载通常需要登录 GitHub。
 
 推送与应用版本一致的 `v<版本>` 标签后，流水线会在双平台构建和校验全部成功后，自动创建并公开发布同名 GitHub Release，将四个安装包、合并的校验文件和构建信息附在 Assets 中。Release 附件不受 Actions 的 90 天保留期限制。含 `-` 的预发布版本会标记为 Pre-release，正式版本会设为 Latest。重跑同一标签会更新同名 Release 的附件。

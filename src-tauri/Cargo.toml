@@ -1,6 +1,6 @@
 [package]
 name = "shrinkdrop"
-version = "0.1.8"
+version = "0.1.9"
 description = "轻量匿名图片压缩桌面客户端"
 authors = ["Tinypng Cross Platform"]
 license = "MIT-0"
@@ -45,6 +45,7 @@ windows-sys = { version = "0.60", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Storage_FileSystem",
+    "Win32_System_Pipes",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
