@@ -273,18 +273,22 @@ impl SshdControl {
             .unwrap_or(false)
     }
 
-    pub fn firewall_rule_present(&self) -> bool {
+    /// 规则是否存在：只看 `netsh show rule` 的退出码，避免解析本地化文案。
+    pub fn rule_exists(&self, rule_name: &str) -> bool {
         self.runner
-            .run("netsh.exe", &["advfirewall", "firewall", "show", "rule", &format!("name={FIREWALL_RULE}")])
-            .map(|output| output.success() && output.stdout.to_ascii_lowercase().contains("enabled"))
+            .run(
+                "netsh.exe",
+                &["advfirewall", "firewall", "show", "rule", &format!("name={rule_name}")],
+            )
+            .map(|output| output.success())
             .unwrap_or(false)
     }
 
+    /// 建自己的规则（按名字幂等），不看系统那条 stock 规则：
+    /// `netsh` 的输出是本地化的（中文 Windows 写“已启用”），按英文关键字判断会误判。
     pub fn ensure_firewall_rule(&self, port: u16, rule_name: &str) -> Result<(), ErrorCode> {
-        if port == 22 {
-            if self.firewall_rule_present() {
-                return Ok(());
-            }
+        if self.rule_exists(rule_name) {
+            return Ok(());
         }
         let port_text = port.to_string();
         let output = self
@@ -301,7 +305,8 @@ impl SshdControl {
                     "action=allow",
                     "protocol=TCP",
                     &format!("localport={port_text}"),
-                    "profile=private",
+                    // 与系统 OpenSSH 的 stock 规则一致：域 + 专用；公用网络需用户自己决定。
+                    "profile=domain,private",
                 ],
             )
             .map_err(|_| ErrorCode::Internal)?;

@@ -11,9 +11,10 @@
    `无法确认` 表示端口被别的进程占用或没有权限，此时不要假设 SSH 开着。
 2. **端口是否在监听**：Windows 上 `netstat -ano | findstr :22`（自定义端口换成对应端口），
    看到 `LISTENING` 且 PID 属于 `sshd.exe`。
-3. **防火墙**：Windows 上 `netsh advfirewall firewall show rule name=OpenSSH-Server-In-TCP`
-   与 `name=shrinkdrop-ssh-<port>`。规则存在但 `Enabled: No` 时，功能会被判定为
-   `firewall_blocked`。
+3. **防火墙**：Windows 上 `netsh advfirewall firewall show rule name=shrinkdrop-ssh-<port>`。
+   shrinkdrop 建的规则只对「域」和「专用」网络放行（与系统 OpenSSH 的 stock 规则一致）。
+   网络被识别为「公用」时入站会被拦：在 设置 → 网络 → 属性 里改成「专用」，或让管理员
+   手动放行目标端口。规则是否存在的判断只看 `netsh` 退出码，不看本地化文案。
 4. **同一局域网**：连接命令里的地址来自本机网卡；手机要连同一个 Wi-Fi，公司网络常开客户端隔离。
 5. **机器是否睡眠 / FileVault 是否已解锁**：睡眠或未解锁时 SSH 不可达，这是系统行为。
    macOS 可在 设置 → 锁定屏幕 里调整；Windows 检查电源计划。
@@ -26,10 +27,10 @@
 | `feature_missing` | 系统没有 OpenSSH Server。Windows：设置 → 可选功能里安装，或用面板的「官网下载 / 内置安装」。 |
 | `service_missing` | 系统里没有 `sshd` 服务。同上。 |
 | `service_start_failed` | 服务起不来。常见原因：`sshd_config` 被别的工具改坏（helper 已在改前备份、失败回滚）、端口刚被抢占。 |
-| `firewall_blocked` | 防火墙规则缺失或被禁用。改端口后没放行也会出现。 |
+| `firewall_blocked` | `netsh` 建规则失败（组策略、安全软件或权限不足）。改端口后会重新建规则。 |
 | `needs_admin` | 当前账户不是管理员，或 UAC 被取消。 |
 | `policy_blocked` | 组策略 / MDM 禁止。需要管理员在域策略里放开。 |
-| `helper_unavailable` | 辅助服务未安装或没在运行。Windows：在面板点「安装辅助服务」并允许 UAC。 |
+| `helper_unavailable` | 辅助服务未安装或没在运行。Windows：点面板的「安装辅助服务」，它会重新安装并启动服务；已装过就 `sc query ShrinkdropSshHelper` 看是否被停掉或被安全软件拦截。 |
 | `helper_version_mismatch` | 辅助服务与 app 版本不一致。重装一次辅助服务。 |
 | `busy` | 上一个操作还没结束；等几秒重试。 |
 | `read_only` | macOS 未签名构建：只能读状态，请在 系统设置 → 通用 → 共享 → 远程登录 里操作。 |
@@ -38,6 +39,8 @@
 
 - Windows 首次安装会弹 UAC，显示“未知发布者”是因为当前版本未签名；确认后服务以
   LocalSystem 运行，只监听本机命名管道 `\\.\pipe\shrinkdrop-ssh-helper`。
+- 安装会等到服务进入 RUNNING 才返回成功；起不来会带上 Win32 错误码，常见是 5（权限）、
+  1053（启动超时）和安全软件拦截。
 - 服务已装但面板显示未安装：服务可能被停掉了。`sc query ShrinkdropSshHelper` 看状态，
   `sc start ShrinkdropSshHelper` 启动，或在面板里卸载后重装。
 - 卸载辅助服务会：关闭由 shrinkdrop 开启的 SSH、还原 `sshd_config` 与启动类型、

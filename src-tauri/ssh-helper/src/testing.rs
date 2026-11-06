@@ -210,7 +210,16 @@ impl Runner for Fake {
                 }
                 ok("")
             }
-            "netsh.exe" => ok("Enabled"),
+            // 和真实 netsh 一致：找不到规则时退出码非 0（这里是 1）。
+            "netsh.exe" => {
+                let name = args.iter().find_map(|arg| arg.strip_prefix("name="));
+                let exists = name.is_some_and(|name| state.rules.iter().any(|rule| rule == name));
+                if exists {
+                    ok("Rule exists")
+                } else {
+                    err(1, "No rules match the specified criteria.")
+                }
+            }
             "ssh-keygen.exe" => ok("256 SHA256:FAKE abc@host (ED25519)"),
             _ if joined.ends_with("-t") => {
                 if state.config_valid {

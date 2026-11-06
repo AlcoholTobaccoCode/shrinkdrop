@@ -19,13 +19,20 @@ const ssh = computed(() => sshSession.state.runtime);
 const sshSettings = computed(() => sshSession.state.settings);
 const sshBusy = computed(() => sshSession.state.busy);
 /** Windows 才能改端口；macOS 的 stock Remote Login 由 launchd 固定监听 22。 */
-const sshPortEditable = computed(() => ssh.value.platform === 'windows');
+const sshIsMac = computed(() => ssh.value.platform === 'macos');
+const sshIsWindows = computed(() => ssh.value.platform === 'windows');
+const sshPortEditable = computed(() => sshIsWindows.value);
 const sshConfirming = ref(false);
 const sshCopied = ref(false);
 const sshErrorCopy = computed(() => {
   if (sshSession.state.detail) return sshSession.state.detail;
   const code = sshSession.state.error;
-  return code ? t(sshErrorMessages[code] ?? sshErrorMessages.internal) : '';
+  if (!code) return '';
+  // Windows 上 helper 连不上有明确的两步处理，别只甩一句“未安装或不可用”。
+  if (code === 'helper_unavailable' && sshIsWindows.value) {
+    return t('辅助服务未运行：点「安装辅助服务」会重新安装并启动它；已安装过就检查「服务」里的 ShrinkdropSshHelper 是否被停掉或被安全软件拦截。');
+  }
+  return t(sshErrorMessages[code] ?? sshErrorMessages.internal);
 });
 const sshStateLabel = computed(() => {
   if (!ssh.value.backendAvailable) return t('此版本暂不包含');
@@ -64,7 +71,7 @@ const sshConnection = computed(() => sshCommand(ssh.value));
 /** Windows 缺少 sshd 时的两手准备：只在 FoD/服务缺失的错误上出现。 */
 const sshNeedsInstall = computed(
   () =>
-    ssh.value.platform === 'windows' &&
+    sshIsWindows.value &&
     !ssh.value.readOnly &&
     ssh.value.helperInstalled &&
     ssh.value.helperApproved &&
@@ -72,6 +79,7 @@ const sshNeedsInstall = computed(
 );
 /** 有随包版本时才显示“内置安装”；否则只给官网下载。 */
 const sshBundledAvailable = computed(() => Boolean(ssh.value.bundledVersion));
+
 /** 没有辅助服务就没有可审计的特权控制面：开关只读，避免假装可用。 */
 const sshToggleBlocked = computed(
   () =>
@@ -83,8 +91,8 @@ const sshToggleBlocked = computed(
     !ssh.value.helperApproved ||
     sshBusy.value
 );
-/** 只读路线下只显示“打开共享设置”，不显示生命周期与开关。 */
-const sshManual = computed(() => ssh.value.readOnly);
+/** 只读路线只有 macOS 有（未签名构建）；其它平台的 helper 不在跑时是“未安装”，不是只读。 */
+const sshManual = computed(() => ssh.value.readOnly && sshIsMac.value);
 // 防休眠依赖 macOS 的 caffeinate 与 LaunchDaemon，仅在 Mac 上展示该设置。
 const isMac = /Mac/i.test(navigator.userAgent);
 async function applyWindowTitle() {
@@ -583,6 +591,7 @@ async function copySshConnection() {
             </section>
 
             <section v-else-if="section === 'ssh'" class="settings-section">
+              <!-- macOS 未签名路线：只读，开关交给系统设置 -->
               <template v-if="sshManual">
                 <div class="settings-row">
                   <span>{{ t('允许通过 SSH 远程登录本机') }}</span>
@@ -590,42 +599,44 @@ async function copySshConnection() {
                 </div>
                 <p class="settings-hint">{{ t('macOS 的远程登录由系统设置管理：打开「共享 → 远程登录」开启一次即可，应用只读取状态。') }}</p>
               </template>
+              <!-- 有控制面的平台（Windows）：开关与生命周期 -->
               <template v-else>
-              <div class="settings-row settings-row--switch">
-                <span>{{ t('允许通过 SSH 远程登录本机') }}</span>
-                <label class="switch">
-                  <input
-                    type="checkbox"
-                    role="switch"
-                    :checked="sshSettings.enabled || sshConfirming"
-                    :disabled="sshToggleBlocked"
-                    :aria-label="t('允许通过 SSH 远程登录本机')"
-                    @change="toggleSsh"
-                  />
-                  <span class="switch-track" aria-hidden="true"><span /></span>
-                </label>
-              </div>
-              <p class="settings-hint">{{ t('开启后，局域网内的设备可以用系统账户通过 SSH 连接这台电脑。') }}</p>
-
-              <div v-if="sshConfirming" class="settings-block" role="alertdialog" :aria-label="t('确认开启远程访问？')">
-                <p><strong>{{ t('确认开启远程访问？') }}</strong></p>
-                <p class="settings-hint">{{ t('这会把这台电脑的 SSH 端口暴露到局域网，并使用系统账户登录。可以随时关闭。') }}</p>
-                <div class="settings-inline">
-                  <button class="button button--primary" @click="confirmSshEnable">{{ t('确认开启') }}</button>
-                  <button class="button button--quiet" @click="sshConfirming = false">{{ t('取消') }}</button>
+                <div class="settings-row settings-row--switch">
+                  <span>{{ t('允许通过 SSH 远程登录本机') }}</span>
+                  <label class="switch">
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      :checked="sshSettings.enabled || sshConfirming"
+                      :disabled="sshToggleBlocked"
+                      :aria-label="t('允许通过 SSH 远程登录本机')"
+                      @change="toggleSsh"
+                    />
+                    <span class="switch-track" aria-hidden="true"><span /></span>
+                  </label>
                 </div>
-              </div>
+                <p class="settings-hint">{{ t('开启后，局域网内的设备可以用系统账户通过 SSH 连接这台电脑。') }}</p>
 
-              <div class="settings-row settings-row--stack">
-                <span>{{ t('生命周期') }}</span>
-                <div class="settings-choices">
-                  <label><input type="radio" name="ssh-lifetime" :checked="sshSettings.lifetime === 'app'" :disabled="sshBusy" @change="setSshLifetime('app')" />{{ t('仅应用运行时') }}</label>
-                  <label><input type="radio" name="ssh-lifetime" :checked="sshSettings.lifetime === 'persistent'" :disabled="sshBusy" @change="setSshLifetime('persistent')" />{{ t('后台常驻') }}</label>
+                <div v-if="sshConfirming" class="settings-block" role="alertdialog" :aria-label="t('确认开启远程访问？')">
+                  <p><strong>{{ t('确认开启远程访问？') }}</strong></p>
+                  <p class="settings-hint">{{ t('这会把这台电脑的 SSH 端口暴露到局域网，并使用系统账户登录。可以随时关闭。') }}</p>
+                  <div class="settings-inline">
+                    <button class="button button--primary" @click="confirmSshEnable">{{ t('确认开启') }}</button>
+                    <button class="button button--quiet" @click="sshConfirming = false">{{ t('取消') }}</button>
+                  </div>
                 </div>
-              </div>
-              <p class="settings-hint">{{ sshLifetimeHint }}</p>
+
+                <div class="settings-row settings-row--stack">
+                  <span>{{ t('生命周期') }}</span>
+                  <div class="settings-choices">
+                    <label><input type="radio" name="ssh-lifetime" :checked="sshSettings.lifetime === 'app'" :disabled="sshBusy" @change="setSshLifetime('app')" />{{ t('仅应用运行时') }}</label>
+                    <label><input type="radio" name="ssh-lifetime" :checked="sshSettings.lifetime === 'persistent'" :disabled="sshBusy" @change="setSshLifetime('persistent')" />{{ t('后台常驻') }}</label>
+                  </div>
+                </div>
+                <p class="settings-hint">{{ sshLifetimeHint }}</p>
               </template>
 
+              <!-- 端口：macOS 固定 22；有控制面的平台可编辑 -->
               <div class="settings-row">
                 <span>{{ t('端口') }}</span>
                 <input
@@ -640,7 +651,8 @@ async function copySshConnection() {
                 />
                 <span v-else class="settings-path">{{ sshSettings.port }}</span>
               </div>
-              <p class="settings-hint">{{ sshPortEditable ? t('Windows 可以自定义端口；修改会断开现有 SSH 会话。') : t('macOS 的系统远程登录固定使用 22 端口。') }}</p>
+              <p v-if="sshPortEditable" class="settings-hint">{{ t('Windows 可以自定义端口；修改会断开现有 SSH 会话。') }}</p>
+              <p v-else-if="sshIsMac" class="settings-hint">{{ t('macOS 的系统远程登录固定使用 22 端口。') }}</p>
 
               <div class="settings-block">
                 <div class="settings-row">
@@ -652,8 +664,10 @@ async function copySshConnection() {
                 <p v-if="!ssh.backendAvailable" class="settings-hint">{{ t('此版本暂不包含远程访问控制面，需要带辅助服务的签名版本。') }}</p>
                 <p v-else-if="sshManual" class="settings-hint">{{ t('状态由系统设置管理，应用只读；开启或关闭请到「共享 → 远程登录」。') }}</p>
                 <template v-else>
+                  <!-- 只有 macOS 才需要“系统批准 helper”这一步；Windows 走服务管理 -->
                   <p v-if="!ssh.helperInstalled" class="settings-hint">{{ t('需要安装辅助服务才能开启远程访问。') }}</p>
-                  <p v-else-if="!ssh.helperApproved" class="settings-hint settings-hint--warning" role="note">{{ t('辅助服务等待系统批准：在「登录项」里允许 shrinkdrop 后重试。') }}</p>
+                  <p v-if="!ssh.helperInstalled && sshIsWindows" class="settings-hint">{{ t('安装后在「服务」里确认 ShrinkdropSshHelper 处于“正在运行”；被安全软件拦截时服务会启动失败。') }}</p>
+                  <p v-else-if="!ssh.helperApproved && sshIsMac" class="settings-hint settings-hint--warning" role="note">{{ t('辅助服务等待系统批准：在「登录项」里允许 shrinkdrop 后重试。') }}</p>
                   <div v-if="ssh.supported && ssh.admin" class="settings-inline">
                     <button v-if="!ssh.helperInstalled" class="button" :disabled="sshBusy" @click="sshSession.installHelper()">{{ t('安装辅助服务') }}</button>
                     <button v-else class="button button--quiet" :disabled="sshBusy" @click="sshSession.uninstallHelper()">{{ t('卸载辅助服务') }}</button>
@@ -673,7 +687,8 @@ async function copySshConnection() {
                 </template>
               </div>
 
-              <div v-if="ssh.backendAvailable" class="settings-block">
+              <!-- 只有真的在监听时才给连接命令，避免“未开启却给一条连不上的命令” -->
+              <div v-if="ssh.backendAvailable && (ssh.osEnabled || ssh.listening)" class="settings-block">
                 <div class="settings-row">
                   <span>{{ t('连接命令') }}</span>
                   <div class="settings-path-row">
@@ -683,7 +698,9 @@ async function copySshConnection() {
                 </div>
                 <p v-if="ssh.fingerprint" class="settings-hint">{{ t('主机指纹') }}：{{ ssh.fingerprint }}</p>
                 <p class="settings-hint">{{ t('仅建议在可信局域网内开启，优先使用公钥登录。') }}</p>
-                <p class="settings-hint">{{ t('睡眠或 FileVault 未解锁时无法连接。') }}</p>
+                <p v-if="sshIsMac" class="settings-hint">{{ t('睡眠或 FileVault 未解锁时无法连接。') }}</p>
+                <p v-if="sshIsWindows" class="settings-hint">{{ t('连不上时先确认：两台设备在同一网段、Windows 防火墙对当前网络放行、以及安全软件没有拦截入站。') }}</p>
+                <p v-if="sshIsWindows" class="settings-hint">{{ t('Windows 防火墙只对「专用」或「域」网络放行；网络被识别为「公用」时需要在系统里改成专用，或手动放行该端口。') }}</p>
               </div>
             </section>
 

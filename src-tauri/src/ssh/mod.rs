@@ -1302,6 +1302,35 @@ mod tests {
     }
 
     #[test]
+    fn stopped_helper_on_windows_is_not_read_only() {
+        let backend = FakeBackend::new();
+        backend.lock().helper = HelperInfo {
+            available: true,
+            writable: true,
+            installed: false,
+            approved: false,
+            version: None,
+        };
+        let manager = SshManager::with_capabilities(
+            backend.clone(),
+            Platform::Windows,
+            true,
+            SshSettings::default(),
+        );
+        let runtime = manager.refresh();
+        assert!(
+            !runtime.read_only,
+            "helper 没跑不等于只读：Windows 应该走“安装辅助服务”而不是 macOS 的手动开启"
+        );
+        assert!(!runtime.helper_installed);
+        assert!(runtime.backend_available);
+
+        let runtime = manager.enable(SshLifetime::App, 22);
+        assert_eq!(runtime.error, Some(ErrorCode::HelperUnavailable));
+        assert!(!manager.desired().enabled, "连不上 helper 不能把 enabled 落盘");
+    }
+
+    #[test]
     fn install_bundled_goes_through_the_backend_only_on_supported_platforms() {
         let (backend, manager) = fixture(Platform::Windows);
         let runtime = manager.install_bundled();

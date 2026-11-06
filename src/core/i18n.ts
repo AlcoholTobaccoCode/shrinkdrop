@@ -328,7 +328,15 @@ const en: Record<string, string> = {
   '安装完成后回到这里重新开启；如果系统提示重启，请先重启。':
     'Come back and turn it on again once installed; restart first if Windows asks you to.',
   '无法确认：22 端口被其它进程占用，或没有权限读取系统状态。':
-    'Unconfirmed: port 22 is held by another process, or the system state cannot be read without more privileges.'
+    'Unconfirmed: port 22 is held by another process, or the system state cannot be read without more privileges.',
+  '安装后在「服务」里确认 ShrinkdropSshHelper 处于“正在运行”；被安全软件拦截时服务会启动失败。':
+    'After installing, confirm ShrinkdropSshHelper is Running in Services; security software can block the service from starting.',
+  '辅助服务未运行：点「安装辅助服务」会重新安装并启动它；已安装过就检查「服务」里的 ShrinkdropSshHelper 是否被停掉或被安全软件拦截。':
+    'The helper service is not running. Install Helper reinstalls and starts it; if it was installed before, check Services for a stopped ShrinkdropSshHelper or a security product blocking it.',
+  '连不上时先确认：两台设备在同一网段、Windows 防火墙对当前网络放行、以及安全软件没有拦截入站。':
+    'If the connection fails, check that both devices are on the same subnet, Windows Firewall allows the current network, and security software is not blocking inbound connections.',
+  'Windows 防火墙只对「专用」或「域」网络放行；网络被识别为「公用」时需要在系统里改成专用，或手动放行该端口。':
+    'Windows Firewall only allows Private or Domain networks. If the network is classified as Public, switch it to Private or allow the port manually.'
 };
 
 export const i18n = reactive({ lang: 'zh' as Lang });

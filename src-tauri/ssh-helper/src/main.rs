@@ -35,7 +35,7 @@ mod windows_service {
     use shrinkdrop_ssh_helper::state::{FsStateIo, STATE_PATH};
 
     use windows_sys::Win32::System::Services::{
-        ControlService, RegisterServiceCtrlHandlerExW, SERVICE_ACCEPT_STOP, SERVICE_CONTROL_STOP,
+        RegisterServiceCtrlHandlerExW, SERVICE_ACCEPT_STOP, SERVICE_CONTROL_STOP,
         SERVICE_RUNNING, SERVICE_START_PENDING, SERVICE_STATUS, SERVICE_STATUS_HANDLE,
         SERVICE_STOPPED, SERVICE_WIN32_OWN_PROCESS, SetServiceStatus, StartServiceCtrlDispatcherW,
     };
@@ -204,34 +204,39 @@ mod windows_service {
 
     fn install_service() -> Result<(), String> {
         use windows_sys::Win32::System::Services::{
-            CreateServiceW, OpenSCManagerW, SC_MANAGER_CREATE_SERVICE, SERVICE_AUTO_START,
-            SERVICE_ERROR_NORMAL, SERVICE_WIN32_OWN_PROCESS,
+            CreateServiceW, OpenSCManagerW, OpenServiceW, StartServiceW,
+            SC_MANAGER_CREATE_SERVICE, SERVICE_AUTO_START, SERVICE_ERROR_NORMAL,
+            SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_START, SERVICE_WIN32_OWN_PROCESS,
         };
 
         // 先记安装者 SID：服务启动时要靠它构造管道 DACL。
-        let sid = pipe::install_sid().map_err(|error| {
-            format!("{:?} {}", error.code, error.detail.unwrap_or_default())
-        })?;
+        let sid = pipe::install_sid()
+            .map_err(|error| format!("{:?} {}", error.code, error.detail.unwrap_or_default()))?;
         if let Some(parent) = std::path::Path::new(INSTALLER_SID_PATH).parent() {
             std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
         std::fs::write(INSTALLER_SID_PATH, &sid).map_err(|error| error.to_string())?;
 
         let exe = std::env::current_exe().map_err(|error| error.to_string())?;
-        let exe_wide = wide(&exe.display().to_string());
+        let exe_wide = wide(&service_binary_path(&exe));
         let name_wide = wide(SERVICE_NAME);
         let display = wide("shrinkdrop SSH Helper");
+        // 句柄必须带 SERVICE_START，否则后面 StartServiceW 会被拒绝（0 只是“可创建”）。
+        let access = SERVICE_START | SERVICE_QUERY_STATUS;
         unsafe {
             let manager =
                 OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_CREATE_SERVICE);
             if manager.is_null() {
-                return Err("需要管理员权限安装辅助服务".to_string());
+                return Err(format!(
+                    "需要管理员权限安装辅助服务（错误 {}）",
+                    last_error()
+                ));
             }
-            let service = CreateServiceW(
+            let created = CreateServiceW(
                 manager,
                 name_wide.as_ptr(),
                 display.as_ptr(),
-                0,
+                access,
                 SERVICE_WIN32_OWN_PROCESS,
                 SERVICE_AUTO_START,
                 SERVICE_ERROR_NORMAL,
@@ -242,33 +247,91 @@ mod windows_service {
                 std::ptr::null(),
                 std::ptr::null(),
             );
-            if service.is_null() {
-                // 1073 = 服务已存在；安装按幂等处理，但仍要确保它在跑。
+            let service = if created.is_null() {
+                // 1073 = 服务已存在：按幂等处理，但要拿一个能启动它的句柄。
                 if last_error() != 1073 {
-                    return Err("创建服务失败（需要管理员权限）".to_string());
+                    return Err(format!("创建服务失败（错误 {}）", last_error()));
+                }
+                let existing = OpenServiceW(manager, name_wide.as_ptr(), access);
+                if existing.is_null() {
+                    return Err(format!(
+                        "服务已存在但无法打开（错误 {}），请以管理员身份重试",
+                        last_error()
+                    ));
+                }
+                existing
+            } else {
+                created
+            };
+
+            if StartServiceW(service, 0, std::ptr::null()) == 0 {
+                let code = last_error();
+                // 1056 = 已在运行，按幂等处理。
+                if code != 1056 {
+                    return Err(format!("启动辅助服务失败（错误 {code}）"));
                 }
             }
-            let _ = windows_sys::Win32::System::Services::StartServiceW(service, 0, std::ptr::null());
+
+            // 等服务真正进入 RUNNING：SCM 返回成功不等于进程已经起来。
+            for _ in 0..50 {
+                if query_state(service) == Some(SERVICE_RUNNING) {
+                    return Ok(());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err("辅助服务已安装但未进入运行状态；请在「服务」中查看 ShrinkdropSshHelper".to_string())
         }
-        Ok(())
+    }
+
+    /// 服务二进制路径：含空格时必须加引号，否则 SCM 会把参数拆开。
+    fn service_binary_path(exe: &std::path::Path) -> String {
+        let path = exe.display().to_string();
+        if path.contains(' ') {
+            format!("\"{path}\"")
+        } else {
+            path
+        }
+    }
+
+    unsafe fn query_state(
+        service: windows_sys::Win32::System::Services::SC_HANDLE,
+    ) -> Option<u32> {
+        use windows_sys::Win32::System::Services::{
+            QueryServiceStatusEx, SC_STATUS_PROCESS_INFO, SERVICE_STATUS_PROCESS,
+        };
+        let mut status: SERVICE_STATUS_PROCESS = std::mem::zeroed();
+        let mut needed = 0u32;
+        let ok = QueryServiceStatusEx(
+            service,
+            SC_STATUS_PROCESS_INFO,
+            &mut status as *mut SERVICE_STATUS_PROCESS as *mut u8,
+            std::mem::size_of::<SERVICE_STATUS_PROCESS>() as u32,
+            &mut needed,
+        );
+        (ok != 0).then_some(status.dwCurrentState)
     }
 
     fn uninstall_service() -> Result<(), String> {
         use windows_sys::Win32::System::Services::{
-            DeleteService, OpenSCManagerW, OpenServiceW, SC_MANAGER_CONNECT, SERVICE_STOP,
+            ControlService, DeleteService, OpenSCManagerW, OpenServiceW, SC_MANAGER_CONNECT,
+            SERVICE_STOP,
         };
+        // DeleteService 需要 DELETE 标准权限，只有 SERVICE_STOP 会被拒。
+        const DELETE: u32 = 0x0001_0000;
         let name_wide = wide(SERVICE_NAME);
         unsafe {
             let manager = OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_CONNECT);
             if manager.is_null() {
-                return Err("需要管理员权限".to_string());
+                return Err(format!("需要管理员权限（错误 {}）", last_error()));
             }
-            let service = OpenServiceW(manager, name_wide.as_ptr(), SERVICE_STOP);
+            let service = OpenServiceW(manager, name_wide.as_ptr(), SERVICE_STOP | DELETE);
             if service.is_null() {
                 return Ok(());
             }
             let _ = ControlService(service, SERVICE_CONTROL_STOP, std::ptr::null_mut());
-            DeleteService(service);
+            if DeleteService(service) == 0 {
+                return Err(format!("删除服务失败（错误 {}）", last_error()));
+            }
         }
         let _ = std::fs::remove_file(INSTALLER_SID_PATH);
         Ok(())

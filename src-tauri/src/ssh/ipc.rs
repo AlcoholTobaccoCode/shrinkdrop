@@ -199,23 +199,21 @@ impl TransportBackend {
 
 impl super::SshBackend for TransportBackend {
     fn helper_info(&self) -> HelperInfo {
-        let installed = self.transport.installed();
-        match self.transport.open() {
-            Ok(session) => HelperInfo {
-                available: true,
-                writable: true,
-                installed,
-                approved: true,
-                version: Some(session.helper_version().to_string()),
-            },
-            Err(_) => HelperInfo {
-                available: true,
-                writable: false,
-                installed,
-                approved: false,
-                version: None,
-            },
+        // `writable` 表示“这个构建有没有可写的控制面”，与 helper 此刻是否在跑无关。
+        // 之前把“连不上”当成只读，Windows 上会错误地显示成 macOS 的手动开启引导。
+        let mut info = HelperInfo {
+            available: true,
+            writable: true,
+            installed: self.transport.installed(),
+            approved: false,
+            version: None,
+        };
+        if let Ok(session) = self.transport.open() {
+            info.installed = true;
+            info.approved = true;
+            info.version = Some(session.helper_version().to_string());
         }
+        info
     }
 
     fn status(&self) -> Result<HelperStatus, SshError> {
@@ -470,8 +468,12 @@ mod tests {
         );
         let info = backend.helper_info();
         assert!(info.available, "构建含后端，但 helper 未运行");
-        assert!(!info.writable);
+        assert!(
+            info.writable,
+            "writable 表示构建能力，不是 helper 是否在跑——否则 Windows 会退化成只读 UI"
+        );
         assert!(!info.installed);
+        assert!(!info.approved);
     }
 
     #[test]
