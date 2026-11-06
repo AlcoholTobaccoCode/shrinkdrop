@@ -1,0 +1,2 @@
+b314bbc7382e3d2783c4f18f43c05301d0f0c211654527f1fb60f57992b0181e  shrinkdrop_0.1.7_universal.dmg
+44cfb8a5341887e1b7e2ad5b9fd9526dc81067bdd9c1abd3550375622dc113e7  shrinkdrop_0.1.7_universal.pkg

@@ -1,0 +1,2 @@
+89fced4d6051e671f77bb2cd8a61f354128ce6d6ff680fd5ed45dd47fd053eb3  shrinkdrop_0.1.7_x64_zh-CN.msi
+dca0a1fd8d9b2ddaae9b0ecbddc89b995acd34cf277417b18adf280fbbcf0654  shrinkdrop_0.1.7_x64-setup.exe

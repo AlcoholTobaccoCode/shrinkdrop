@@ -1,0 +1,19 @@
+{
+  "version": "0.1.7",
+  "platform": "macos-universal",
+  "commit": "acb986f7fdfa81b6e2495fa79fd85b1ce0dd498d",
+  "ref": "refs/heads/agent/agent/duqi-211",
+  "run": "https://github.com/AlcoholTobaccoCode/shrinkdrop/actions/runs/42156132535",
+  "files": [
+    {
+      "name": "shrinkdrop_0.1.7_universal.dmg",
+      "bytes": 13087243,
+      "sha256": "b314bbc7382e3d2783c4f18f43c05301d0f0c211654527f1fb60f57992b0181e"
+    },
+    {
+      "name": "shrinkdrop_0.1.7_universal.pkg",
+      "bytes": 11936510,
+      "sha256": "44cfb8a5341887e1b7e2ad5b9fd9526dc81067bdd9c1abd3550375622dc113e7"
+    }
+  ]
+}
