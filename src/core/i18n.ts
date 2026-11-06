@@ -339,6 +339,7 @@ const en: Record<string, string> = {
     'Windows Firewall only allows Private or Domain networks. If the network is classified as Public, switch it to Private or allow the port manually.',
   '辅助服务已安装但连不上：点下面的按钮重装一次（会重启服务），或检查「服务」里的 ShrinkdropSshHelper。':
     'The helper is installed but not reachable. Reinstall it with the button below (this restarts the service), or check ShrinkdropSshHelper in Services.',
+  '辅助服务版本': 'Helper version',
   '正在安装辅助服务': 'Installing the helper service',
   '正在卸载辅助服务': 'Removing the helper service',
   '正在开启远程访问': 'Turning on remote access',

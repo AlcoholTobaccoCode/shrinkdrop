@@ -48,6 +48,8 @@ export interface SshRuntime {
   port: number;
   installSource: 'system' | 'fod' | 'bundled';
   bundledVersion: string | null;
+  /** 正在运行的辅助服务版本；null 表示没连上。 */
+  helperVersion: string | null;
   fingerprint: string | null;
   portInUse: SshPortOwner | null;
   error: SshErrorCode | null;
@@ -108,6 +110,7 @@ export function defaultSshRuntime(): SshRuntime {
     port: 22,
     installSource: 'system',
     bundledVersion: null,
+    helperVersion: null,
     fingerprint: null,
     portInUse: null,
     error: null,

@@ -696,6 +696,7 @@ async function copySshConnection() {
                     <button v-else class="button button--quiet" :disabled="sshBusy" @click="sshSession.uninstallHelper()">{{ t('卸载辅助服务') }}</button>
                   </div>
                   <p v-if="ssh.supported && ssh.admin" class="settings-hint">{{ ssh.helperInstalled ? t('卸载辅助服务会同时关闭由 shrinkdrop 开启的 SSH。') : t('安装辅助服务需要管理员授权（系统密码或 UAC）。') }}</p>
+                  <p v-if="ssh.helperVersion" class="settings-hint">{{ t('辅助服务版本') }}：{{ ssh.helperVersion }}</p>
                 </template>
                 <p v-if="ssh.supported && !ssh.admin && !sshManual" class="settings-hint settings-hint--warning">{{ t('SSH 需要管理员账户，请用管理员账户打开应用。') }}</p>
                 <p v-if="sshManual && ssh.osState === 'unknown'" class="settings-hint settings-hint--warning" role="note">{{ t('无法确认：22 端口被其它进程占用，或没有权限读取系统状态。') }}</p>

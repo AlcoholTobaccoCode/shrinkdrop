@@ -206,7 +206,8 @@ mod windows_service {
         use windows_sys::Win32::System::Services::{
             CreateServiceW, OpenSCManagerW, OpenServiceW, StartServiceW,
             SC_MANAGER_CREATE_SERVICE, SERVICE_AUTO_START, SERVICE_ERROR_NORMAL,
-            SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_START, SERVICE_WIN32_OWN_PROCESS,
+            SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_START, SERVICE_STOP,
+            SERVICE_WIN32_OWN_PROCESS,
         };
 
         // 先记安装者 SID：服务启动时要靠它构造管道 DACL。
@@ -221,8 +222,9 @@ mod windows_service {
         let exe_wide = wide(&service_binary_path(&exe));
         let name_wide = wide(SERVICE_NAME);
         let display = wide("shrinkdrop SSH Helper");
-        // 句柄必须带 SERVICE_START，否则后面 StartServiceW 会被拒绝（0 只是“可创建”）。
-        let access = SERVICE_START | SERVICE_QUERY_STATUS;
+        // 句柄必须带 SERVICE_START，否则后面 StartServiceW 会被拒绝（0 只是“可创建”）；
+        // 升级场景还要 SERVICE_STOP，才能停掉跑着旧二进制的进程。
+        let access = SERVICE_START | SERVICE_QUERY_STATUS | SERVICE_STOP;
         unsafe {
             let manager =
                 OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_CREATE_SERVICE);
@@ -264,6 +266,16 @@ mod windows_service {
                 created
             };
 
+            // 已存在的服务可能正在跑旧版本二进制（app 升级后磁盘上是新的、内存里是旧的）：
+            // 先停再起，保证加载的是当前文件。
+            if !created.is_null() {
+                // 新建的服务本来就没在跑，不用停。
+            } else if stop_and_wait(service) {
+                // 停止成功（或已停止），继续启动。
+            } else {
+                return Err("无法停止旧辅助服务；请在「服务」里手动停止后重试".to_string());
+            }
+
             if StartServiceW(service, 0, std::ptr::null()) == 0 {
                 let code = last_error();
                 // 1056 = 已在运行，按幂等处理。
@@ -281,6 +293,25 @@ mod windows_service {
             }
             Err("辅助服务已安装但未进入运行状态；请在「服务」中查看 ShrinkdropSshHelper".to_string())
         }
+    }
+
+    /// 停掉正在运行的服务并等到 STOPPED；已经是停止状态也算成功。
+    unsafe fn stop_and_wait(service: windows_sys::Win32::System::Services::SC_HANDLE) -> bool {
+        use windows_sys::Win32::System::Services::{
+            ControlService, SERVICE_CONTROL_STOP, SERVICE_STOPPED, SERVICE_STATUS,
+        };
+        let mut status: SERVICE_STATUS = std::mem::zeroed();
+        if ControlService(service, SERVICE_CONTROL_STOP, &mut status) == 0 {
+            // 1062 = 服务未启动，直接当作已停止。
+            return last_error() == 1062 || query_state(service) == Some(SERVICE_STOPPED);
+        }
+        for _ in 0..50 {
+            if query_state(service) == Some(SERVICE_STOPPED) {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        false
     }
 
     /// 服务二进制路径：含空格时必须加引号，否则 SCM 会把参数拆开。

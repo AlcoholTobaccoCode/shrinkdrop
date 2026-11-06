@@ -153,6 +153,8 @@ pub struct SshRuntime {
     pub port: u16,
     pub install_source: InstallSource,
     pub bundled_version: Option<String>,
+    /// 正在运行的 helper 版本（握手得到）；升级后可据此确认加载的是新二进制。
+    pub helper_version: Option<String>,
     pub fingerprint: Option<String>,
     pub port_in_use: Option<PortOwner>,
     pub error: Option<ErrorCode>,
@@ -179,6 +181,7 @@ impl SshRuntime {
             port,
             install_source: InstallSource::System,
             bundled_version: None,
+            helper_version: None,
             fingerprint: None,
             port_in_use: None,
             error: None,
@@ -223,6 +226,7 @@ impl Inner {
         self.runtime.helper_installed = helper.installed;
         self.runtime.helper_approved = helper.approved;
         self.runtime.bundled_version = helper.version.clone();
+        self.runtime.helper_version = helper.version.clone();
         self.runtime.port = self.settings.effective_port(platform);
         self.runtime.address = crate::share::net::candidate_addresses().into_iter().next();
         match self.backend.status() {
