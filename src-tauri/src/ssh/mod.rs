@@ -155,6 +155,8 @@ pub struct SshRuntime {
     pub bundled_version: Option<String>,
     /// 正在运行的 helper 版本（握手得到）；升级后可据此确认加载的是新二进制。
     pub helper_version: Option<String>,
+    /// 运行中的 helper 与应用版本不一致：说明服务还在跑旧二进制，需要重装/重启服务。
+    pub helper_outdated: bool,
     pub fingerprint: Option<String>,
     pub port_in_use: Option<PortOwner>,
     pub error: Option<ErrorCode>,
@@ -182,6 +184,7 @@ impl SshRuntime {
             install_source: InstallSource::System,
             bundled_version: None,
             helper_version: None,
+            helper_outdated: false,
             fingerprint: None,
             port_in_use: None,
             error: None,
@@ -227,6 +230,10 @@ impl Inner {
         self.runtime.helper_approved = helper.approved;
         self.runtime.bundled_version = helper.version.clone();
         self.runtime.helper_version = helper.version.clone();
+        self.runtime.helper_outdated = helper
+            .version
+            .as_deref()
+            .is_some_and(|version| version != env!("CARGO_PKG_VERSION"));
         self.runtime.port = self.settings.effective_port(platform);
         self.runtime.address = crate::share::net::candidate_addresses().into_iter().next();
         match self.backend.status() {

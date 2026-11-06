@@ -692,11 +692,13 @@ async function copySshConnection() {
                   <p v-else-if="!ssh.helperApproved && sshIsMac" class="settings-hint settings-hint--warning" role="note">{{ t('辅助服务等待系统批准：在「登录项」里允许 shrinkdrop 后重试。') }}</p>
                   <p v-else-if="!ssh.helperApproved && sshIsWindows" class="settings-hint settings-hint--warning" role="note">{{ t('辅助服务已安装但连不上：点下面的按钮重装一次（会重启服务），或检查「服务」里的 ShrinkdropSshHelper。') }}</p>
                   <div v-if="ssh.supported && ssh.admin" class="settings-inline">
-                    <button v-if="!ssh.helperInstalled || !ssh.helperApproved" class="button" :disabled="sshBusy" @click="sshSession.installHelper()">{{ sshInstallLabel }}</button>
+                    <button v-if="ssh.helperOutdated" class="button button--primary" :disabled="sshBusy" @click="sshSession.installHelper()">{{ sshBusy && sshSession.state.action === 'install' ? t('正在更新…') : t('更新辅助服务') }}</button>
+                    <button v-else-if="!ssh.helperInstalled || !ssh.helperApproved" class="button" :disabled="sshBusy" @click="sshSession.installHelper()">{{ sshInstallLabel }}</button>
                     <button v-else class="button button--quiet" :disabled="sshBusy" @click="sshSession.uninstallHelper()">{{ t('卸载辅助服务') }}</button>
                   </div>
                   <p v-if="ssh.supported && ssh.admin" class="settings-hint">{{ ssh.helperInstalled ? t('卸载辅助服务会同时关闭由 shrinkdrop 开启的 SSH。') : t('安装辅助服务需要管理员授权（系统密码或 UAC）。') }}</p>
                   <p v-if="ssh.helperVersion" class="settings-hint">{{ t('辅助服务版本') }}：{{ ssh.helperVersion }}</p>
+                  <p v-if="ssh.helperOutdated" class="settings-hint settings-hint--warning" role="note">{{ t('辅助服务版本 {helper} 与应用 {app} 不一致：服务还在跑旧程序，点「更新辅助服务」重启它；若更新后仍是旧版本，重启电脑后再试。', { helper: ssh.helperVersion ?? '', app: appVersion }) }}</p>
                 </template>
                 <p v-if="ssh.supported && !ssh.admin && !sshManual" class="settings-hint settings-hint--warning">{{ t('SSH 需要管理员账户，请用管理员账户打开应用。') }}</p>
                 <p v-if="sshManual && ssh.osState === 'unknown'" class="settings-hint settings-hint--warning" role="note">{{ t('无法确认：22 端口被其它进程占用，或没有权限读取系统状态。') }}</p>
@@ -724,7 +726,7 @@ async function copySshConnection() {
                 <p class="settings-hint">{{ t('仅建议在可信局域网内开启，优先使用公钥登录。') }}</p>
                 <p v-if="sshIsMac" class="settings-hint">{{ t('睡眠或 FileVault 未解锁时无法连接。') }}</p>
                 <p v-if="sshIsWindows" class="settings-hint">{{ t('连不上时先确认：两台设备在同一网段、Windows 防火墙对当前网络放行、以及安全软件没有拦截入站。') }}</p>
-                <p v-if="sshIsWindows" class="settings-hint">{{ t('Windows 防火墙只对「专用」或「域」网络放行；网络被识别为「公用」时需要在系统里改成专用，或手动放行该端口。') }}</p>
+                <p v-if="sshIsWindows" class="settings-hint">{{ t('防火墙规则对专用、域、公用网络都放行；仍连不上时检查安全软件、路由器隔离，以及地址是否属于当前网段。') }}</p>
               </div>
             </section>
 

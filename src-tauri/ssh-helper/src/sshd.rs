@@ -287,29 +287,29 @@ impl SshdControl {
     /// 建自己的规则（按名字幂等），不看系统那条 stock 规则：
     /// `netsh` 的输出是本地化的（中文 Windows 写“已启用”），按英文关键字判断会误判。
     pub fn ensure_firewall_rule(&self, port: u16, rule_name: &str) -> Result<(), ErrorCode> {
-        if self.rule_exists(rule_name) {
-            return Ok(());
-        }
         let port_text = port.to_string();
-        let output = self
-            .runner
-            .run(
-                "netsh.exe",
-                &[
-                    "advfirewall",
-                    "firewall",
-                    "add",
-                    "rule",
-                    &format!("name={rule_name}"),
-                    "dir=in",
-                    "action=allow",
-                    "protocol=TCP",
-                    &format!("localport={port_text}"),
-                    // 与系统 OpenSSH 的 stock 规则一致：域 + 专用；公用网络需用户自己决定。
-                    "profile=domain,private",
-                ],
-            )
-            .map_err(|_| ErrorCode::Internal)?;
+        // 已有规则也要把 profile 改成 any：0.1.6 建的规则只有 private，
+        // 网络被识别为「公用」时入站直接被拦，表现就是 ssh 一直超时。
+        let verb = if self.rule_exists(rule_name) { "set" } else { "add" };
+        let name = format!("name={rule_name}");
+        let port_arg = format!("localport={port_text}");
+        let mut args: Vec<&str> = vec![
+            "advfirewall",
+            "firewall",
+            verb,
+            "rule",
+            &name,
+            "dir=in",
+            "action=allow",
+            "protocol=TCP",
+            &port_arg,
+            "profile=any",
+        ];
+        if verb == "set" {
+            // `netsh ... set rule` 需要 `new` 关键字分隔要改的字段。
+            args.insert(5, "new");
+        }
+        let output = self.runner.run("netsh.exe", &args).map_err(|_| ErrorCode::Internal)?;
         if output.success() {
             Ok(())
         } else {

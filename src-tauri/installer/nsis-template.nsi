@@ -188,7 +188,6 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 Var ReinstallPageCheck
 ; 「安装完成后删除安装包」：默认勾选（1）。静默/被动安装没有页面，保持默认值。
 Var DeleteInstaller
-Var DeleteInstallerCheckbox
 Page custom PageReinstall PageLeaveReinstall
 
 ; Find a previous WiX installation and set $R6 to its uninstall registry key, or to "" if none.
@@ -431,52 +430,30 @@ Var AppStartMenuFolder
 ; 7. Installation page
 !insertmacro MUI_PAGE_INSTFILES
 
-; 8. 安装完成后是否删除安装包（默认勾选）
-Page custom PageDeleteInstaller PageLeaveDeleteInstaller
-
-; 9. Finish page
+; 8. Finish page
 ;
 ; Don't auto jump to finish page after installation page,
 ; because the installation page has useful info that can be used debug any issues with the installer.
 !define MUI_FINISHPAGE_NOAUTOCLOSE
-; Use show readme button in the finish page as a button create a desktop shortcut
+; 完成页只有一个 SHOWREADME 复选框槽位。这里放“安装结束后删除安装包”，
+; 桌面快捷方式改为安装时无条件创建（见安装段），不再占用这个槽位。
 !define MUI_FINISHPAGE_SHOWREADME
-!define MUI_FINISHPAGE_SHOWREADME_TEXT "$(createDesktop)"
-!define MUI_FINISHPAGE_SHOWREADME_FUNCTION CreateOrUpdateDesktopShortcut
+!define MUI_FINISHPAGE_SHOWREADME_TEXT "安装结束后删除安装包（Delete the installer）"
+!define MUI_FINISHPAGE_SHOWREADME_FUNCTION MarkDeleteInstaller
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW ResetDeleteInstaller
 ; Show run app after installation.
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_FUNCTION RunMainBinary
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
 !insertmacro MUI_PAGE_FINISH
 
-Function PageDeleteInstaller
-  ${If} $PassiveMode = 1
-  ${OrIf} ${Silent}
-    Abort
-  ${EndIf}
-  !insertmacro MUI_HEADER_TEXT "安装完成" "可以选择安装结束后自动删除这个安装包。"
-  ; 必须先把对话框建出来：少了这一步 ${NSD_CreateCheckbox} 会直接失败，
-  ; 安装器会在此页中止（表现为点「下一步」窗口直接关闭，桌面快捷方式也没了）。
-  nsDialogs::Create 1018
-  Pop $0
-  ${If} $0 == error
-    Abort
-  ${EndIf}
-  ${NSD_CreateCheckbox} 0 0 100% 12u "安装结束后删除安装包（Delete the installer after installation）"
-  Pop $DeleteInstallerCheckbox
-  ${If} $DeleteInstaller == "1"
-    ${NSD_Check} $DeleteInstallerCheckbox
-  ${EndIf}
-  nsDialogs::Show
+Function ResetDeleteInstaller
+  ; GUI 安装：进入完成页先清零，勾选了才会在离开时置 1。
+  StrCpy $DeleteInstaller "0"
 FunctionEnd
 
-Function PageLeaveDeleteInstaller
-  ${NSD_GetState} $DeleteInstallerCheckbox $R0
-  ${If} $R0 == ${BST_CHECKED}
-    StrCpy $DeleteInstaller "1"
-  ${Else}
-    StrCpy $DeleteInstaller "0"
-  ${EndIf}
+Function MarkDeleteInstaller
+  StrCpy $DeleteInstaller "1"
 FunctionEnd
 
 ; 安装包自己正被占用，不能直接删：写一个临时脚本，等安装器退出后再删。
@@ -823,12 +800,9 @@ Section Install
     Call CreateOrUpdateStartMenuShortcut
   !insertmacro MUI_STARTMENU_WRITE_END
 
-  ; Create desktop shortcut for silent and passive installers
-  ; because finish page will be skipped
-  ${If} $PassiveMode = 1
-  ${OrIf} ${Silent}
-    Call CreateOrUpdateDesktopShortcut
-  ${EndIf}
+  ; 桌面快捷方式无条件创建：完成页的 SHOWREADME 槽位改用于“删除安装包”，
+  ; 这里不再受完成页复选框控制，也避免用户以为“什么都没装”。
+  Call CreateOrUpdateDesktopShortcut
 
   !ifmacrodef NSIS_HOOK_POSTINSTALL
     !insertmacro NSIS_HOOK_POSTINSTALL

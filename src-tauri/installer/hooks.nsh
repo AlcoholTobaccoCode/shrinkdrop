@@ -41,6 +41,25 @@ FunctionEnd
   nsExec::Exec 'taskkill /f /im shrinkdrop.exe'
   Pop $ShrinkdropHookResult
   Call ShrinkdropStopHelper
+
+  ; 兜底：哪怕进程还活着（SYSTEM 服务、杀不掉），Windows 也允许给运行中的 exe 改名，
+  ; 只是不允许覆盖/删除。先改名，安装器就能写新文件；旧进程继续跑它自己那份。
+  IfFileExists "$INSTDIR\shrinkdrop-ssh-helper.exe" 0 shrinkdrop_no_helper_rename
+    Delete "$INSTDIR\shrinkdrop-ssh-helper.exe.old"
+    Rename "$INSTDIR\shrinkdrop-ssh-helper.exe" "$INSTDIR\shrinkdrop-ssh-helper.exe.old"
+  shrinkdrop_no_helper_rename:
+  IfFileExists "$INSTDIR\${MAINBINARYNAME}.exe" 0 shrinkdrop_no_app_rename
+    Delete "$INSTDIR\${MAINBINARYNAME}.exe.old"
+    Rename "$INSTDIR\${MAINBINARYNAME}.exe" "$INSTDIR\${MAINBINARYNAME}.exe.old"
+  shrinkdrop_no_app_rename:
+!macroend
+
+!macro NSIS_HOOK_POSTINSTALL
+  ; 改名留下的旧文件：进程可能还在跑，删不掉就等重启后再删。
+  Delete "$INSTDIR\shrinkdrop-ssh-helper.exe.old"
+  Delete /REBOOTOK "$INSTDIR\shrinkdrop-ssh-helper.exe.old"
+  Delete "$INSTDIR\${MAINBINARYNAME}.exe.old"
+  Delete /REBOOTOK "$INSTDIR\${MAINBINARYNAME}.exe.old"
 !macroend
 
 ; 卸载器是独立进程，只有 `un.` 前缀的函数能调用，必须再写一份同样的逻辑。

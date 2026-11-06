@@ -192,6 +192,38 @@ fn set_port_when_enabled_restarts_and_replaces_rule() {
 }
 
 #[test]
+fn firewall_rule_covers_every_profile() {
+    let (fake, helper) = make_helper();
+    helper.enable(SshLifetime::Persistent, 22).unwrap();
+    let calls = fake.lock().netsh_calls.clone();
+    let add = calls
+        .iter()
+        .find(|call| call.contains("add rule") && call.contains("shrinkdrop-ssh-22"))
+        .unwrap_or_else(|| panic!("应当创建防火墙规则，实际 netsh 调用：{calls:?}"));
+    assert!(
+        add.contains("profile=any"),
+        "公用网络下 private 规则等于没放行，实际：{add}"
+    );
+
+    // 老版本留下的规则（只有 private）：再次开启要走 set，把 profile 改成 any。
+    // 禁用会删规则，所以先关掉，再手工塞回一条“旧规则”模拟升级场景。
+    helper.disable().unwrap();
+    {
+        let mut state = fake.lock();
+        state.rules.push("shrinkdrop-ssh-22".to_string());
+        state.netsh_calls.clear();
+    }
+    helper.enable(SshLifetime::Persistent, 22).unwrap();
+    let calls = fake.lock().netsh_calls.clone();
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.contains("set rule") && call.contains("profile=any")),
+        "已有规则要走 set 更新，实际：{calls:?}"
+    );
+}
+
+#[test]
 fn occupied_port_on_change_is_rejected_and_keeps_old_port() {
     let (fake, helper) = make_helper();
     helper.enable(SshLifetime::Persistent, 22).unwrap();

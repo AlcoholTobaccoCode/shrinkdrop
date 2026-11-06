@@ -335,11 +335,15 @@ const en: Record<string, string> = {
     'The helper service is not running. Install Helper reinstalls and starts it; if it was installed before, check Services for a stopped ShrinkdropSshHelper or a security product blocking it.',
   '连不上时先确认：两台设备在同一网段、Windows 防火墙对当前网络放行、以及安全软件没有拦截入站。':
     'If the connection fails, check that both devices are on the same subnet, Windows Firewall allows the current network, and security software is not blocking inbound connections.',
-  'Windows 防火墙只对「专用」或「域」网络放行；网络被识别为「公用」时需要在系统里改成专用，或手动放行该端口。':
-    'Windows Firewall only allows Private or Domain networks. If the network is classified as Public, switch it to Private or allow the port manually.',
+  '防火墙规则对专用、域、公用网络都放行；仍连不上时检查安全软件、路由器隔离，以及地址是否属于当前网段。':
+    'The firewall rule covers Private, Domain and Public networks. If it still fails, check security software, router client isolation, and whether the address is on this network.',
   '辅助服务已安装但连不上：点下面的按钮重装一次（会重启服务），或检查「服务」里的 ShrinkdropSshHelper。':
     'The helper is installed but not reachable. Reinstall it with the button below (this restarts the service), or check ShrinkdropSshHelper in Services.',
   '辅助服务版本': 'Helper version',
+  '更新辅助服务': 'Update helper',
+  '正在更新…': 'Updating…',
+  '辅助服务版本 {helper} 与应用 {app} 不一致：服务还在跑旧程序，点「更新辅助服务」重启它；若更新后仍是旧版本，重启电脑后再试。':
+    'Helper {helper} does not match app {app}: the service is still running the old program. Click Update helper to restart it; if it stays old, reboot and try again.',
   '正在安装辅助服务': 'Installing the helper service',
   '正在卸载辅助服务': 'Removing the helper service',
   '正在开启远程访问': 'Turning on remote access',

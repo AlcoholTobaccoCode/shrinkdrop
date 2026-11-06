@@ -12,9 +12,8 @@
 2. **端口是否在监听**：Windows 上 `netstat -ano | findstr :22`（自定义端口换成对应端口），
    看到 `LISTENING` 且 PID 属于 `sshd.exe`。
 3. **防火墙**：Windows 上 `netsh advfirewall firewall show rule name=shrinkdrop-ssh-<port>`。
-   shrinkdrop 建的规则只对「域」和「专用」网络放行（与系统 OpenSSH 的 stock 规则一致）。
-   网络被识别为「公用」时入站会被拦：在 设置 → 网络 → 属性 里改成「专用」，或让管理员
-   手动放行目标端口。规则是否存在的判断只看 `netsh` 退出码，不看本地化文案。
+   规则覆盖专用、域、公用三档（0.1.11 起；旧版本只有专用，公用网络下必然超时）。
+   规则是否存在的判断只看 `netsh` 退出码，不看本地化文案。
 4. **同一局域网**：连接命令里的地址来自本机网卡；手机要连同一个 Wi-Fi，公司网络常开客户端隔离。
 5. **机器是否睡眠 / FileVault 是否已解锁**：睡眠或未解锁时 SSH 不可达，这是系统行为。
    macOS 可在 设置 → 锁定屏幕 里调整；Windows 检查电源计划。
@@ -63,8 +62,11 @@ C:\ProgramData\shrinkdrop\helper.log
 - 升级安装包时不用手动卸载辅助服务：NSIS 安装器覆盖文件前会先结束正在运行的 app、
   再停 `ShrinkdropSshHelper` 并等到进程退出（20 秒未退则强制结束）。
   新版本第一次连接或点「安装辅助服务」时会重新装起来。MSI 没有这一步，升级请用 `.exe`。
-- 安装器弹「无法写入 shrinkdrop-ssh-helper.exe」＝上一版 helper 还在跑并锁着文件；
-  0.1.10 起会自动停掉/强制结束它。若仍出现，手动 `sc stop ShrinkdropSshHelper` 后重试。
+- 安装器弹「无法写入 shrinkdrop-ssh-helper.exe」＝上一版 helper 还在跑并锁着文件。
+  0.1.11 起会先停服务、再强制结束进程，最后把旧 exe 改名成 `.old` 兜底（运行中的 exe
+  允许改名、不允许覆盖），因此不会再卡住；`.old` 会在重启后自动删除。
+- 面板显示「辅助服务版本 0.1.x 与应用 0.1.y 不一致」时点「更新辅助服务」；旧服务的
+  进程仍占着管道时，重启电脑后再点一次。
 - 服务已装但面板显示未安装：服务可能被停掉了。`sc query ShrinkdropSshHelper` 看状态，
   `sc start ShrinkdropSshHelper` 启动，或在面板里卸载后重装。
 - 卸载辅助服务会：关闭由 shrinkdrop 开启的 SSH、还原 `sshd_config` 与启动类型、

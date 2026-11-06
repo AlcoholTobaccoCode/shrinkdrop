@@ -319,7 +319,20 @@ mod windows_service {
             } else if stop_and_wait(service) {
                 // 停止成功（或已停止），继续启动。
             } else {
-                return Err("无法停止旧辅助服务；请在「服务」里手动停止后重试".to_string());
+                // 老版本 helper（<=0.1.9）会卡在管道读里，SCM 停不下来。
+                // 它锁着 exe，必须结束进程，否则新二进制既装不上也起不来。
+                diag::log("install: 旧服务停不下来，强制结束进程");
+                if let Some(pid) = query_pid(service) {
+                    let _ = std::process::Command::new("taskkill")
+                        .args(["/f", "/pid", &pid.to_string()])
+                        .output();
+                }
+                for _ in 0..30 {
+                    if query_state(service) != Some(SERVICE_RUNNING) {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
             }
 
             if StartServiceW(service, 0, std::ptr::null()) == 0 {
@@ -368,6 +381,24 @@ mod windows_service {
         } else {
             path
         }
+    }
+
+    unsafe fn query_pid(
+        service: windows_sys::Win32::System::Services::SC_HANDLE,
+    ) -> Option<u32> {
+        use windows_sys::Win32::System::Services::{
+            QueryServiceStatusEx, SC_STATUS_PROCESS_INFO, SERVICE_STATUS_PROCESS,
+        };
+        let mut status: SERVICE_STATUS_PROCESS = std::mem::zeroed();
+        let mut needed = 0u32;
+        let ok = QueryServiceStatusEx(
+            service,
+            SC_STATUS_PROCESS_INFO,
+            &mut status as *mut SERVICE_STATUS_PROCESS as *mut u8,
+            std::mem::size_of::<SERVICE_STATUS_PROCESS>() as u32,
+            &mut needed,
+        );
+        (ok != 0 && status.dwProcessId != 0).then_some(status.dwProcessId)
     }
 
     unsafe fn query_state(

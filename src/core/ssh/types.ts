@@ -50,6 +50,8 @@ export interface SshRuntime {
   bundledVersion: string | null;
   /** 正在运行的辅助服务版本；null 表示没连上。 */
   helperVersion: string | null;
+  /** 运行中的辅助服务版本与应用不一致：需要重装服务才能加载新二进制。 */
+  helperOutdated: boolean;
   fingerprint: string | null;
   portInUse: SshPortOwner | null;
   error: SshErrorCode | null;
@@ -111,6 +113,7 @@ export function defaultSshRuntime(): SshRuntime {
     installSource: 'system',
     bundledVersion: null,
     helperVersion: null,
+    helperOutdated: false,
     fingerprint: null,
     portInUse: null,
     error: null,

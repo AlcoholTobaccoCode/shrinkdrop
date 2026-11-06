@@ -22,6 +22,8 @@ pub struct FakeSystem {
     pub start: String,
     pub listeners: HashMap<u16, (u32, String)>,
     pub rules: Vec<String>,
+    /// 每次 netsh 调用的参数拼接，用来断言 profile/端口这些细节。
+    pub netsh_calls: Vec<String>,
     pub feature: bool,
     pub config_valid: bool,
     pub config: String,
@@ -44,6 +46,7 @@ impl Fake {
                 start: "demand".to_string(),
                 listeners: HashMap::new(),
                 rules: Vec::new(),
+                netsh_calls: Vec::new(),
                 feature: false,
                 config_valid: true,
                 config: "Port 22\nPasswordAuthentication yes\n".to_string(),
@@ -80,6 +83,9 @@ impl Runner for Fake {
     fn run(&self, program: &str, args: &[&str]) -> std::io::Result<Output> {
         let mut state = self.lock();
         let joined = args.join(" ");
+        if program == "netsh.exe" {
+            state.netsh_calls.push(joined.clone());
+        }
         let ok = |stdout: &str| {
             Ok(Output {
                 code: 0,
