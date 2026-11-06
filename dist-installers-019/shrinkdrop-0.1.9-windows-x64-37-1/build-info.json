@@ -1,0 +1,19 @@
+{
+  "version": "0.1.9",
+  "platform": "windows-x64",
+  "commit": "ddc11de07730c8aecf7d56bfc07aab8ec4706f64",
+  "ref": "refs/heads/agent/agent/duqi-211",
+  "run": "https://github.com/AlcoholTobaccoCode/shrinkdrop/actions/runs/42179857647",
+  "files": [
+    {
+      "name": "shrinkdrop_0.1.9_x64_zh-CN.msi",
+      "bytes": 6356992,
+      "sha256": "e723d5d3bc4a611c0407e0d3111cad135c618aff0bc0e8da1c76fe968d92250e"
+    },
+    {
+      "name": "shrinkdrop_0.1.9_x64-setup.exe",
+      "bytes": 4035018,
+      "sha256": "0c29f3e337bd5544be880cbf0cc8cc82b4b1d713e509acf698af2014bd48b5ef"
+    }
+  ]
+}
