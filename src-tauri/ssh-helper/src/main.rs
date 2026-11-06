@@ -192,36 +192,40 @@ mod windows_service {
                 unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
                 continue;
             }
-            // 鉴权失败：读一帧拿到 id，回 needs_admin 后断开，不进入任何状态机。
-            if let Err(error) = pipe::authorize_client(handle, &installer_sid) {
-                diag::log(&format!(
-                    "serve: 拒绝连接 {}",
-                    error.detail.as_deref().unwrap_or_default()
-                ));
-                let file = unsafe { std::fs::File::from_raw_handle(handle as RawHandle) };
-                match file.try_clone() {
-                    Ok(clone) => {
-                        let mut reader = BufReader::new(clone);
-                        let mut writer = file;
-                        let _ = refuse_session(&mut reader, &mut writer, &error);
-                    }
-                    Err(_) => {
-                        diag::log("serve: 管道复制失败，直接断开");
-                    }
-                }
+            // 服务正在停止：这次 accept 多半是我们自己的 poke 唤醒（或最后一个客户端），
+            // 直接关掉并退出，绝不进入“读一帧”那一步 —— 否则会永久阻塞在 ReadFile 上，
+            // SCM 永远等不到 STOPPED，安装器也就覆盖不了 helper 的 exe。
+            if unsafe { STOPPING } {
+                unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
+                diag::log("serve: 停止中，关闭最后一条连接");
                 continue;
             }
-            let file = unsafe { std::fs::File::from_raw_handle(handle as RawHandle) };
-            let reader_file = match file.try_clone() {
-                Ok(clone) => clone,
-                Err(error) => {
-                    diag::log(&format!("serve: 管道复制失败 {error}"));
-                    continue;
-                }
-            };
             let helper = helper.clone();
-            // 线程只持有这一个连接；连接结束（含 app 崩溃）时 session 会结算引用计数。
+            let sid = installer_sid.clone();
+            // HANDLE 是裸指针，不能跨线程；转成 usize 再在闭包里还原。
+            let raw = handle as usize;
+            // 鉴权与应答都放到线程里：未授权客户端如果连上却不发数据，
+            // 主循环不能被它卡住（那等于任何本机进程都能让服务失去响应）。
             std::thread::spawn(move || {
+                let handle = raw as *mut std::ffi::c_void;
+                let file = unsafe { std::fs::File::from_raw_handle(handle as RawHandle) };
+                let reader_file = match file.try_clone() {
+                    Ok(clone) => clone,
+                    Err(error) => {
+                        diag::log(&format!("serve: 管道复制失败 {error}"));
+                        return;
+                    }
+                };
+                if let Err(error) = pipe::authorize_client(handle, &sid) {
+                    diag::log(&format!(
+                        "serve: 拒绝连接 {}",
+                        error.detail.as_deref().unwrap_or_default()
+                    ));
+                    let mut reader = BufReader::new(reader_file);
+                    let mut writer = file;
+                    let _ = refuse_session(&mut reader, &mut writer, &error);
+                    return;
+                }
                 let mut reader = BufReader::new(reader_file);
                 let mut writer = file;
                 if serve_session(&helper, &mut reader, &mut writer) == SessionEnd::Shutdown {

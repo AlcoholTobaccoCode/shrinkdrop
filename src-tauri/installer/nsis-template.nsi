@@ -455,11 +455,19 @@ Function PageDeleteInstaller
     Abort
   ${EndIf}
   !insertmacro MUI_HEADER_TEXT "安装完成" "可以选择安装结束后自动删除这个安装包。"
+  ; 必须先把对话框建出来：少了这一步 ${NSD_CreateCheckbox} 会直接失败，
+  ; 安装器会在此页中止（表现为点「下一步」窗口直接关闭，桌面快捷方式也没了）。
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
   ${NSD_CreateCheckbox} 0 0 100% 12u "安装结束后删除安装包（Delete the installer after installation）"
   Pop $DeleteInstallerCheckbox
   ${If} $DeleteInstaller == "1"
     ${NSD_Check} $DeleteInstallerCheckbox
   ${EndIf}
+  nsDialogs::Show
 FunctionEnd
 
 Function PageLeaveDeleteInstaller

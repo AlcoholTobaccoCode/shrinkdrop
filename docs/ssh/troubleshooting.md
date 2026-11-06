@@ -60,8 +60,11 @@ C:\ProgramData\shrinkdrop\helper.log
 - 安装后由**安装辅助服务时用的那个 Windows 账户**控制远程访问，不需要每次再用
   “以管理员身份运行”。换成另一个账户打开应用会显示 `needs_admin`；卸载后重装即可换账户。
 - 面板报错时下面会有一行「具体原因」，反馈问题时把它一起发出来，比错误码有用。
-- 升级安装包时不用手动卸载辅助服务：NSIS 安装器会在覆盖文件前先 `sc stop ShrinkdropSshHelper`，
+- 升级安装包时不用手动卸载辅助服务：NSIS 安装器覆盖文件前会先结束正在运行的 app、
+  再停 `ShrinkdropSshHelper` 并等到进程退出（20 秒未退则强制结束）。
   新版本第一次连接或点「安装辅助服务」时会重新装起来。MSI 没有这一步，升级请用 `.exe`。
+- 安装器弹「无法写入 shrinkdrop-ssh-helper.exe」＝上一版 helper 还在跑并锁着文件；
+  0.1.10 起会自动停掉/强制结束它。若仍出现，手动 `sc stop ShrinkdropSshHelper` 后重试。
 - 服务已装但面板显示未安装：服务可能被停掉了。`sc query ShrinkdropSshHelper` 看状态，
   `sc start ShrinkdropSshHelper` 启动，或在面板里卸载后重装。
 - 卸载辅助服务会：关闭由 shrinkdrop 开启的 SSH、还原 `sshd_config` 与启动类型、
